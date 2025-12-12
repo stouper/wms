@@ -1,0 +1,151 @@
+// WMS Core Schema v1 (fixed)
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "sqlite"
+  url      = env("DATABASE_URL")
+}
+
+// Store / Location
+model Store {
+  id        String   @id @default(cuid())
+  storeCode String   @unique           // 기준값(번호)
+  storeName String?                    // 표시용(이름, 변경 가능)
+
+  locations Location[]
+  orders    Order[]  @relation("DestStoreOrders")
+}
+
+model Location {
+  id      String @id @default(cuid())
+  storeId String
+  code    String                      // A01, B02, MAIN 등
+
+  store   Store  @relation(fields: [storeId], references: [id])
+
+  inventories Inventory[]
+
+  @@unique([storeId, code])
+}
+
+// Product / SKU (단품)
+model Product {
+  id    String @id @default(cuid())
+  code  String @unique                 // 10001-001, 203591-6ur
+  name  String?
+
+  skus  Sku[]
+}
+
+model Sku {
+  id        String @id @default(cuid())
+  productId String
+
+  skuCode   String                     // 상품 코드 (10001-001)
+  size      String                     // m4m6, m5m7
+  barcode   String @unique             // 단품별 고유 바코드
+
+  product   Product @relation(fields: [productId], references: [id])
+
+  inventories Inventory[]
+  orderLines  OrderLine[]
+
+  @@unique([skuCode, size])
+}
+
+// Inventory
+model Inventory {
+  id         String @id @default(cuid())
+  skuId      String
+  locationId String
+  qty        Int    @default(0)
+
+  sku      Sku      @relation(fields: [skuId], references: [id])
+  location Location @relation(fields: [locationId], references: [id])
+
+  @@unique([skuId, locationId])
+}
+
+model InventoryTx {
+  id         String   @id @default(cuid())
+  skuId      String
+  locationId String
+
+  type       String               // RECEIVE | SHIP | ADJUST | COUNT
+  qty        Int                  // + / -
+  refType    String?              // ORDER | SHIPMENT | COUNTSESSION
+  refId      String?
+
+  createdAt  DateTime @default(now())
+}
+
+// Order
+model Order {
+  id        String   @id @default(cuid())
+  orderNo   String   @unique
+  orderType String               // STORE | PARCEL
+  status    String   @default("CREATED")
+  createdAt DateTime @default(now())
+
+  // STORE 출고(매장 이동)
+  destStoreId String?
+  destStore   Store?  @relation("DestStoreOrders", fields: [destStoreId], references: [id])
+
+  // PARCEL 출고(택배)
+  receiverName String?
+  phone        String?
+  address1     String?
+  memo         String?
+  carrierCode  String?
+
+  lines     OrderLine[]
+  shipments Shipment[]
+}
+
+model OrderLine {
+  id      String @id @default(cuid())
+  orderId String
+  skuId   String
+  qty     Int
+
+  order   Order @relation(fields: [orderId], references: [id])
+  sku     Sku   @relation(fields: [skuId], references: [id])
+}
+
+// Shipment (출고/송장)
+model Shipment {
+  id          String   @id @default(cuid())
+  orderId     String
+  carrierCode String?              // CJ, LOTTE, HANJIN (PARCEL)
+  invoiceNo   String?              // 송장번호
+  status      String   @default("READY") // READY | LABELED | SHIPPED
+  createdAt   DateTime @default(now())
+
+  order       Order @relation(fields: [orderId], references: [id])
+}
+
+// Import (Excel Upload)
+model ImportJob {
+  id           String   @id @default(cuid())
+  type         String               // ORDER_STORE | ORDER_PARCEL
+  status       String   @default("PENDING")
+  totalRows    Int      @default(0)
+  successCount Int      @default(0)
+  failCount    Int      @default(0)
+  createdAt    DateTime @default(now())
+
+  logs         ImportLog[]
+}
+
+model ImportLog {
+  id    String   @id @default(cuid())
+  jobId String
+  rowNo Int
+  raw   String
+  error String?
+
+  job   ImportJob @relation(fields: [jobId], references: [id])
+}
