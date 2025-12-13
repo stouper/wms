@@ -1,27 +1,17 @@
-import 'reflect-metadata';
 import { NestFactory } from '@nestjs/core';
-import { Logger, ValidationPipe } from '@nestjs/common';
-import { AppModule } from './app.module.js';
+import { AppModule } from './app.module';
 
 async function bootstrap() {
   const app = await NestFactory.create(AppModule);
 
-  app.enableCors();
-  app.useGlobalPipes(
-    new ValidationPipe({
-      whitelist: true,
-      forbidUnknownValues: false,
-    }),
-  );
+  // ✅ 프론트(4000)에서 직접 호출 허용
+  app.enableCors({
+    origin: 'http://localhost:4000',
+    methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
+    allowedHeaders: ['Content-Type', 'Authorization'],
+  });
 
-  const port = Number(process.env.PORT) || 3000;
-  await app.listen(port, '0.0.0.0');
-
-  const url = await app.getUrl();
-  Logger.log(`🚀 core-api listening at ${url}`);
+  await app.listen(3000);
+  console.log('🚀 Backend running on http://localhost:3000');
 }
-
-bootstrap().catch((err) => {
-  console.error(err);
-  process.exit(1);
-});
+bootstrap();

@@ -1,29 +1,21 @@
-# Node
+@"
+# 공통
 node_modules/
-npm-debug.log*
-pnpm-debug.log*
-yarn-error.log*
-
-# Next.js
-.next/
-out/
-
-# Build outputs
-dist/
-*.map
-
-# Env
-.env
-.env.* !.env.example
-
-# OS
+**/.next/
+**/dist/
+**/*.log
+*.log
 .DS_Store
-Thumbs.db
 
-# SQLite (Prisma)
+# env
+.env*
+apps/web/.env.local
+
+# DB(개발용)
 **/prisma/*.db
-**/prisma/*.db-journal
+*.db
 
-# Temp & caches
-*.tmp
-*.swp
+# 빌드 캐시/트레이스
+**/.rscinfo
+**/trace
+"@ | Set-Content -Encoding UTF8 .gitignore
