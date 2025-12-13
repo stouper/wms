@@ -1,56 +1,37 @@
-'use client';
-import HealthBadge from '../components/HealthBadge';
+import Link from 'next/link';
 
 export default function HomePage() {
-  async function sendAbsolute() {
-    const csv = `orderNo,sku,qty
-ABS-001,SKU-001,1
-ABS-002,SKU-002,2
-`;
-    const blob = new Blob([csv], { type: 'text/csv' });
-    const file = new File([blob], 'absolute.csv');
-    const form = new FormData();
-    form.append('file', file); // ★ 필드명 'file'
-
-    const res = await fetch('http://127.0.0.1:3000/imports/orders?type=STORE', { method: 'POST', body: form });
-    const text = await res.text();
-    console.log('[ABS] status:', res.status, 'body:', text);
-    alert(`[ABS] status ${res.status} (콘솔 확인)`);
-  }
-
-  async function sendProxy() {
-    const csv = `orderNo,sku,qty
-PRX-001,SKU-101,3
-PRX-002,SKU-102,4
-`;
-    const blob = new Blob([csv], { type: 'text/csv' });
-    const file = new File([blob], 'proxy.csv');
-    const form = new FormData();
-    form.append('file', file);
-
-    const res = await fetch('/api/imports/orders?type=STORE', { method: 'POST', body: form });
-    const text = await res.text();
-    console.log('[PRX] status:', res.status, 'body:', text);
-    alert(`[PRX] status ${res.status} (콘솔 확인)`);
-  }
-
   return (
-    <main style={{ padding: 40 }}>
-      <h1>회사 홈페이지</h1>
-      <p>프론트(4000) ↔ 백엔드(3000) 연결 & 업로드 최종 테스트</p>
+    <div className="container hero">
+      <section className="hero-pane">
+        <h1>우리가 만드는 운영의 표준</h1>
+        <p>
+          매장 운영 · 재고 · 출고를 한눈에. ESKA는 반복을 줄이고 중요한 결정에 집중하게 해줘요.
+        </p>
+        <div style={{ display:'flex', gap:12, marginTop:18, flexWrap:'wrap' }}>
+          <Link className="btn btn-primary" href="/mall">폐쇄몰로 들어가기</Link>
+          <Link className="btn" href="/mall/shop">게스트로 둘러보기</Link>
+        </div>
+      </section>
 
-      <div style={{ marginTop: 12 }}>
-        <HealthBadge />
-      </div>
-
-      <div style={{ marginTop: 24, display: 'flex', gap: 12 }}>
-        <button onClick={sendAbsolute} style={{ padding: '10px 14px' }}>절대주소로 업로드(直)</button>
-        <button onClick={sendProxy} style={{ padding: '10px 14px' }}>/api 프록시로 업로드</button>
-      </div>
-
-      <p style={{ marginTop: 12, color: '#555' }}>
-        버튼 클릭 후 DevTools → Network에서 요청 확인, 백엔드 콘솔에는 <code>[IMPORTS]</code> 로그가 찍혀야 정상!
-      </p>
-    </main>
+      <section className="grid">
+        <div className="card">
+          <h2>실시간 재고</h2>
+          <p>입·출고 흐름 자동 기록, 대시보드 즉시 확인.</p>
+        </div>
+        <div className="card">
+          <h2>출고 효율화</h2>
+          <p>단품/다품 피킹, 엑셀 업로드, 라벨 출력까지 한 번에.</p>
+        </div>
+        <div className="card">
+          <h2>권한/보안</h2>
+          <p>회사/지점/직원 역할에 따른 화면·데이터 접근 제어.</p>
+        </div>
+        <div className="card">
+          <h2>API 연동</h2>
+          <p>상품/주문/택배사 연동용 API 제공.</p>
+        </div>
+      </section>
+    </div>
   );
 }
