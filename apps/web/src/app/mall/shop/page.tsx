@@ -1,26 +1,43 @@
-import Link from 'next/link';
+type Product = {
+  id: string;
+  name: string;
+  price: number;
+  imageUrl?: string;
+};
 
-type Product = { id: string; name: string; price: number };
-const dummy: Product[] = [
-  { id: 'p-1001', name: '클래식 클로그', price: 49900 },
-  { id: 'p-1002', name: '라이트라이드 샌들', price: 69000 },
-  { id: 'p-1003', name: '크록밴드 클로그', price: 55900 },
-  { id: 'p-1004', name: '바야밴드 샌들', price: 48900 },
-  { id: 'p-1005', name: '카디겐 라이너', price: 39000 },
-  { id: 'p-1006', name: '지빗 세트', price: 15000 },
-];
+export default async function ShopPage() {
+  const res = await fetch('http://localhost:4000/api/products', {
+    cache: 'no-store',
+  });
+  const data = await res.json();
 
-export default function ShopPage() {
   return (
     <div className="container">
       <h2>쇼핑</h2>
-      <div className="grid" style={{ marginTop: 14 }}>
-        {dummy.map((p) => (
+
+      <div className="grid" style={{ marginTop: 16 }}>
+        {data.items.map((p: Product) => (
           <div key={p.id} className="card">
-            <div className="media" />
+            {/* 상품 이미지 */}
+            <div className="media" style={{ overflow: 'hidden' }}>
+              <img
+                src={p.imageUrl || '/placeholder.png'}
+                alt={p.name}
+                style={{
+                  width: '100%',
+                  height: '100%',
+                  objectFit: 'cover',
+                  borderRadius: 12,
+                }}
+              />
+            </div>
+
             <h3 style={{ marginTop: 12 }}>{p.name}</h3>
-            <p style={{ margin: '6px 0 12px' }}>{p.price.toLocaleString()}원</p>
-            <Link className="btn btn-primary" href={`/mall/product/${p.id}`}>자세히 보기</Link>
+            <p>{p.price.toLocaleString()}원</p>
+
+            <a className="btn btn-primary" href={`/mall/product/${p.id}`}>
+              상세보기
+            </a>
           </div>
         ))}
       </div>
