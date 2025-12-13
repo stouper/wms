@@ -1,10 +1,9 @@
 import { Module } from '@nestjs/common';
+import { MulterModule } from '@nestjs/platform-express';
 import { ImportsController } from './imports.controller';
-import { ImportsService } from './imports.service';
-import { PrismaService } from '../../prisma/prisma.service';
 
 @Module({
+  imports: [MulterModule.register({})], // 파일 업로드용
   controllers: [ImportsController],
-  providers: [ImportsService, PrismaService],
 })
 export class ImportsModule {}

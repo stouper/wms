@@ -1,33 +1,18 @@
-import { Express } from 'express';
-import {
-  Controller,
-  Post,
-  Query,
-  UploadedFile,
-  UseInterceptors,
-  BadRequestException,
-} from '@nestjs/common';
+import { Controller, Get, Post, Query, UploadedFile, UseInterceptors } from '@nestjs/common';
 import { FileInterceptor } from '@nestjs/platform-express';
-import { ImportsService } from './imports.service';
 
-type ImportType = 'STORE' | 'PARCEL';
-
-@Controller('imports')
+@Controller('imports') // 최종 경로: /imports/...
 export class ImportsController {
-  constructor(private readonly svc: ImportsService) {}
+  @Get('ping')
+  ping() {
+    return { ok: true, where: '/imports/ping' };
+  }
 
   @Post('orders')
-  @UseInterceptors(FileInterceptor('file'))
-  async importOrders(
-    @UploadedFile() file: Express.Multer.File,
-    @Query('type') type: ImportType,
-  ) {
-    if (!file?.buffer) {
-      throw new BadRequestException('CSV 파일이 필요합니다 (form field: file)');
-    }
-    if (type !== 'STORE' && type !== 'PARCEL') {
-      throw new BadRequestException('type=STORE 또는 type=PARCEL 이어야 합니다');
-    }
-    return this.svc.importOrdersCsv(file.buffer, type);
+  @UseInterceptors(FileInterceptor('file')) // ★ FormData 필드명 'file'과 반드시 일치
+  uploadOrders(@UploadedFile() file: Express.Multer.File, @Query('type') type?: string) {
+    console.log('[IMPORTS] type=', type, 'file?', !!file, file?.originalname, file?.size);
+    if (!file) return { ok: false, reason: 'no file' };
+    return { ok: true, filename: file.originalname, size: file.size, type: type ?? null };
   }
 }
