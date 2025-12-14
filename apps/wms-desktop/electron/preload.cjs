@@ -1,11 +1,18 @@
 // apps/wms-desktop/electron/preload.cjs
 const { contextBridge, ipcRenderer } = require('electron');
 
-contextBridge.exposeInMainWorld('wms', {
-  pickExcel:            ()          => ipcRenderer.invoke('wms:pickExcel'),
-  importInventoryExcel: (payload)   => ipcRenderer.invoke('wms:importInventoryExcel', payload),
+contextBridge.exposeInMainWorld('api', {
+  getProducts: () => ipcRenderer.invoke('inventory:getProducts'),
+});
 
-  saveWarehouseInventory: (data)    => ipcRenderer.invoke('wms:saveWarehouseInventory', data),
-  loadWarehouseInventory: ()        => ipcRenderer.invoke('wms:loadWarehouseInventory'),
-  clearWarehouseInventory: ()       => ipcRenderer.invoke('wms:clearWarehouseInventory'),
+contextBridge.exposeInMainWorld('wms', {
+  inventory: {
+    previewExcel: (fileBuffer, fileName, headerRow) =>
+      ipcRenderer.invoke('inventory:previewExcel', { fileBuffer, fileName, headerRow }),
+    overwriteExcel: (fileBuffer, fileName, headerRow) =>
+      ipcRenderer.invoke('inventory:overwriteExcel', { fileBuffer, fileName, headerRow }),
+    listUploads: () => ipcRenderer.invoke('inventory:listUploads'),
+    getUpload: (uploadId) => ipcRenderer.invoke('inventory:getUpload', { uploadId }),
+    restoreUpload: (uploadId) => ipcRenderer.invoke('inventory:restoreUpload', { uploadId }),
+  },
 });
