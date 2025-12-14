@@ -1,14 +1,35 @@
 <!doctype html>
-<html>
-  <head>
-    <meta charset="utf-8" />
-    <title>ESKA WMS</title>
-    <meta http-equiv="Content-Security-Policy" content="default-src 'self'; img-src 'self' data:; style-src 'self' 'unsafe-inline';">
-    <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <style>html,body,#root{height:100%;margin:0}</style>
-  </head>
-  <body>
-    <div id="root"></div>
-    <script src="../renderer/dist/bundle.js"></script>
-  </body>
+<html lang="ko">
+<head>
+  <meta charset="UTF-8" />
+  <title>WMS Desktop</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <style>
+    :root { --bg:#f8fafc; --panel:#ffffff; --border:#e5e7eb; --text:#111827; --muted:#6b7280; }
+    * { box-sizing: border-box; }
+    body { margin:0; font-family: ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto, Arial; background: var(--bg); color: var(--text); }
+    .layout { display:grid; grid-template-columns: 240px 1fr; height: 100vh; }
+    .sidebar { background:#0f172a; color:#e2e8f0; padding:16px; display:flex; flex-direction:column; gap:12px; }
+    .brand { font-weight:700; letter-spacing:.4px; margin-bottom:8px; }
+    .nav { display:flex; flex-direction:column; gap:6px; }
+    .nav button { text-align:left; padding:10px 12px; border-radius:10px; border:1px solid transparent; background: transparent; color:#e2e8f0; cursor:pointer; }
+    .nav button.active { background:#1e293b; border-color:#334155; }
+    .content { padding:24px; overflow:auto; }
+    .card { background:var(--panel); border:1px solid var(--border); border-radius:14px; padding:18px; }
+    .row { display:flex; gap:8px; margin-top:12px; }
+    button,input { font-size:14px; }
+    button { padding:10px 14px; border-radius:10px; border:1px solid var(--border); background:#f8fafc; cursor:pointer; }
+    input { padding:10px 12px; border-radius:10px; border:1px solid var(--border); flex:1; background:#fff; }
+    pre { background:#f3f4f6; padding:12px; border-radius:10px; border:1px solid var(--border); overflow:auto; }
+    .muted { color: var(--muted); font-size:12px; }
+    h1 { margin:0 0 8px 0; font-size:20px; }
+    h2 { margin:0 0 16px 0; font-size:18px; }
+  </style>
+</head>
+<body>
+  <div id="root" class="layout">
+    <!-- React가 여기 렌더링 -->
+  </div>
+  <script src="./dist/bundle.js"></script>
+</body>
 </html>

@@ -1,0 +1,395 @@
+﻿
+폴더 PATH의 목록입니다.
+볼륨 일련 번호는 3684-C500입니다.
+C:.
+|   .env
+|   .gitignore
+|   desk-tree.txt
+|   dev.db
+|   package.json
+|   prisma.config.ts
+|   tree_output.txt
+|   
++---db
++---electron
+|       db.js
+|       main.cjs
+|       preload.cjs
+|       
++---jobs
+|       1765683066670_11월28~30일 매장 발주건.xlsx
+|       1765683090437_11월28~30일 매장 발주건.xlsx
+|       1765683185148_11월28~30일 매장 발주건.xlsx
+|       1765683198254_11월28~30일 매장 발주건.xlsx
+|       
+|   +---.bin
+|   |       prisma
+|   |       prisma.cmd
+|   |       prisma.ps1
+|   |       
+|   +---.cache
+|   |   +---jiti
+|   |   |       wms-desktop-prisma.config.5d82d609.mjs
+|   |   |       
+|   |   \---prisma
+|   |       \---master
+|   |           +---605197351a3c8bdd595af2d2a9bc3025bca48ea2
+|   |           |   \---windows
+|   |           \---ab635e6b9d606fa5c8fb8b1a7f909c3c3c1c98ba
+|   |               \---windows
+|   +---@prisma
+|   |   +---client
+|   |   |   |   default.d.ts
+|   |   |   |   default.js
+|   |   |   |   edge.d.ts
+|   |   |   |   edge.js
+|   |   |   |   extension.d.ts
+|   |   |   |   extension.js
+|   |   |   |   index-browser.js
+|   |   |   |   index.d.ts
+|   |   |   |   index.js
+|   |   |   |   LICENSE
+|   |   |   |   package.json
+|   |   |   |   README.md
+|   |   |   |   sql.d.ts
+|   |   |   |   sql.js
+|   |   |   |   sql.mjs
+|   |   |   |   
+|   |   |   +---generator-build
+|   |   |   |       index.js
+|   |   |   |       
+|   |   |   +---runtime
+|   |   |   |       client.d.mts
+|   |   |   |       client.d.ts
+|   |   |   |       client.js
+|   |   |   |       client.js.map
+|   |   |   |       client.mjs
+|   |   |   |       client.mjs.map
+|   |   |   |       index-browser.d.mts
+|   |   |   |       index-browser.d.ts
+|   |   |   |       index-browser.js
+|   |   |   |       index-browser.js.map
+|   |   |   |       index-browser.mjs
+|   |   |   |       index-browser.mjs.map
+|   |   |   |       query_compiler_bg.cockroachdb.js
+|   |   |   |       query_compiler_bg.cockroachdb.mjs
+|   |   |   |       query_compiler_bg.cockroachdb.wasm-base64.js
+|   |   |   |       query_compiler_bg.cockroachdb.wasm-base64.mjs
+|   |   |   |       query_compiler_bg.mysql.js
+|   |   |   |       query_compiler_bg.mysql.mjs
+|   |   |   |       query_compiler_bg.mysql.wasm-base64.js
+|   |   |   |       query_compiler_bg.mysql.wasm-base64.mjs
+|   |   |   |       query_compiler_bg.postgresql.js
+|   |   |   |       query_compiler_bg.postgresql.mjs
+|   |   |   |       query_compiler_bg.postgresql.wasm-base64.js
+|   |   |   |       query_compiler_bg.postgresql.wasm-base64.mjs
+|   |   |   |       query_compiler_bg.sqlite.js
+|   |   |   |       query_compiler_bg.sqlite.mjs
+|   |   |   |       query_compiler_bg.sqlite.wasm-base64.js
+|   |   |   |       query_compiler_bg.sqlite.wasm-base64.mjs
+|   |   |   |       query_compiler_bg.sqlserver.js
+|   |   |   |       query_compiler_bg.sqlserver.mjs
+|   |   |   |       query_compiler_bg.sqlserver.wasm-base64.js
+|   |   |   |       query_compiler_bg.sqlserver.wasm-base64.mjs
+|   |   |   |       wasm-compiler-edge.d.ts
+|   |   |   |       wasm-compiler-edge.js
+|   |   |   |       wasm-compiler-edge.js.map
+|   |   |   |       wasm-compiler-edge.mjs
+|   |   |   |       wasm-compiler-edge.mjs.map
+|   |   |   |       
+|   |   |   \---scripts
+|   |   |           colors.js
+|   |   |           default-index.d.ts
+|   |   |           default-index.js
+|   |   |           
+|   |   +---debug
+|   |   |   |   LICENSE
+|   |   |   |   package.json
+|   |   |   |   README.md
+|   |   |   |   
+|   |   |   \---dist
+|   |   |           index.d.mts
+|   |   |           index.d.ts
+|   |   |           index.js
+|   |   |           index.mjs
+|   |   |           util.d.ts
+|   |   |           
+|   |   +---engines
+|   |   |   |   LICENSE
+|   |   |   |   package.json
+|   |   |   |   README.md
+|   |   |   |   schema-engine-windows.exe
+|   |   |   |   
+|   |   |   +---dist
+|   |   |   |   |   index.d.ts
+|   |   |   |   |   index.js
+|   |   |   |   |   
+|   |   |   |   \---scripts
+|   |   |   |           localinstall.d.ts
+|   |   |   |           localinstall.js
+|   |   |   |           postinstall.d.ts
+|   |   |   |           postinstall.js
+|   |   |   |           
+|   |   |   |   \---.cache
+|   |   |   |       \---prisma
+|   |   |   |           \---master
+|   |   |   |               \---ab635e6b9d606fa5c8fb8b1a7f909c3c3c1c98ba
+|   |   |   |                   \---windows
+|   |   |   |                           schema-engine
+|   |   |   |                           schema-engine.gz.sha256
+|   |   |   |                           schema-engine.sha256
+|   |   |   |                           
+|   |   |   \---scripts
+|   |   |           postinstall.js
+|   |   |           
+|   |   +---engines-version
+|   |   |       index.d.ts
+|   |   |       index.js
+|   |   |       LICENSE
+|   |   |       package.json
+|   |   |       README.md
+|   |   |       
+|   |   +---fetch-engine
+|   |   |   |   LICENSE
+|   |   |   |   package.json
+|   |   |   |   README.md
+|   |   |   |   
+|   |   |   \---dist
+|   |   |           BinaryType.d.ts
+|   |   |           BinaryType.js
+|   |   |           chmodPlusX.d.ts
+|   |   |           chmodPlusX.js
+|   |   |           chunk-2ESYSVXG.js
+|   |   |           chunk-4GGGRRIN.js
+|   |   |           chunk-4MDZEOKU.js
+|   |   |           chunk-5564WBCW.js
+|   |   |           chunk-66KG5WKV.js
+|   |   |           chunk-7AOUSONO.js
+|   |   |           chunk-7JLQJWOR.js
+|   |   |           chunk-B4I65CZH.js
+|   |   |           chunk-CTLNI6CP.js
+|   |   |           chunk-FKGWOTGU.js
+|   |   |           chunk-FNYZ6ABB.js
+|   |   |           chunk-VLGS4WJI.js
+|   |   |           chunk-XNR2KDTK.js
+|   |   |           chunk-Z2FFKDD7.js
+|   |   |           cleanupCache.d.ts
+|   |   |           cleanupCache.js
+|   |   |           download.d.ts
+|   |   |           download.js
+|   |   |           downloadZip.d.ts
+|   |   |           downloadZip.js
+|   |   |           env.d.ts
+|   |   |           env.js
+|   |   |           getHash.d.ts
+|   |   |           getHash.js
+|   |   |           getProxyAgent.d.ts
+|   |   |           getProxyAgent.js
+|   |   |           index.d.ts
+|   |   |           index.js
+|   |   |           log.d.ts
+|   |   |           log.js
+|   |   |           multipart-parser-3E7JBBYS.js
+|   |   |           utils.d.ts
+|   |   |           utils.js
+|   |   |           
+|   |   \---get-platform
+|   |       |   LICENSE
+|   |       |   package.json
+|   |       |   README.md
+|   |       |   
+|   |       \---dist
+|   |           |   binaryTargets.d.ts
+|   |           |   binaryTargets.js
+|   |           |   chunk-2ESYSVXG.js
+|   |           |   chunk-3UEKS5W6.js
+|   |           |   chunk-6HZWON4S.js
+|   |           |   chunk-7MLUNQIZ.js
+|   |           |   chunk-7PMGXL6S.js
+|   |           |   chunk-FWMN4WME.js
+|   |           |   chunk-GGL63BNP.js
+|   |           |   chunk-IPLRRT6O.js
+|   |           |   chunk-M5T7GI2R.js
+|   |           |   chunk-YVXCXD3A.js
+|   |           |   getPlatform.d.ts
+|   |           |   getPlatform.js
+|   |           |   index.d.ts
+|   |           |   index.js
+|   |           |   link.d.ts
+|   |           |   link.js
+|   |           |   logger.d.ts
+|   |           |   logger.js
+|   |           |   magic-string.es-3WRPFX2A.js
+|   |           |   
+|   |           \---test-utils
+|   |                   binaryTargetRegex.d.ts
+|   |                   binaryTargetRegex.js
+|   |                   index.d.ts
+|   |                   index.js
+|   |                   jestContext.d.ts
+|   |                   jestContext.js
+|   |                   jestSnapshotSerializer.js
+|   |                   vitestContext.d.ts
+|   |                   vitestContext.js
+|   |                   
+|   +---@types
+|   \---prisma
+|       |   config.d.ts
+|       |   config.js
+|       |   LICENSE
+|       |   package.json
+|       |   README.md
+|       |   
+|       +---build
+|       |       child.js
+|       |       index.js
+|       |       prisma_schema_build_bg.wasm
+|       |       query_compiler_bg.cockroachdb.js
+|       |       query_compiler_bg.cockroachdb.mjs
+|       |       query_compiler_bg.cockroachdb.wasm
+|       |       query_compiler_bg.mysql.js
+|       |       query_compiler_bg.mysql.mjs
+|       |       query_compiler_bg.mysql.wasm
+|       |       query_compiler_bg.postgresql.js
+|       |       query_compiler_bg.postgresql.mjs
+|       |       query_compiler_bg.postgresql.wasm
+|       |       query_compiler_bg.sqlite.js
+|       |       query_compiler_bg.sqlite.mjs
+|       |       query_compiler_bg.sqlite.wasm
+|       |       query_compiler_bg.sqlserver.js
+|       |       query_compiler_bg.sqlserver.mjs
+|       |       query_compiler_bg.sqlserver.wasm
+|       |       schema_engine_bg.wasm
+|       |       xdg-open
+|       |       
+|       +---dist
+|       |   \---cli
+|       |       \---src
+|       |               types.d.ts
+|       |               
+|       |   \---@prisma
+|       |       \---studio-core
+|       |           |   LICENSE.free
+|       |           |   LICENSE.licensed
+|       |           |   package.json
+|       |           |   README.md.free
+|       |           |   
+|       |           \---dist
+|       |               |   chunk-32BUC7NR.js
+|       |               |   chunk-4P3HPAZT.js
+|       |               |   chunk-A6CVKSUD.js
+|       |               |   chunk-GDQBQ7MK.js
+|       |               |   chunk-M7E5UEO3.js
+|       |               |   chunk-O6ZAHVDF.js
+|       |               |   chunk-PA5LQLPW.js
+|       |               |   chunk-SXTJF4PD.js
+|       |               |   chunk-ZUEQ555M.js
+|       |               |   index-BhPjNuvP.d.cts
+|       |               |   index-BhPjNuvP.d.ts
+|       |               |   metafile-cjs.json
+|       |               |   metafile-esm.json
+|       |               |   
+|       |               +---data
+|       |               |   |   index.cjs
+|       |               |   |   index.d.cts
+|       |               |   |   index.d.ts
+|       |               |   |   index.js
+|       |               |   |   
+|       |               |   +---accelerate
+|       |               |   |       index.cjs
+|       |               |   |       index.d.cts
+|       |               |   |       index.d.ts
+|       |               |   |       index.js
+|       |               |   |       
+|       |               |   +---bff
+|       |               |   |       index.cjs
+|       |               |   |       index.d.cts
+|       |               |   |       index.d.ts
+|       |               |   |       index.js
+|       |               |   |       
+|       |               |   +---mysql-core
+|       |               |   |       index.cjs
+|       |               |   |       index.d.cts
+|       |               |   |       index.d.ts
+|       |               |   |       index.js
+|       |               |   |       
+|       |               |   +---mysql2
+|       |               |   |       index.cjs
+|       |               |   |       index.d.cts
+|       |               |   |       index.d.ts
+|       |               |   |       index.js
+|       |               |   |       
+|       |               |   +---node-sqlite
+|       |               |   |       index.cjs
+|       |               |   |       index.d.cts
+|       |               |   |       index.d.ts
+|       |               |   |       index.js
+|       |               |   |       
+|       |               |   +---pglite
+|       |               |   |       index.cjs
+|       |               |   |       index.d.cts
+|       |               |   |       index.d.ts
+|       |               |   |       index.js
+|       |               |   |       
+|       |               |   +---postgres-core
+|       |               |   |       index.cjs
+|       |               |   |       index.d.cts
+|       |               |   |       index.d.ts
+|       |               |   |       index.js
+|       |               |   |       
+|       |               |   +---postgresjs
+|       |               |   |       index.cjs
+|       |               |   |       index.d.cts
+|       |               |   |       index.d.ts
+|       |               |   |       index.js
+|       |               |   |       
+|       |               |   +---ppg
+|       |               |   |       index.cjs
+|       |               |   |       index.d.cts
+|       |               |   |       index.d.ts
+|       |               |   |       index.js
+|       |               |   |       
+|       |               |   \---sqlite-core
+|       |               |           index.cjs
+|       |               |           index.d.cts
+|       |               |           index.d.ts
+|       |               |           index.js
+|       |               |           
+|       |               \---ui
+|       |                       index.cjs
+|       |                       index.css
+|       |                       index.d.cts
+|       |                       index.d.ts
+|       |                       index.js
+|       |                       
+|       +---preinstall
+|       |       index.js
+|       |       
+|       \---scripts
+|               preinstall-entry.js
+|               
++---prisma
+|   |   schema.prisma
+|   |   
+|   \---migrations
+|       |   migration_lock.toml
+|       |   
+|       \---20251214044754_init_wms
+|               migration.sql
+|               
++---renderer
+|   |   index.html
+|   |   
+|   +---dist
+|   |       bundle.js
+|   |       bundle.js.map
+|   |       
+|   \---src
+|           App.jsx
+|           main.jsx
+|           
+\---scripts
+        build.mjs
+        
+
+
