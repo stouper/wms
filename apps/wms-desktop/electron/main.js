@@ -1,42 +1,51 @@
-﻿const { app, BrowserWindow, ipcMain } = require('electron');
-const path = require('path');
-const db = require('./db');
+﻿// electron/main.js  (ESM)
+import { app, BrowserWindow } from "electron";
+import path from "node:path";
+import fs from "node:fs";
+import { fileURLToPath } from "node:url";
+
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
 
 function createWindow() {
   const win = new BrowserWindow({
     width: 1200,
     height: 800,
-    webPreferences: { preload: path.join(__dirname, 'preload.js') }
+    webPreferences: {
+      // 필요하면 프리로드에서 window.api 같은 브릿지 노출
+      preload: path.join(__dirname, "preload.js"),
+      contextIsolation: true,
+      nodeIntegration: false,
+    },
   });
-  win.loadFile(path.join(__dirname, '../renderer/index.html'));
-  win.webContents.openDevTools();
+
+  // HTML 후보 경로 (빌드/구조에 따라 둘 중 하나 존재)
+  const candidates = [
+    path.join(__dirname, "../renderer/index.html"),
+    path.join(__dirname, "../renderer/dist/index.html"),
+  ];
+  const existing = candidates.find((p) => fs.existsSync(p));
+
+  if (existing) {
+    win.loadFile(existing);
+  } else {
+    // HTML이 없다면, 개발 서버(있다면)로 연결하거나 에러 안내
+    win.loadURL("data:text/html;charset=utf-8," + encodeURIComponent(`
+      <h1>ESKA WMS Desktop</h1>
+      <p>index.html을 찾을 수 없습니다.<br>
+      renderer/index.html 또는 renderer/dist/index.html 중 하나를 만들어 주세요.</p>
+    `));
+  }
 }
 
-ipcMain.handle('get-products', async () => {
-  try { return { ok: true, rows: db.getProducts() }; }
-  catch (e) { console.error('[get-products]', e); return { ok: false, error: String(e) }; }
+app.whenReady().then(() => {
+  createWindow();
+
+  app.on("activate", () => {
+    if (BrowserWindow.getAllWindows().length === 0) createWindow();
+  });
 });
 
-ipcMain.handle('delete-product', async (_evt, id) => {
-  try { return { ok: true, changes: db.deleteProduct(id), rows: db.getProducts() }; }
-  catch (e) { console.error('[delete-product]', e); return { ok: false, error: String(e) }; }
+app.on("window-all-closed", () => {
+  if (process.platform !== "darwin") app.quit();
 });
-
-ipcMain.handle('import-csv', async (_evt, payload) => {
-  try {
-    const { text, filename } = payload || {};
-    const { processed, changed } = db.importCSV(String(text || ''), String(filename || ''));
-    return { ok: true, processed, changed, rows: db.getProducts() };
-  } catch (e) {
-    console.error('[import-csv]', e);
-    return { ok: false, error: String(e) };
-  }
-});
-
-ipcMain.handle('get-upload-logs', async () => {
-  try { return { ok: true, rows: db.getUploadLogs() }; }
-  catch (e) { console.error('[get-upload-logs]', e); return { ok: false, error: String(e) }; }
-});
-
-app.whenReady().then(createWindow);
-app.on('window-all-closed', () => { if (process.platform !== 'darwin') app.quit(); });

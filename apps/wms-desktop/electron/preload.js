@@ -1,8 +1,12 @@
+// electron/preload.js
 const { contextBridge, ipcRenderer } = require('electron');
 
-contextBridge.exposeInMainWorld('api', {
-  getProducts: () => ipcRenderer.invoke('get-products'),
-  deleteProduct: (id) => ipcRenderer.invoke('delete-product', id),
-  importCSV: (text, filename) => ipcRenderer.invoke('import-csv', { text, filename }),
-  getUploadLogs: () => ipcRenderer.invoke('get-upload-logs'),
+contextBridge.exposeInMainWorld('wms', {
+  importJobExcel: (arrayBuffer, fileName, startRow=4, keyField='ANY') =>
+    ipcRenderer.invoke('wms:importJobExcel', { arrayBuffer, fileName, startRow, keyField }),
+
+  listJobs:     ()            => ipcRenderer.invoke('wms:listJobs'),
+  getJob:       (id)          => ipcRenderer.invoke('wms:getJob', id),
+  scanCode:     ({jobId,code})=> ipcRenderer.invoke('wms:scanCode', { jobId, code }),
+  exportJobExcel:(jobId)      => ipcRenderer.invoke('wms:exportJobExcel', { jobId }),
 });
