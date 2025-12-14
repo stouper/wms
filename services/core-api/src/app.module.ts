@@ -1,9 +1,15 @@
+// src/app.module.ts
 import { Module } from '@nestjs/common';
-import { CarriersModule } from './modules/carriers/carriers.module';
-import { HealthModule } from './modules/health/health.module';
 import { ImportsModule } from './modules/imports/imports.module';
+import { InventoryModule } from './modules/inventory/inventory.module';
+// 아래가 프로젝트에 실제 있으면 유지, 없으면 제거
+// import { HealthModule } from './modules/health/health.module';
 
 @Module({
-  imports: [HealthModule, CarriersModule, ImportsModule],
+  imports: [
+    InventoryModule,
+    ImportsModule,
+    // HealthModule,
+  ],
 })
 export class AppModule {}

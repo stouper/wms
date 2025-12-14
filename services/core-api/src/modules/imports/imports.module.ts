@@ -1,9 +1,11 @@
 import { Module } from '@nestjs/common';
 import { ImportsController } from './imports.controller';
-import { ImportsService } from './imports.service';
+import { PrismaModule } from '../../prisma/prisma.module';
 
 @Module({
+  imports: [
+    PrismaModule, // ✅ 이 한 줄이 핵심
+  ],
   controllers: [ImportsController],
-  providers: [ImportsService],
 })
 export class ImportsModule {}

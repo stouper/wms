@@ -1,5 +1,4 @@
-// WMS Core Schema v1 (fixed)
-
+// prisma/schema.prisma
 generator client {
   provider = "prisma-client-js"
 }
@@ -9,59 +8,49 @@ datasource db {
   url      = env("DATABASE_URL")
 }
 
-// Store / Location
+// ---------- Store ----------
 model Store {
-  id        String   @id @default(cuid())
-  storeCode String   @unique           // 기준값(번호)
-  storeName String?                    // 표시용(이름, 변경 가능)
+  id        String  @id @default(cuid())
+  storeCode String  @unique
+  storeName String?
 
   locations Location[]
-  orders    Order[]  @relation("DestStoreOrders")
 }
 
+// ---------- Location ----------
 model Location {
   id      String @id @default(cuid())
   storeId String
-  code    String                      // A01, B02, MAIN 등
+  code    String
 
-  store   Store  @relation(fields: [storeId], references: [id])
-
+  store       Store         @relation(fields: [storeId], references: [id])
   inventories Inventory[]
+  txs         InventoryTx[]
 
   @@unique([storeId, code])
 }
 
-// Product / SKU (단품)
-model Product {
-  id    String @id @default(cuid())
-  code  String @unique                 // 10001-001, 203591-6ur
-  name  String?
-
-  skus  Sku[]
-}
-
+// ---------- Sku ----------
 model Sku {
-  id        String @id @default(cuid())
-  productId String
+  id String @id @default(cuid())
 
-  skuCode   String                     // 상품 코드 (10001-001)
-  size      String                     // m4m6, m5m7
-  barcode   String @unique             // 단품별 고유 바코드
-
-  product   Product @relation(fields: [productId], references: [id])
+  // 바코드(절대 기준). 초기 데이터 채우는 동안은 optional로 두고 나중에 required로 올려도 됨.
+  makerCode String? @unique
+  code      String?
+  name      String?
 
   inventories Inventory[]
-  orderLines  OrderLine[]
+  txs         InventoryTx[]
 
-  @@unique([skuCode, size])
+  @@index([code])
 }
 
-// Inventory
+// ---------- Inventory (스냅샷) ----------
 model Inventory {
   id         String @id @default(cuid())
   skuId      String
   locationId String
-  qty        Int    @default(0)
+  qty        Int
 
   sku      Sku      @relation(fields: [skuId], references: [id])
   location Location @relation(fields: [locationId], references: [id])
@@ -69,83 +58,21 @@ model Inventory {
   @@unique([skuId, locationId])
 }
 
+// ---------- InventoryTx (변동 로그) ----------
+// SQLite는 enum 미지원 → 문자열로 저장
 model InventoryTx {
-  id         String   @id @default(cuid())
+  id         String @id @default(cuid())
   skuId      String
   locationId String
 
-  type       String               // RECEIVE | SHIP | ADJUST | COUNT
-  qty        Int                  // + / -
-  refType    String?              // ORDER | SHIPMENT | COUNTSESSION
-  refId      String?
-
-  createdAt  DateTime @default(now())
-}
-
-// Order
-model Order {
-  id        String   @id @default(cuid())
-  orderNo   String   @unique
-  orderType String               // STORE | PARCEL
-  status    String   @default("CREATED")
+  // 'INIT' | 'IN' | 'OUT' | 'MOVE' | 'ADJUST' 등
+  type      String
+  qty       Int
+  reason    String?
   createdAt DateTime @default(now())
 
-  // STORE 출고(매장 이동)
-  destStoreId String?
-  destStore   Store?  @relation("DestStoreOrders", fields: [destStoreId], references: [id])
+  sku      Sku      @relation(fields: [skuId], references: [id])
+  location Location @relation(fields: [locationId], references: [id])
 
-  // PARCEL 출고(택배)
-  receiverName String?
-  phone        String?
-  address1     String?
-  memo         String?
-  carrierCode  String?
-
-  lines     OrderLine[]
-  shipments Shipment[]
-}
-
-model OrderLine {
-  id      String @id @default(cuid())
-  orderId String
-  skuId   String
-  qty     Int
-
-  order   Order @relation(fields: [orderId], references: [id])
-  sku     Sku   @relation(fields: [skuId], references: [id])
-}
-
-// Shipment (출고/송장)
-model Shipment {
-  id          String   @id @default(cuid())
-  orderId     String
-  carrierCode String?              // CJ, LOTTE, HANJIN (PARCEL)
-  invoiceNo   String?              // 송장번호
-  status      String   @default("READY") // READY | LABELED | SHIPPED
-  createdAt   DateTime @default(now())
-
-  order       Order @relation(fields: [orderId], references: [id])
-}
-
-// Import (Excel Upload)
-model ImportJob {
-  id           String   @id @default(cuid())
-  type         String               // ORDER_STORE | ORDER_PARCEL
-  status       String   @default("PENDING")
-  totalRows    Int      @default(0)
-  successCount Int      @default(0)
-  failCount    Int      @default(0)
-  createdAt    DateTime @default(now())
-
-  logs         ImportLog[]
-}
-
-model ImportLog {
-  id    String   @id @default(cuid())
-  jobId String
-  rowNo Int
-  raw   String
-  error String?
-
-  job   ImportJob @relation(fields: [jobId], references: [id])
+  @@index([skuId, locationId, createdAt])
 }
