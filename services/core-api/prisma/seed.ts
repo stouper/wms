@@ -1,42 +1,25 @@
-// prisma/seed.ts
 import { PrismaClient } from '@prisma/client';
-
 const prisma = new PrismaClient();
 
 async function main() {
-  // 1) HQ Store 보장
+  // 1) 기본 Store 생성 (HQ)
   const store = await prisma.store.upsert({
-    where: { storeCode: 'HQ' },
+    where: { code: 'HQ' },
     update: {},
-    create: {
-      storeCode: 'HQ',
-      storeName: '본사창고',
-    },
+    create: { code: 'HQ', name: 'Head Office' },
+    select: { id: true },
   });
 
-  // 2) 기본 Location(HQ) 보장 (선택이지만 추천)
+  // 2) 기본 Location 생성 (HQ 창고 같은 의미로 코드 'A-1' 예시)
   await prisma.location.upsert({
-    where: {
-      storeId_code: {
-        storeId: store.id,
-        code: 'HQ',
-      },
-    },
+    where: { storeId_code: { storeId: store.id, code: 'A-1' } },
     update: {},
-    create: {
-      storeId: store.id,
-      code: 'HQ',
-    },
+    create: { storeId: store.id, code: 'A-1' },
   });
 
-  console.log('✅ Seed completed: HQ store & location ready');
+  console.log('seed done');
 }
 
 main()
-  .catch((e) => {
-    console.error(e);
-    process.exit(1);
-  })
-  .finally(async () => {
-    await prisma.$disconnect();
-  });
+  .catch(e => { console.error(e); process.exit(1); })
+  .finally(() => prisma.$disconnect());

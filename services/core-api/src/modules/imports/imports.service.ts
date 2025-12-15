@@ -1,113 +1,98 @@
 import { Injectable, BadRequestException } from '@nestjs/common';
 import * as XLSX from 'xlsx';
+import { HqInventoryService } from './hq-inventory.service';
+import { Request } from 'express';
 
-type Row = Record<string, any>;
+type ColumnMap = { sku: number; qty: number; location?: number; makerCode?: number; name?: number };
 
 @Injectable()
 export class ImportsService {
-  async importProducts(buffer: Buffer, filename: string, mimetype?: string) {
-    // 0) 파일 타입 가드
-    const okType =
-      mimetype?.includes('spreadsheetml') ||
-      mimetype === 'application/vnd.ms-excel' ||
-      mimetype === 'text/csv' ||
-      filename.toLowerCase().endsWith('.xlsx') ||
-      filename.toLowerCase().endsWith('.csv');
-    if (!okType) throw new BadRequestException('엑셀(xlsx/csv)만 허용');
+  constructor(private readonly hq: HqInventoryService) {}
 
-    // 1) 워크북 로드
-    const wb = XLSX.read(buffer, { type: 'buffer' });
-    const sheetName = wb.SheetNames[0];
-    const sh = wb.Sheets[sheetName];
-
-    // 2) 3행 헤더/4행 데이터 가능성 고려 → range:2 우선, 비면 기본
-    let rawRows: Row[] = [];
-    try {
-      rawRows = XLSX.utils.sheet_to_json<Row>(sh, { defval: null, raw: true, range: 2 });
-      if (rawRows.length === 0) {
-        rawRows = XLSX.utils.sheet_to_json<Row>(sh, { defval: null, raw: true });
-      }
-    } catch {
-      rawRows = XLSX.utils.sheet_to_json<Row>(sh, { defval: null, raw: true });
+  private readHeaderRow(sheet: XLSX.WorkSheet): string[] {
+    const range = XLSX.utils.decode_range(sheet['!ref']!);
+    const headerRowIdx = 2; // 3행 = 헤더
+    const headers: string[] = [];
+    for (let c = range.s.c; c <= range.e.c; c++) {
+      const cell = sheet[XLSX.utils.encode_cell({ r: headerRowIdx, c })];
+      headers.push(String(cell?.v ?? '').trim());
     }
+    return headers;
+  }
 
-    // 3) 키 정규화: 개행/공백 제거 + 소문자
-    const normalizeKey = (k: string) =>
-      (k || '')
-        .toString()
-        .replace(/\r?\n/g, '')  // '수량\r\n(전산)' → '수량(전산)'
-        .replace(/\s+/g, '')    // 모든 공백 제거
-        .toLowerCase();
+  private inferColumnMap(headers: string[], body: any): ColumnMap {
+    // 기본 한글 헤더 키 (필요시 바디로 override 가능)
+    const skuKey       = body?.skuKey ?? '코드';
+    const qtyKey       = body?.qtyKey ?? '수량(전산)';
+    const locationKey  = body?.locationKey ?? '창고';
+    const makerKey     = body?.makerKey ?? 'Maker코드';
+    const nameKey      = body?.nameKey ?? '코드명';
 
-    const normalizedRows: Row[] = rawRows.map((r) => {
-      const o: Row = {};
-      for (const k of Object.keys(r)) o[normalizeKey(k)] = r[k];
-      return o;
-    });
+    const idx = (k: string) => headers.findIndex(h => h.replace(/\s/g, '') === String(k).replace(/\s/g, ''));
 
-    // 4) 이번 파일 대응 매핑
-    const key = {
-      sku: ['코드', 'sku', 'code'],
-      barcode: ['maker코드', 'makercode', 'barcode', '바코드'],
-      name: ['코드명', '상품명', '제품명', 'name'],
-      qty: ['수량(전산)', '수량', 'qty', '재고'],
-      price: ['현재가', '단가', 'price'],
-      location: ['창고', '로케이션', 'location', 'bin'],
-    };
+    const sku      = idx(skuKey);
+    const qty      = idx(qtyKey);
+    const location = idx(locationKey);
+    const makerCode= idx(makerKey);
+    const name     = idx(nameKey);
 
-    const N = Object.fromEntries(
-      Object.entries(key).map(([k, arr]) => [k, arr.map(normalizeKey)])
-    ) as Record<keyof typeof key, string[]>;
-
-    const pick = (row: Row, fields: string[]) => {
-      for (const f of fields) if (f in row) return row[f];
-      return undefined;
-    };
-
-    // 5) 처리: 필수(SKU, QTY) 없으면 "스킵"만 하고 계속 진행 → 서버 안 멈춤
-    let processed = 0;
-    let changed = 0;
-    const skipped: Array<{ index: number; reason: string }> = [];
-
-    for (let i = 0; i < normalizedRows.length; i++) {
-      const r = normalizedRows[i];
-      const sku = pick(r, N.sku);
-      const qtyRaw = pick(r, N.qty);
-      const name = pick(r, N.name);
-      const barcode = pick(r, N.barcode);
-      const priceRaw = pick(r, N.price);
-      const location = pick(r, N.location);
-
-      const qty = qtyRaw == null || qtyRaw === '' ? undefined : Number(qtyRaw);
-      const price =
-        priceRaw == null || priceRaw === '' || Number.isNaN(Number(priceRaw))
-          ? undefined
-          : Number(priceRaw);
-
-      if (!sku || qty == null || Number.isNaN(qty)) {
-        skipped.push({ index: i + 1, reason: '필수 누락/형식 오류(SKU/수량)' });
-        continue;
-      }
-
-      processed++;
-
-      // ▼ 나중에 여기서 Prisma upsert 연결 (스키마 주면 즉시 실코드로 바꿔줄게)
-      // await this.prisma.$transaction(async (tx) => {
-      //   await tx.product.upsert({ ... });
-      //   await tx.inventory.upsert({ ... }); // (sku+location 고유키 가정)
-      // });
-
-      changed++;
-    }
+    if (sku < 0) throw new BadRequestException(`필수 컬럼 누락: SKU(${skuKey})`);
+    if (qty < 0) throw new BadRequestException(`필수 컬럼 누락: 수량(${qtyKey})`);
 
     return {
-      filename,
-      sheet: sheetName,
-      processedRows: processed,
-      changedRows: changed,
-      skipped: skipped.length,
-      note:
-        '한국어/개행 포함 헤더 자동 매핑. SKU·수량 없거나 수량이 숫자 아님 → 스킵만 하고 계속 처리(서버 안 멈춤).',
+      sku,
+      qty,
+      location: location >= 0 ? location : undefined,
+      makerCode: makerCode >= 0 ? makerCode : undefined,
+      name: name >= 0 ? name : undefined,
     };
+  }
+
+  private* iterRows(sheet: XLSX.WorkSheet, map: ColumnMap) {
+    const range = XLSX.utils.decode_range(sheet['!ref']!);
+    for (let r = 3; r <= range.e.r; r++) { // 4행부터 데이터
+      const get = (c: number | undefined) =>
+        c == null ? undefined : sheet[XLSX.utils.encode_cell({ r, c })]?.v;
+
+      const sku = String(get(map.sku) ?? '').trim();
+      if (!sku) continue;
+
+      const qtyRaw = get(map.qty);
+      const qty = Number(qtyRaw);
+      if (!Number.isFinite(qty)) continue;
+
+      const location = String(get(map.location) ?? 'HQ').trim();
+      const makerCode = get(map.makerCode) != null ? String(get(map.makerCode)).trim() : undefined;
+      const name      = get(map.name) != null ? String(get(map.name)).trim() : undefined;
+
+      yield { sku, qty, location, makerCode, name };
+    }
+  }
+
+  async processHqInventory(req: Request, file: Express.Multer.File) {
+    if (!file) throw new BadRequestException('파일이 없습니다.');
+
+    const wb = XLSX.read(file.buffer, { type: 'buffer' });
+    const sheet = wb.Sheets[wb.SheetNames[0]];
+    if (!sheet) throw new BadRequestException('시트를 찾을 수 없습니다.');
+
+    const headers = this.readHeaderRow(sheet);
+    const map = this.inferColumnMap(headers, req.body);
+
+    let total = 0, changed = 0, noChange = 0;
+    for (const row of this.iterRows(sheet, map)) {
+      total++;
+      const res = await this.hq.apply(row);
+      if (res.ok && res.modified) changed++;
+      else if (res.ok && !res.modified) noChange++;
+    }
+
+    const debug = req.body?.debug ? {
+      headerRow: headers,
+      columnMap: map,
+      total, changed, noChange
+    } : undefined;
+
+    return debug ? debug : { total, changed, noChange };
   }
 }

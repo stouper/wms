@@ -1,17 +1,38 @@
 import { NestFactory } from '@nestjs/core';
 import { AppModule } from './app.module';
+import { ValidationPipe } from '@nestjs/common';
+import * as bodyParser from 'body-parser';
 
 async function bootstrap() {
   const app = await NestFactory.create(AppModule);
 
-  // ✅ 프론트(4000)에서 직접 호출 허용
+  // CORS: 로컬/관리도구/차후 프론트 연동 대비
   app.enableCors({
-    origin: 'http://localhost:4000',
-    methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
-    allowedHeaders: ['Content-Type', 'Authorization'],
+    origin: true,
+    credentials: true,
+    methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
   });
 
-  await app.listen(3000);
-  console.log('🚀 Backend running on http://localhost:3000');
+  // 업로드·엑셀 파싱 시 본문 용량 여유
+  app.use(bodyParser.json({ limit: '50mb' }));
+  app.use(bodyParser.urlencoded({ limit: '50mb', extended: true }));
+
+  // DTO 검증 기본값 (필드 화이트리스트 + 변환)
+  app.useGlobalPipes(
+    new ValidationPipe({
+      whitelist: true,
+      transform: true,
+      transformOptions: { enableImplicitConversion: true },
+      forbidUnknownValues: false,
+    }),
+  );
+
+  // 필요하면 prefix 사용 (현재는 API 루트 그대로 사용)
+  // app.setGlobalPrefix('api');
+
+  const port = Number(process.env.PORT || 3000);
+  await app.listen(port);
+  // console.log(`🚀 core-api on http://localhost:${port}`);
 }
+
 bootstrap();

@@ -1,15 +1,26 @@
-// src/app.module.ts
 import { Module } from '@nestjs/common';
-import { ImportsModule } from './modules/imports/imports.module';
-import { InventoryModule } from './modules/inventory/inventory.module';
-// 아래가 프로젝트에 실제 있으면 유지, 없으면 제거
-// import { HealthModule } from './modules/health/health.module';
+import { ConfigModule } from '@nestjs/config';
 
+// Prisma
+import { PrismaModule } from './prisma/prisma.module';
+
+// Domain modules
+import { InventoryModule } from './modules/inventory/inventory.module';
+import { ImportsModule } from './modules/imports/imports.module';
+
+/**
+ * AppModule
+ * - ConfigModule 전역 로드 (env)
+ * - Prisma/Inventory/Imports 모듈 조립
+ */
 @Module({
   imports: [
-    InventoryModule,
-    ImportsModule,
-    // HealthModule,
+    ConfigModule.forRoot({ isGlobal: true }),
+    PrismaModule,
+    InventoryModule,   // InventoryService를 exports 하고 있어야 함
+    ImportsModule,     // 컨트롤러/서비스/어댑터 등록
   ],
+  controllers: [],
+  providers: [],
 })
 export class AppModule {}

@@ -1,4 +1,3 @@
-// prisma/schema.prisma
 generator client {
   provider = "prisma-client-js"
 }
@@ -8,71 +7,62 @@ datasource db {
   url      = env("DATABASE_URL")
 }
 
-// ---------- Store ----------
 model Store {
-  id        String  @id @default(cuid())
-  storeCode String  @unique
-  storeName String?
-
+  id        String     @id @default(cuid())
+  code      String     @unique
+  name      String?
   locations Location[]
 }
 
-// ---------- Location ----------
+model Sku {
+  id        String  @id @default(cuid())
+  /// 엑셀의 "코드"
+  code      String  @unique
+  makerCode String?
+  name      String?
+
+  inventories Inventory[]
+  txs         InventoryTx[]
+}
+
 model Location {
   id      String @id @default(cuid())
-  storeId String
+  /// 엑셀의 "창고" (예: A-1)
   code    String
+  storeId String
 
   store       Store         @relation(fields: [storeId], references: [id])
   inventories Inventory[]
   txs         InventoryTx[]
 
-  @@unique([storeId, code])
+  @@unique([storeId, code], map: "Location_storeId_code_key")
+  @@index([code], map: "Location_code_idx")
 }
 
-// ---------- Sku ----------
-model Sku {
-  id String @id @default(cuid())
-
-  // 바코드(절대 기준). 초기 데이터 채우는 동안은 optional로 두고 나중에 required로 올려도 됨.
-  makerCode String? @unique
-  code      String?
-  name      String?
-
-  inventories Inventory[]
-  txs         InventoryTx[]
-
-  @@index([code])
-}
-
-// ---------- Inventory (스냅샷) ----------
 model Inventory {
   id         String @id @default(cuid())
   skuId      String
   locationId String
-  qty        Int
+  /// 엑셀의 "수량(전산)"
+  qty        Int    @default(0)
 
   sku      Sku      @relation(fields: [skuId], references: [id])
   location Location @relation(fields: [locationId], references: [id])
 
-  @@unique([skuId, locationId])
+  @@unique([skuId, locationId], map: "Inventory_skuId_locationId_key")
 }
 
-// ---------- InventoryTx (변동 로그) ----------
-// SQLite는 enum 미지원 → 문자열로 저장
 model InventoryTx {
-  id         String @id @default(cuid())
+  id         String   @id @default(cuid())
   skuId      String
   locationId String
-
-  // 'INIT' | 'IN' | 'OUT' | 'MOVE' | 'ADJUST' 등
-  type      String
-  qty       Int
-  reason    String?
-  createdAt DateTime @default(now())
+  qty        Int
+  type       String // 'set' | 'adjust' 등
+  createdAt  DateTime @default(now())
 
   sku      Sku      @relation(fields: [skuId], references: [id])
   location Location @relation(fields: [locationId], references: [id])
 
-  @@index([skuId, locationId, createdAt])
+  @@index([skuId], map: "InventoryTx_skuId_idx")
+  @@index([locationId], map: "InventoryTx_locationId_idx")
 }
