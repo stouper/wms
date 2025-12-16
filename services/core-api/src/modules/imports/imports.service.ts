@@ -22,19 +22,20 @@ export class ImportsService {
 
   private inferColumnMap(headers: string[], body: any): ColumnMap {
     // 기본 한글 헤더 키 (필요시 바디로 override 가능)
-    const skuKey       = body?.skuKey ?? '코드';
-    const qtyKey       = body?.qtyKey ?? '수량(전산)';
-    const locationKey  = body?.locationKey ?? '창고';
-    const makerKey     = body?.makerKey ?? 'Maker코드';
-    const nameKey      = body?.nameKey ?? '코드명';
+    const skuKey = body?.skuKey ?? '코드';
+    const qtyKey = body?.qtyKey ?? '수량(전산)';
+    const locationKey = body?.locationKey ?? '창고';
+    const makerKey = body?.makerKey ?? 'Maker코드';
+    const nameKey = body?.nameKey ?? '코드명';
 
-    const idx = (k: string) => headers.findIndex(h => h.replace(/\s/g, '') === String(k).replace(/\s/g, ''));
+    const idx = (k: string) =>
+      headers.findIndex((h) => h.replace(/\s/g, '') === String(k).replace(/\s/g, ''));
 
-    const sku      = idx(skuKey);
-    const qty      = idx(qtyKey);
+    const sku = idx(skuKey);
+    const qty = idx(qtyKey);
     const location = idx(locationKey);
-    const makerCode= idx(makerKey);
-    const name     = idx(nameKey);
+    const makerCode = idx(makerKey);
+    const name = idx(nameKey);
 
     if (sku < 0) throw new BadRequestException(`필수 컬럼 누락: SKU(${skuKey})`);
     if (qty < 0) throw new BadRequestException(`필수 컬럼 누락: 수량(${qtyKey})`);
@@ -50,7 +51,9 @@ export class ImportsService {
 
   private* iterRows(sheet: XLSX.WorkSheet, map: ColumnMap) {
     const range = XLSX.utils.decode_range(sheet['!ref']!);
-    for (let r = 3; r <= range.e.r; r++) { // 4행부터 데이터
+
+    for (let r = 3; r <= range.e.r; r++) {
+      // 4행부터 데이터
       const get = (c: number | undefined) =>
         c == null ? undefined : sheet[XLSX.utils.encode_cell({ r, c })]?.v;
 
@@ -61,9 +64,12 @@ export class ImportsService {
       const qty = Number(qtyRaw);
       if (!Number.isFinite(qty)) continue;
 
-      const location = String(get(map.location) ?? 'HQ').trim();
+      // ✅ 안전장치: 음수 수량은 스킵 (원하면 여기서 throw로 바꿔도 됨)
+      if (qty < 0) continue;
+
+      const location = String(get(map.location) ?? 'A-1').trim(); // 기존 'HQ' → 'A-1'
       const makerCode = get(map.makerCode) != null ? String(get(map.makerCode)).trim() : undefined;
-      const name      = get(map.name) != null ? String(get(map.name)).trim() : undefined;
+      const name = get(map.name) != null ? String(get(map.name)).trim() : undefined;
 
       yield { sku, qty, location, makerCode, name };
     }
@@ -79,7 +85,10 @@ export class ImportsService {
     const headers = this.readHeaderRow(sheet);
     const map = this.inferColumnMap(headers, req.body);
 
-    let total = 0, changed = 0, noChange = 0;
+    let total = 0,
+      changed = 0,
+      noChange = 0;
+
     for (const row of this.iterRows(sheet, map)) {
       total++;
       const res = await this.hq.apply(row);
@@ -87,11 +96,15 @@ export class ImportsService {
       else if (res.ok && !res.modified) noChange++;
     }
 
-    const debug = req.body?.debug ? {
-      headerRow: headers,
-      columnMap: map,
-      total, changed, noChange
-    } : undefined;
+    const debug = req.body?.debug
+      ? {
+          headerRow: headers,
+          columnMap: map,
+          total,
+          changed,
+          noChange,
+        }
+      : undefined;
 
     return debug ? debug : { total, changed, noChange };
   }

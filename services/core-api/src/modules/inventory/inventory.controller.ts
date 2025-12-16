@@ -1,22 +1,30 @@
-import { Controller, Get, Query } from '@nestjs/common';
+import { Body, Controller, Get, Post, Query } from '@nestjs/common';
 import { InventoryService } from './inventory.service';
+import { InventoryOutDto } from './dto/inventory-out.dto';
 
 @Controller('inventory')
 export class InventoryController {
-  constructor(private readonly inventoryService: InventoryService) {}
+  constructor(private readonly inventory: InventoryService) {}
 
-  /**
-   * 재고 트랜잭션 조회 (사람이 읽는 형태)
-   * GET /inventory/tx?q=크록스&limit=50
-   */
   @Get('tx')
-  async getInventoryTx(
-    @Query('q') q?: string,
-    @Query('limit') limit = '50',
-  ) {
-    return this.inventoryService.listTx({
+  async listTx(@Query('q') q?: string, @Query('limit') limit?: string) {
+    return this.inventory.listTx({
       q,
-      limit: Number(limit),
+      limit: Number(limit ?? 50),
     });
+  }
+
+  @Get('summary')
+  async summary(@Query('q') q?: string, @Query('limit') limit?: string) {
+    return this.inventory.summary({
+      q,
+      limit: Number(limit ?? 200),
+    });
+  }
+
+  // ✅ 출고(OUT): skuCode 또는 makerCode로 처리
+  @Post('out')
+  async out(@Body() dto: InventoryOutDto) {
+    return this.inventory.out(dto);
   }
 }

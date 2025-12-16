@@ -1,5 +1,19 @@
 import React, { useEffect, useMemo, useRef, useState, useLayoutEffect, useDeferredValue } from "react";
 
+/** =======================
+ *  설정(로컬 저장)
+ * ======================= */
+const DEFAULT_API_BASE = "http://localhost:3000";
+const LS_API_BASE_KEY = "wms.apiBase";
+
+function getApiBase() {
+  try { return localStorage.getItem(LS_API_BASE_KEY) || DEFAULT_API_BASE; }
+  catch { return DEFAULT_API_BASE; }
+}
+function setApiBase(v) {
+  try { localStorage.setItem(LS_API_BASE_KEY, v); } catch {}
+}
+
 const layoutStyle = {
   height: "100%",
   display: "grid",
@@ -52,8 +66,44 @@ export default function App() {
     </div>
   );
 }
+
 function FallbackPage(){ return <div>컴포넌트를 찾을 수 없습니다.</div>; }
 function DashboardPage(){ return <div><h1>데쉬보드</h1><p style={{color:"#64748b"}}>요약 위젯 자리</p></div>; }
+
+/* ---------------- 토스트 ---------------- */
+function Toast({ open, kind = "info", title, message, onClose }) {
+  if (!open) return null;
+  const colors = {
+    info:   { bd:"#cbd5e1", bg:"#f8fafc", fg:"#0f172a" },
+    ok:     { bd:"#bbf7d0", bg:"#f0fdf4", fg:"#14532d" },
+    error:  { bd:"#fecaca", bg:"#fff1f2", fg:"#7f1d1d" },
+    warn:   { bd:"#fde68a", bg:"#fffbeb", fg:"#78350f" },
+  }[kind] || { bd:"#cbd5e1", bg:"#f8fafc", fg:"#0f172a" };
+
+  return (
+    <div style={{
+      position:"fixed", right:16, bottom:16, zIndex:9999,
+      border:`1px solid ${colors.bd}`, background:colors.bg, color:colors.fg,
+      borderRadius:12, padding:"10px 12px", minWidth:280, maxWidth:420,
+      boxShadow:"0 10px 30px rgba(0,0,0,0.10)"
+    }}>
+      <div style={{ display:"flex", alignItems:"center", gap:10 }}>
+        <div style={{ fontWeight:800 }}>{title || (kind === "ok" ? "성공" : kind === "error" ? "실패" : "알림")}</div>
+        <div style={{ flex:1 }} />
+        <button onClick={onClose} style={{ border:"1px solid #e5e7eb", background:"#fff", borderRadius:10, padding:"2px 8px", cursor:"pointer" }}>
+          닫기
+        </button>
+      </div>
+      {message && <div style={{ marginTop:6, fontSize:13, lineHeight:1.45, whiteSpace:"pre-wrap" }}>{message}</div>}
+    </div>
+  );
+}
+
+async function safeJson(res) {
+  const txt = await res.text().catch(() => "");
+  if (!txt) return null;
+  try { return JSON.parse(txt); } catch { return { raw: txt }; }
+}
 
 /* ---------------- 가상 스크롤 테이블 ---------------- */
 function VirtualTable({ rows, rowHeight = 36, columns }) {
@@ -356,303 +406,212 @@ function InventoryPage() {
     </div>
   );
 }
+
 function Chip({ children, onClick, active, kind }) {
   const colors = { base:{bg:'#f1f5f9',bd:'#e5e7eb',fg:'#111827'}, danger:{bg:'#fee2e2',bd:'#fecaca',fg:'#b91c1c'}, warn:{bg:'#fef3c7',bd:'#fde68a',fg:'#b45309'} }[kind||'base'];
   return <button onClick={onClick} style={{ padding:'6px 10px', border:`1px solid ${colors.bd}`, borderRadius:999, background: active ? colors.bg : '#fff', color: colors.fg, cursor:'pointer' }}>{children}</button>;
 }
 
-/* 나머지 메뉴들 */
+/* ---------------- 나머지 메뉴들 ---------------- */
 function WarehouseInboundPage(){ return <div><h1>창고 입고</h1><p style={{color:"#64748b"}}>엑셀 템플릿 확정 후 연결 예정</p></div>; }
-function WarehouseOutboundPage(){ return <div><h1>창고 출고</h1><p style={{color:"#64748b"}}>엑셀 템플릿 확정 후 연결 예정</p></div>; }
-function StoreOutboundPage() {
-  // ✅ EPMS(매장용) 엑셀 업로드 포맷으로 내보내기
-  // - 키보드/스캐너 입력 동일 (엔터 기준)
-  // - core-api: POST /inventory/out
-  const uiInput = { padding: "10px 12px", border: "1px solid #e5e7eb", borderRadius: 10, background: "#fff", outline: "none" };
-  const uiBtn = { padding: "10px 12px", border: "1px solid #e5e7eb", borderRadius: 10, background: "#eef2ff", cursor: "pointer", fontWeight: 700 };
 
-  const [apiBase, setApiBase] = useState("http://localhost:3000");
-  const [locationCode, setLocationCode] = useState("A-1"); // 재고 차감 위치
-  const [storeCode, setStoreCode] = useState(""); // EPMS 매장코드(나중에 입력해도 됨)
-  const [shipDate, setShipDate] = useState(() => {
-    const d = new Date();
-    const yyyy = String(d.getFullYear());
-    const mm = String(d.getMonth() + 1).padStart(2, "0");
-    const dd = String(d.getDate()).padStart(2, "0");
-    return `${yyyy}${mm}${dd}`;
-  });
-
-  const [skuInput, setSkuInput] = useState("");
-  const [qty, setQty] = useState(1);
-
-  const [latest, setLatest] = useState(null);
-  const [toast, setToast] = useState(null); // { type:'ok'|'err', title, lines: string[] }
-  const [items, setItems] = useState([]); // 누적(출고 성공 건만)
-
+/** ✅ 여기부터가 핵심: 창고 출고(OUT) */
+function WarehouseOutboundPage(){
   const inputRef = useRef(null);
 
-  const showToast = (t) => {
-    setToast(t);
-    window.clearTimeout(showToast._t);
-    showToast._t = window.setTimeout(() => setToast(null), 2400);
-  };
+  const [apiBase, setApiBaseState] = useState(getApiBase());
+  const [showSettings, setShowSettings] = useState(false);
 
-  const normalizeSku = (s) => String(s ?? "").trim().toUpperCase(); // ✅ 소문자 입력 이슈 해결
+  const [locationCode, setLocationCode] = useState("A-1"); // 너 프리즈마에 있는 값 기준
+  const [qty, setQty] = useState(1);
 
-  const grouped = useMemo(() => {
-    const map = new Map();
-    for (const it of items) {
-      const key = it.makerCode || it.skuCode; // makerCode 없으면 skuCode로 대체
-      const prev = map.get(key) || { makerCode: it.makerCode || "", skuCode: it.skuCode, qty: 0 };
-      prev.qty += Number(it.qty || 0);
-      map.set(key, prev);
-    }
-    return Array.from(map.values()).sort((a, b) =>
-      (a.makerCode || a.skuCode).localeCompare(b.makerCode || b.skuCode, "ko"),
-    );
-  }, [items]);
+  const [skuCode, setSkuCode] = useState("");
+  const [busy, setBusy] = useState(false);
 
-  const totalQty = useMemo(() => grouped.reduce((s, g) => s + Number(g.qty || 0), 0), [grouped]);
+  const [toast, setToast] = useState({ open:false, kind:"info", title:"", message:"" });
+  const [last, setLast] = useState(null);
 
-  const csvEscape = (v) => {
-    const s = String(v ?? "");
-    if (/[",\r\n]/.test(s)) return `"${s.replace(/"/g, '""')}"`;
-    return s;
-  };
+  const focusSku = () => inputRef.current?.focus({ preventScroll: true });
 
-  const downloadCsv = () => {
-    // EPMS 헤더(사용자 제공 양식)
-    const headers = [
-      "출고구분:1:출고 2:반품",
-      "출고일자",
-      "창고코드",
-      "매장코드",
-      "행사코드",
-      "단품/MAKER코드",
-      "수량",
-      "전표비고",
-      "출고의뢰전표번호",
-      "가격",
-    ];
+  useEffect(() => {
+    const t = setTimeout(focusSku, 0);
+    return () => clearTimeout(t);
+  }, []);
 
-    // 지금은 출고(1)만 사용. 반품(2)은 '입고(in)' API 붙일 때 같이 연결하자.
-    const typeValue = "1";
-    const rows = grouped.map((g) => [
-      typeValue, // A
-      shipDate, // B (YYYYMMDD)
-      "", // C (창고코드 비움)
-      storeCode || "", // D (매장코드)
-      "", // E
-      g.makerCode || "", // F (makerCode)
-      String(g.qty || 0), // G
-      "", "", "", // H/I/J
-    ]);
+  useEffect(() => {
+    // Alt+Tab 복귀 / visibility 복귀 시 포커스 다시 잡기 (InventoryPage랑 동일 톤)
+    const handler = () => setTimeout(focusSku, 0);
+    window.electron?.ipcRenderer?.on?.('wms:focus-restore', handler);
 
-    const lines = [headers.map(csvEscape).join(","), ...rows.map((r) => r.map(csvEscape).join(","))];
+    const vis = () => { if (!document.hidden) setTimeout(focusSku, 0); };
+    document.addEventListener('visibilitychange', vis, true);
 
-    // UTF-8 BOM + CRLF (엑셀 호환)
-    const content = "\uFEFF" + lines.join("\r\n");
-    const blob = new Blob([content], { type: "text/csv;charset=utf-8" });
-    const url = URL.createObjectURL(blob);
+    // 바디 타이핑 → SKU 입력창으로
+    const redirect = (e) => {
+      const tag = (e.target?.tagName || '').toLowerCase();
+      const editable = (e.target?.isContentEditable) || tag === 'input' || tag === 'textarea' || tag === 'select';
+      if (editable) return;
+      if (e.key.length === 1 || e.key === 'Backspace' || e.key === 'Delete') focusSku();
+    };
+    window.addEventListener('keydown', redirect, true);
 
-    const a = document.createElement("a");
-    a.href = url;
-    a.download = `EPMS_매장출고_${shipDate}.csv`;
-    document.body.appendChild(a);
-    a.click();
-    a.remove();
-    URL.revokeObjectURL(url);
+    return () => {
+      window.electron?.ipcRenderer?.removeAllListeners?.('wms:focus-restore');
+      document.removeEventListener('visibilitychange', vis, true);
+      window.removeEventListener('keydown', redirect, true);
+    };
+  }, []);
 
-    showToast({
-      type: "ok",
-      title: "엑셀(CSV) 저장",
-      lines: [`파일명: EPMS_매장출고_${shipDate}.csv`, `행수: ${rows.length}`, `수량합: ${totalQty}`],
-    });
-  };
+  async function submitOut(){
+    const sku = String(skuCode || "").trim();
+    if (!sku) { setToast({ open:true, kind:"warn", title:"SKU 필요", message:"SKU를 입력해줘" }); return; }
+    if (busy) return;
 
-  const clearBatch = () => {
-    if (items.length > 0 && !confirm("누적 내역을 초기화할까?")) return;
-    setItems([]);
-    setLatest(null);
-    setSkuInput("");
-    setTimeout(() => inputRef.current?.focus(), 0);
-  };
+    const loc = String(locationCode || "").trim();
+    const n = Math.max(1, Math.floor(Number(qty || 1)));
 
-  const submitOut = async () => {
-    const skuCode = normalizeSku(skuInput);
-    const n = Math.max(1, Number(qty || 1));
-
-    if (!skuCode) return;
-    if (!locationCode.trim()) {
-      showToast({ type: "err", title: "출고 실패", lines: ["locationCode가 비어있어. (예: A-1)"] });
-      return;
-    }
-
+    setBusy(true);
     try {
-      const res = await fetch(`${apiBase.replace(/\/+$/, "")}/inventory/out`, {
+      const res = await fetch(`${apiBase}/inventory/out`, {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ skuCode, locationCode: locationCode.trim(), qty: n }),
+        headers: { "Content-Type":"application/json" },
+        body: JSON.stringify({
+          skuCode: sku,
+          locationCode: loc || undefined,
+          qty: n,
+        }),
       });
 
-      const data = await res.json().catch(() => ({}));
+      const data = await safeJson(res);
+
       if (!res.ok) {
-        const msg = data?.message
-          ? Array.isArray(data.message)
-            ? data.message.join("\n")
-            : String(data.message)
-          : `HTTP ${res.status}`;
-        showToast({ type: "err", title: "출고 실패", lines: [msg] });
+        const msg =
+          (data && (data.message || data.error)) ? JSON.stringify(data, null, 2)
+          : (data?.raw ? String(data.raw) : `HTTP ${res.status}`);
+        setToast({ open:true, kind:"error", title:"출고 실패", message: msg });
         return;
       }
 
-      setLatest(data);
-      const makerCode = data?.tx?.sku?.makerCode || data?.tx?.sku?.maker_code || null;
-
-      setItems((prev) => [
-        ...prev,
-        {
-          skuCode,
-          makerCode,
-          qty: n,
-          before: data?.before,
-          after: data?.after,
-          locationCode: locationCode.trim(),
-          at: new Date().toISOString(),
-        },
-      ]);
-
-      showToast({
-        type: "ok",
-        title: "출고 완료",
-        lines: [
-          `SKU: ${skuCode}`,
-          `Location: ${locationCode.trim()}`,
-          `Qty: -${n}`,
-          typeof data?.before === "number" && typeof data?.after === "number" ? `재고: ${data.before} → ${data.after}` : "",
-          makerCode ? `Maker: ${makerCode}` : "⚠ makerCode 없음(엑셀 F열이 비어있을 수 있음)",
-        ].filter(Boolean),
+      // 기대 응답: { ok:true, before, after, tx:{...} }
+      setLast(data || null);
+      const before = data?.before;
+      const after = data?.after;
+      setToast({
+        open:true,
+        kind:"ok",
+        title:"출고 완료",
+        message: `SKU: ${sku}\nLocation: ${loc || "(none)"}\nQty: -${n}\n재고: ${before} → ${after}`,
       });
 
-      setSkuInput("");
-      setTimeout(() => inputRef.current?.focus(), 0);
+      setSkuCode("");
+      setTimeout(focusSku, 0);
     } catch (e) {
-      showToast({ type: "err", title: "출고 실패", lines: [String(e?.message || e)] });
+      setToast({ open:true, kind:"error", title:"출고 실패", message: e?.message || String(e) });
+    } finally {
+      setBusy(false);
     }
-  };
-
-  const onSkuKeyDown = (e) => {
-    if (e.key === "Enter") {
-      e.preventDefault();
-      submitOut();
-    }
-  };
+  }
 
   return (
-    <div style={{ position: "relative" }}>
-      <div style={{ display: "flex", alignItems: "baseline", gap: 12 }}>
-        <h1 style={{ margin: 0 }}>매장 출고</h1>
-        <div style={{ color: "#64748b" }}>SKU 입력 → /inventory/out → 누적 → EPMS용 CSV 다운로드</div>
-      </div>
+    <div>
+      <h1>창고 출고 (OUT)</h1>
+      <p style={{ color:"#64748b", marginTop:-6 }}>
+        SKU 입력 → 엔터 → 재고 -1(또는 -n) → Tx 기록(type=out)
+      </p>
 
-      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr 1fr", gap: 12, marginTop: 14, marginBottom: 16 }}>
-        <label style={{ display: "grid", gap: 6, fontSize: 13 }}>
-          API Base
-          <input value={apiBase} onChange={(e) => setApiBase(e.target.value)} style={uiInput} placeholder="http://localhost:3000" />
-        </label>
-        <label style={{ display: "grid", gap: 6, fontSize: 13 }}>
-          출고 위치코드
-          <input value={locationCode} onChange={(e) => setLocationCode(e.target.value)} style={uiInput} placeholder="A-1" />
-        </label>
-        <label style={{ display: "grid", gap: 6, fontSize: 13 }}>
-          EPMS 매장코드(옵션)
-          <input value={storeCode} onChange={(e) => setStoreCode(e.target.value)} style={uiInput} placeholder="예: 1001" />
-        </label>
-        <label style={{ display: "grid", gap: 6, fontSize: 13 }}>
-          출고일자(YYYYMMDD)
-          <input value={shipDate} onChange={(e) => setShipDate(e.target.value.replace(/\D/g, "").slice(0, 8))} style={uiInput} placeholder="20250305" />
-        </label>
-      </div>
-
-      <div style={{ display: "grid", gridTemplateColumns: "1fr 120px 120px 160px", gap: 10, alignItems: "center" }}>
+      <div style={{ display:"flex", gap:10, alignItems:"center", margin:"10px 0 12px" }}>
         <input
           ref={inputRef}
-          value={skuInput}
-          onChange={(e) => setSkuInput(e.target.value)}
-          onKeyDown={onSkuKeyDown}
-          style={{ ...uiInput, fontSize: 18, padding: "12px 12px" }}
-          placeholder="SKU 입력 후 Enter (소문자 입력해도 자동 대문자 처리)"
-          autoFocus
+          value={skuCode}
+          onChange={(e)=>setSkuCode(e.target.value)}
+          onKeyDown={(e)=>{ if (e.key === "Enter") submitOut(); }}
+          placeholder="SKU 입력 후 Enter"
+          style={{
+            flex:1,
+            padding:"12px 12px",
+            border:"1px solid #e5e7eb",
+            borderRadius:12,
+            fontSize:16,
+            background:"#fff",
+          }}
         />
-        <input type="number" min={1} value={qty} onChange={(e) => setQty(Number(e.target.value || 1))} style={uiInput} />
-        <button onClick={submitOut} style={uiBtn}>출고(-)</button>
-        <div style={{ display: "flex", gap: 8, justifyContent: "flex-end" }}>
-          <button onClick={downloadCsv} disabled={grouped.length === 0} style={{ ...uiBtn, opacity: grouped.length === 0 ? 0.5 : 1 }}>EPMS CSV 저장</button>
-          <button onClick={clearBatch} style={{ ...uiBtn, background: "#fff" }}>초기화</button>
-        </div>
+        <button
+          onClick={submitOut}
+          disabled={busy}
+          style={{
+            padding:"12px 14px",
+            border:"1px solid #e5e7eb",
+            borderRadius:12,
+            background: busy ? "#f1f5f9" : "#fff",
+            cursor: busy ? "not-allowed" : "pointer",
+            fontWeight:800
+          }}
+        >
+          출고
+        </button>
+        <button
+          onClick={()=>{ setShowSettings(v=>!v); setTimeout(focusSku, 0); }}
+          style={{ padding:"12px 14px", border:"1px solid #e5e7eb", borderRadius:12, background:"#fff", cursor:"pointer" }}
+        >
+          설정
+        </button>
       </div>
 
-      <div style={{ display: "flex", gap: 10, alignItems: "center", marginTop: 12, color: "#64748b", fontSize: 13 }}>
-        <div>누적 라인: <b style={{ color: "#111827" }}>{grouped.length}</b></div>
-        <div>누적 수량: <b style={{ color: "#111827" }}>{totalQty}</b></div>
-        <div style={{ marginLeft: "auto" }}>※ EPMS 업로드는 makerCode 기준으로 수량을 합산해서 내보냄</div>
-      </div>
+      {showSettings && (
+        <div style={{ border:"1px solid #e5e7eb", borderRadius:12, padding:12, background:"#fbfbfb", marginBottom:12 }}>
+          <div style={{ display:"grid", gridTemplateColumns:"140px 1fr", gap:10, alignItems:"center" }}>
+            <div style={{ color:"#334155", fontWeight:700 }}>API Base</div>
+            <input
+              value={apiBase}
+              onChange={(e)=>setApiBaseState(e.target.value)}
+              onBlur={()=>setApiBase(apiBase)}
+              placeholder={DEFAULT_API_BASE}
+              style={{ padding:"10px 10px", border:"1px solid #e5e7eb", borderRadius:10, background:"#fff" }}
+            />
 
-      <div style={{ marginTop: 10 }}>
-        <table style={{ width: "100%", borderCollapse: "collapse", border: "1px solid #e5e7eb", borderRadius: 10, overflow: "hidden" }}>
-          <thead style={{ background: "#f8fafc" }}>
-            <tr>
-              <Th>Maker코드</Th>
-              <Th>SKU</Th>
-              <Th style={{ textAlign: "right" }}>수량</Th>
-            </tr>
-          </thead>
-          <tbody>
-            {grouped.length === 0 ? (
-              <tr><td colSpan={3} style={{ padding: 16, textAlign: "center", color: "#94a3b8" }}>아직 출고 내역이 없어</td></tr>
-            ) : (
-              grouped.map((g, i) => (
-                <tr key={i}>
-                  <Td>{g.makerCode || <span style={{ color: "#b45309" }}>(없음)</span>}</Td>
-                  <Td>{g.skuCode}</Td>
-                  <Td style={{ textAlign: "right" }}>{g.qty}</Td>
-                </tr>
-              ))
-            )}
-          </tbody>
-        </table>
-      </div>
+            <div style={{ color:"#334155", fontWeight:700 }}>Location</div>
+            <input
+              value={locationCode}
+              onChange={(e)=>setLocationCode(e.target.value)}
+              placeholder="예) A-1"
+              style={{ padding:"10px 10px", border:"1px solid #e5e7eb", borderRadius:10, background:"#fff" }}
+            />
 
-      <div style={{ marginTop: 16 }}>
-        <h3 style={{ margin: "10px 0" }}>최근 처리</h3>
-        <pre style={{ background: "#0b1020", color: "#e2e8f0", padding: 12, borderRadius: 10, overflow: "auto", fontSize: 12, lineHeight: 1.4 }}>
-{latest ? JSON.stringify(latest, null, 2) : "아직 없음"}
-        </pre>
-      </div>
-
-      {toast && (
-        <div style={{
-          position: "fixed",
-          right: 18,
-          bottom: 18,
-          width: 360,
-          borderRadius: 16,
-          border: "1px solid #e5e7eb",
-          background: toast.type === "ok" ? "#ecfdf5" : "#fef2f2",
-          boxShadow: "0 18px 40px rgba(0,0,0,0.14)",
-          padding: 14,
-          zIndex: 9999,
-        }}>
-          <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 8 }}>
-            <div style={{ fontWeight: 800, color: toast.type === "ok" ? "#065f46" : "#991b1b" }}>{toast.title}</div>
-            <button onClick={() => setToast(null)} style={{ ...uiBtn, padding: "6px 10px", background: "#fff" }}>닫기</button>
+            <div style={{ color:"#334155", fontWeight:700 }}>Qty</div>
+            <input
+              type="number"
+              value={qty}
+              onChange={(e)=>setQty(e.target.value)}
+              min={1}
+              style={{ width:160, padding:"10px 10px", border:"1px solid #e5e7eb", borderRadius:10, background:"#fff" }}
+            />
           </div>
-          <div style={{ marginTop: 10, display: "grid", gap: 4, color: toast.type === "ok" ? "#065f46" : "#991b1b", fontSize: 13 }}>
-            {toast.lines?.map((l, idx) => <div key={idx}>{l}</div>)}
+
+          <div style={{ fontSize:12, color:"#64748b", marginTop:8 }}>
+            ※ API Base는 입력 후 포커스가 빠질 때(onBlur) 저장됨. (로컬에 저장)
           </div>
         </div>
       )}
+
+      {last && (
+        <div style={{ border:"1px solid #e5e7eb", borderRadius:12, padding:12, background:"#fff" }}>
+          <div style={{ fontWeight:800, marginBottom:6 }}>최근 처리</div>
+          <div style={{ fontSize:13, color:"#334155", whiteSpace:"pre-wrap" }}>
+            {JSON.stringify(last, null, 2)}
+          </div>
+        </div>
+      )}
+
+      <Toast
+        open={toast.open}
+        kind={toast.kind}
+        title={toast.title}
+        message={toast.message}
+        onClose={()=>setToast(t=>({ ...t, open:false }))}
+      />
     </div>
   );
 }
-function DeliveryOutboundPage(){ return <div><h1>택배 출고</h1><p className="muted">연결 예정</p></div>; }
+
+function StoreOutboundPage(){ return <div><h1>매장 출고</h1><p style={{color:"#64748b"}}>작지 플로우는 이전 버전 유지.</p></div>; }
+function DeliveryOutboundPage(){ return <div><h1>택배 출고</h1><p style={{color:"#64748b"}}>연결 예정</p></div>; }

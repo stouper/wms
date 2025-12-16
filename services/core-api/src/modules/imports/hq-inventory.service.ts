@@ -5,14 +5,19 @@ import { InventoryService } from '../inventory/inventory.service';
 export class HqInventoryService {
   constructor(private readonly inventory: InventoryService) {}
 
-  async apply(row: { sku: string; qty: number; location?: string; makerCode?: string; name?: string }) {
+  async apply(row: {
+    sku: string;
+    qty: number;
+    location?: string;
+    makerCode?: string;
+    name?: string;
+  }) {
     return this.inventory.setQuantity({
       sku: row.sku,
-      qty: row.qty,
+      quantity: row.qty,
       location: row.location,
       makerCode: row.makerCode,
       name: row.name,
-      reason: 'hq-import',
     });
   }
 }
