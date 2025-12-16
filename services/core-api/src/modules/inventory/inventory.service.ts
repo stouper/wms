@@ -1,95 +1,149 @@
-import { Injectable } from '@nestjs/common';
+import { Injectable, BadRequestException, NotFoundException } from '@nestjs/common';
 import { PrismaService } from '../../prisma/prisma.service';
 
-type SetQuantityInput = {
-  sku: string;            // 엑셀 "코드"
-  qty: number;            // 엑셀 "수량(전산)"
-  location?: string;      // 엑셀 "창고" (A-1 등), 기본 HQ
-  // ↓ 선택값: 있으면 SKU upsert 시 함께 반영
-  makerCode?: string;     // 엑셀 "Maker코드"
-  name?: string;          // 엑셀 "코드명"
-  reason?: string;
-  ref?: string;
+export type SetQuantityInput = {
+  sku?: string;
+  location?: string | null;
+  storeId?: string | null;
+  makerCode?: string | null;
+  name?: string | null;
+  barcode?: string | null;
+  reason?: string | null;
+
+  skuCode?: string;
+  locationCode?: string | null;
+
+  quantity?: number;
+  qty?: number;
+
+  // 아래는 imports가 넘길 수 있어서 "받기만" (DB에 저장 안 함)
+  source?: string;
+  refType?: string;
+  refId?: string;
 };
 
-type Result =
-  | { ok: true; modified: boolean; id?: string; note?: string }
-  | { ok: false; error: string };
+export type SetQuantityResult = {
+  ok: boolean;
+  modified: boolean;
+  sku: { id: string; code: string; name: string | null };
+  locationId: string | null;
+  before: number;
+  after: number;
+  change: number;
+  txId?: string;
+  message?: string;
+};
 
 @Injectable()
 export class InventoryService {
   constructor(private readonly prisma: PrismaService) {}
 
-  private norm(s: any) { return String(s ?? '').trim(); }
+  async listTx(opts: { q?: string; limit: number }) {
+    const { q, limit } = opts;
 
-  async setQuantity(input: SetQuantityInput): Promise<Result> {
-    const code = this.norm(input.sku);
-    const loc  = this.norm(input.location ?? 'HQ').toUpperCase();
-    const qty  = Number(input.qty);
-
-    if (!code) return { ok: false, error: 'sku(code) is required' };
-    if (!Number.isFinite(qty)) return { ok: false, error: 'qty must be a number' };
-
-    // 0) HQ Store 보장
-    const store = await this.prisma.store.upsert({
-      where: { code: 'HQ' },
-      update: {},
-      create: { code: 'HQ', name: 'Head Office' },
-      select: { id: true },
-    });
-
-    // 1) SKU upsert (code 필수 + makerCode/name 선택 반영)
-    const sku = await this.prisma.sku.upsert({
-      where: { code },
-      update: {
-        // 값이 들어온 경우에만 업데이트 (undefined면 무시)
-        makerCode: input.makerCode ? this.norm(input.makerCode) : undefined,
-        name:      input.name ? this.norm(input.name) : undefined,
+    return this.prisma.inventoryTx.findMany({
+      take: Math.min(limit || 50, 200),
+      orderBy: { createdAt: 'desc' },
+      where: q
+        ? {
+            sku: {
+              is: {
+                OR: [{ code: { contains: q } }, { name: { contains: q } }],
+              },
+            },
+          }
+        : undefined,
+      include: {
+        sku: { select: { code: true, name: true } },
+        location: { select: { code: true } },
       },
-      create: {
-        code,
-        makerCode: input.makerCode ? this.norm(input.makerCode) : undefined,
-        name:      input.name ? this.norm(input.name) : undefined,
-      },
-      select: { id: true },
     });
+  }
 
-    // 2) Location upsert (복합 유니크: storeId + code)
-    const location = await this.prisma.location.upsert({
-      where: { storeId_code: { storeId: store.id, code: loc } },
-      update: {},
-      create: {
-        code: loc,
-        store: { connect: { id: store.id } },
-      },
-      select: { id: true },
-    });
+  async setQuantity(input: SetQuantityInput): Promise<SetQuantityResult> {
+    const skuCode = (input.sku ?? input.skuCode ?? '').trim();
+    if (!skuCode) throw new BadRequestException('sku (or skuCode) is required');
 
-    // 3) Inventory upsert (skuId + locationId 유니크)
-    const existing = await this.prisma.inventory.findUnique({
-      where: { skuId_locationId: { skuId: sku.id, locationId: location.id } },
-    });
-
-    if (existing) {
-      if (existing.qty === qty) return { ok: true, modified: false, id: existing.id, note: 'no change' };
-      const updated = await this.prisma.inventory.update({
-        where: { id: existing.id },
-        data: { qty },
-        select: { id: true },
-      });
-      await this.prisma.inventoryTx.create({
-        data: { skuId: sku.id, locationId: location.id, qty, type: 'set' },
-      });
-      return { ok: true, modified: true, id: updated.id };
-    } else {
-      const created = await this.prisma.inventory.create({
-        data: { skuId: sku.id, locationId: location.id, qty },
-        select: { id: true },
-      });
-      await this.prisma.inventoryTx.create({
-        data: { skuId: sku.id, locationId: location.id, qty, type: 'set' },
-      });
-      return { ok: true, modified: true, id: created.id };
+    const rawQty = input.quantity ?? input.qty;
+    if (rawQty == null || Number.isNaN(Number(rawQty))) {
+      throw new BadRequestException('quantity (or qty) is required');
     }
+    const targetQty = Math.floor(Number(rawQty));
+
+    const locationCode = (input.location ?? input.locationCode ?? '').trim();
+    const storeId = (input.storeId ?? '').trim();
+
+    const sku = await this.prisma.sku.findUnique({
+      where: { code: skuCode },
+      select: { id: true, code: true, name: true },
+    });
+    if (!sku) throw new NotFoundException(`SKU not found: ${skuCode}`);
+
+    let locationId: string | null = null;
+    if (locationCode) {
+      // Location은 code 단독 unique가 아니라서 findFirst 사용
+      const loc = await this.prisma.location.findFirst({
+        where: {
+          code: locationCode,
+          ...(storeId ? { storeId } : {}),
+        } as any,
+        select: { id: true, code: true },
+      });
+      if (!loc) {
+        throw new NotFoundException(
+          `Location not found: ${storeId ? `${storeId}/` : ''}${locationCode}`,
+        );
+      }
+      locationId = loc.id;
+    }
+
+    // 현재 수량 = Tx 합계
+    const agg = await this.prisma.inventoryTx.aggregate({
+      _sum: { qty: true },
+      where: {
+        skuId: sku.id,
+        ...(locationId ? { locationId } : {}),
+      },
+    });
+
+    const before = agg._sum.qty ?? 0;
+    const change = targetQty - before;
+
+    if (change === 0) {
+      return {
+        ok: true,
+        modified: false,
+        sku,
+        locationId,
+        before,
+        after: before,
+        change: 0,
+        message: 'no change',
+      };
+    }
+
+    // ✅ 여기서부터 핵심 수정:
+    // InventoryTx 모델에 실제 있는 필드만 넣는다.
+    // (너 로그 기준으로 source/refType/refId 는 없음)
+    const tx = await this.prisma.inventoryTx.create({
+      data: {
+        skuId: sku.id,
+        locationId,
+        qty: change,
+        type: 'ADJUST' as any, // 기존에 ADJUST가 통과했으니 유지
+      } as any,
+      select: { id: true },
+    });
+
+    return {
+      ok: true,
+      modified: true,
+      sku,
+      locationId,
+      before,
+      after: before + change,
+      change,
+      txId: tx.id,
+    };
   }
 }
