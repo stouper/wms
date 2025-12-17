@@ -1,0 +1,333 @@
+﻿
+폴더 PATH의 목록입니다.
+볼륨 일련 번호는 3684-C500입니다.
+C:.
+│  .env
+│  dev.db
+│  package.json
+│  tree.txt
+│  
+├─db
+├─electron
+│  │  db.js
+│  │  main.cjs
+│  │  preload.cjs
+│  │  
+│  └─services
+│          inventory.cjs
+│          
+├─jobs
+│      1765683066670_11월28~30일 매장 발주건.xlsx
+│      1765683090437_11월28~30일 매장 발주건.xlsx
+│      1765683185148_11월28~30일 매장 발주건.xlsx
+│      1765683198254_11월28~30일 매장 발주건.xlsx
+│      
+│  ├─.bin
+│  │      prisma
+│  │      prisma.cmd
+│  │      prisma.ps1
+│  │      
+│  ├─.cache
+│  │  ├─jiti
+│  │  │      wms-desktop-prisma.config.5d82d609.mjs
+│  │  │      
+│  │  └─prisma
+│  │      └─master
+│  │          ├─605197351a3c8bdd595af2d2a9bc3025bca48ea2
+│  │          │  └─windows
+│  │          └─ab635e6b9d606fa5c8fb8b1a7f909c3c3c1c98ba
+│  │              └─windows
+│  ├─@prisma
+│  │  ├─debug
+│  │  │  │  LICENSE
+│  │  │  │  package.json
+│  │  │  │  README.md
+│  │  │  │  
+│  │  │          index.d.mts
+│  │  │          index.d.ts
+│  │  │          index.js
+│  │  │          index.mjs
+│  │  │          util.d.ts
+│  │  │          
+│  │  ├─engines
+│  │  │  │  LICENSE
+│  │  │  │  package.json
+│  │  │  │  README.md
+│  │  │  │  schema-engine-windows.exe
+│  │  │  │  
+│  │  │  │  │  index.d.ts
+│  │  │  │  │  index.js
+│  │  │  │  │  
+│  │  │  │  └─scripts
+│  │  │  │          localinstall.d.ts
+│  │  │  │          localinstall.js
+│  │  │  │          postinstall.d.ts
+│  │  │  │          postinstall.js
+│  │  │  │          
+│  │  │  │  └─.cache
+│  │  │  │      └─prisma
+│  │  │  │          └─master
+│  │  │  │              └─ab635e6b9d606fa5c8fb8b1a7f909c3c3c1c98ba
+│  │  │  │                  └─windows
+│  │  │  │                          schema-engine
+│  │  │  │                          schema-engine.gz.sha256
+│  │  │  │                          schema-engine.sha256
+│  │  │  │                          
+│  │  │  └─scripts
+│  │  │          postinstall.js
+│  │  │          
+│  │  ├─engines-version
+│  │  │      index.d.ts
+│  │  │      index.js
+│  │  │      LICENSE
+│  │  │      package.json
+│  │  │      README.md
+│  │  │      
+│  │  ├─fetch-engine
+│  │  │  │  LICENSE
+│  │  │  │  package.json
+│  │  │  │  README.md
+│  │  │  │  
+│  │  │          BinaryType.d.ts
+│  │  │          BinaryType.js
+│  │  │          chmodPlusX.d.ts
+│  │  │          chmodPlusX.js
+│  │  │          chunk-2ESYSVXG.js
+│  │  │          chunk-4GGGRRIN.js
+│  │  │          chunk-4MDZEOKU.js
+│  │  │          chunk-5564WBCW.js
+│  │  │          chunk-66KG5WKV.js
+│  │  │          chunk-7AOUSONO.js
+│  │  │          chunk-7JLQJWOR.js
+│  │  │          chunk-B4I65CZH.js
+│  │  │          chunk-CTLNI6CP.js
+│  │  │          chunk-FKGWOTGU.js
+│  │  │          chunk-FNYZ6ABB.js
+│  │  │          chunk-VLGS4WJI.js
+│  │  │          chunk-XNR2KDTK.js
+│  │  │          chunk-Z2FFKDD7.js
+│  │  │          cleanupCache.d.ts
+│  │  │          cleanupCache.js
+│  │  │          download.d.ts
+│  │  │          download.js
+│  │  │          downloadZip.d.ts
+│  │  │          downloadZip.js
+│  │  │          env.d.ts
+│  │  │          env.js
+│  │  │          getHash.d.ts
+│  │  │          getHash.js
+│  │  │          getProxyAgent.d.ts
+│  │  │          getProxyAgent.js
+│  │  │          index.d.ts
+│  │  │          index.js
+│  │  │          log.d.ts
+│  │  │          log.js
+│  │  │          multipart-parser-3E7JBBYS.js
+│  │  │          utils.d.ts
+│  │  │          utils.js
+│  │  │          
+│  │  └─get-platform
+│  │      │  LICENSE
+│  │      │  package.json
+│  │      │  README.md
+│  │      │  
+│  │          │  binaryTargets.d.ts
+│  │          │  binaryTargets.js
+│  │          │  chunk-2ESYSVXG.js
+│  │          │  chunk-3UEKS5W6.js
+│  │          │  chunk-6HZWON4S.js
+│  │          │  chunk-7MLUNQIZ.js
+│  │          │  chunk-7PMGXL6S.js
+│  │          │  chunk-FWMN4WME.js
+│  │          │  chunk-GGL63BNP.js
+│  │          │  chunk-IPLRRT6O.js
+│  │          │  chunk-M5T7GI2R.js
+│  │          │  chunk-YVXCXD3A.js
+│  │          │  getPlatform.d.ts
+│  │          │  getPlatform.js
+│  │          │  index.d.ts
+│  │          │  index.js
+│  │          │  link.d.ts
+│  │          │  link.js
+│  │          │  logger.d.ts
+│  │          │  logger.js
+│  │          │  magic-string.es-3WRPFX2A.js
+│  │          │  
+│  │          └─test-utils
+│  │                  binaryTargetRegex.d.ts
+│  │                  binaryTargetRegex.js
+│  │                  index.d.ts
+│  │                  index.js
+│  │                  jestContext.d.ts
+│  │                  jestContext.js
+│  │                  jestSnapshotSerializer.js
+│  │                  vitestContext.d.ts
+│  │                  vitestContext.js
+│  │                  
+│  ├─@types
+│  └─prisma
+│      │  config.d.ts
+│      │  config.js
+│      │  LICENSE
+│      │  package.json
+│      │  README.md
+│      │  
+│      │      child.js
+│      │      index.js
+│      │      query_compiler_bg.cockroachdb.js
+│      │      query_compiler_bg.cockroachdb.mjs
+│      │      query_compiler_bg.cockroachdb.wasm
+│      │      query_compiler_bg.mysql.js
+│      │      query_compiler_bg.mysql.mjs
+│      │      query_compiler_bg.mysql.wasm
+│      │      query_compiler_bg.postgresql.js
+│      │      query_compiler_bg.postgresql.mjs
+│      │      query_compiler_bg.postgresql.wasm
+│      │      query_compiler_bg.sqlite.js
+│      │      query_compiler_bg.sqlite.mjs
+│      │      query_compiler_bg.sqlite.wasm
+│      │      query_compiler_bg.sqlserver.js
+│      │      query_compiler_bg.sqlserver.mjs
+│      │      query_compiler_bg.sqlserver.wasm
+│      │      schema_engine_bg.wasm
+│      │      xdg-open
+│      │      
+│      │  └─cli
+│      │      └─src
+│      │              types.d.ts
+│      │              
+│      │  └─@prisma
+│      │      └─studio-core
+│      │          │  LICENSE.free
+│      │          │  LICENSE.licensed
+│      │          │  package.json
+│      │          │  README.md.free
+│      │          │  
+│      │              │  chunk-32BUC7NR.js
+│      │              │  chunk-4P3HPAZT.js
+│      │              │  chunk-A6CVKSUD.js
+│      │              │  chunk-GDQBQ7MK.js
+│      │              │  chunk-M7E5UEO3.js
+│      │              │  chunk-O6ZAHVDF.js
+│      │              │  chunk-PA5LQLPW.js
+│      │              │  chunk-SXTJF4PD.js
+│      │              │  chunk-ZUEQ555M.js
+│      │              │  index-BhPjNuvP.d.cts
+│      │              │  index-BhPjNuvP.d.ts
+│      │              │  metafile-cjs.json
+│      │              │  metafile-esm.json
+│      │              │  
+│      │              ├─data
+│      │              │  │  index.cjs
+│      │              │  │  index.d.cts
+│      │              │  │  index.d.ts
+│      │              │  │  index.js
+│      │              │  │  
+│      │              │  ├─accelerate
+│      │              │  │      index.cjs
+│      │              │  │      index.d.cts
+│      │              │  │      index.d.ts
+│      │              │  │      index.js
+│      │              │  │      
+│      │              │  ├─bff
+│      │              │  │      index.cjs
+│      │              │  │      index.d.cts
+│      │              │  │      index.d.ts
+│      │              │  │      index.js
+│      │              │  │      
+│      │              │  ├─mysql-core
+│      │              │  │      index.cjs
+│      │              │  │      index.d.cts
+│      │              │  │      index.d.ts
+│      │              │  │      index.js
+│      │              │  │      
+│      │              │  ├─mysql2
+│      │              │  │      index.cjs
+│      │              │  │      index.d.cts
+│      │              │  │      index.d.ts
+│      │              │  │      index.js
+│      │              │  │      
+│      │              │  ├─node-sqlite
+│      │              │  │      index.cjs
+│      │              │  │      index.d.cts
+│      │              │  │      index.d.ts
+│      │              │  │      index.js
+│      │              │  │      
+│      │              │  ├─pglite
+│      │              │  │      index.cjs
+│      │              │  │      index.d.cts
+│      │              │  │      index.d.ts
+│      │              │  │      index.js
+│      │              │  │      
+│      │              │  ├─postgres-core
+│      │              │  │      index.cjs
+│      │              │  │      index.d.cts
+│      │              │  │      index.d.ts
+│      │              │  │      index.js
+│      │              │  │      
+│      │              │  ├─postgresjs
+│      │              │  │      index.cjs
+│      │              │  │      index.d.cts
+│      │              │  │      index.d.ts
+│      │              │  │      index.js
+│      │              │  │      
+│      │              │  ├─ppg
+│      │              │  │      index.cjs
+│      │              │  │      index.d.cts
+│      │              │  │      index.d.ts
+│      │              │  │      index.js
+│      │              │  │      
+│      │              │  └─sqlite-core
+│      │              │          index.cjs
+│      │              │          index.d.cts
+│      │              │          index.d.ts
+│      │              │          index.js
+│      │              │          
+│      │              └─ui
+│      │                      index.cjs
+│      │                      index.css
+│      │                      index.d.cts
+│      │                      index.d.ts
+│      │                      index.js
+│      │                      
+│      ├─preinstall
+│      │      index.js
+│      │      
+│      └─scripts
+│              preinstall-entry.js
+│              
+├─renderer
+│  │  index.html
+│  │  
+│  │      bundle.js
+│  │      bundle.js.map
+│  │      
+│  └─src
+│      │  App.jsx
+│      │  main.jsx
+│      │  
+│      ├─components
+│      │      Chip.jsx
+│      │      TableParts.jsx
+│      │      VirtualTable.jsx
+│      │      
+│      ├─lib
+│      │      api.js
+│      │      dates.js
+│      │      parseJobFile.js
+│      │      storage.js
+│      │      toasts.jsx
+│      │      
+│      ├─pages
+│      │      DashboardPage.jsx
+│      │      EmptyPage.jsx
+│      │      InventoryPage.jsx
+│      │      JobsExcelWorkbench.jsx
+│      │      
+│      └─ui
+│              styles.js
+│              
+└─scripts
+        
+
+

@@ -16,18 +16,17 @@ model Store {
 
 model Sku {
   id        String  @id @default(cuid())
-  /// 엑셀의 "코드"
   code      String  @unique
   makerCode String?
   name      String?
 
   inventories Inventory[]
   txs         InventoryTx[]
+  jobItems    JobItem[]
 }
 
 model Location {
   id      String @id @default(cuid())
-  /// 엑셀의 "창고" (예: A-1)
   code    String
   storeId String
 
@@ -43,7 +42,6 @@ model Inventory {
   id         String @id @default(cuid())
   skuId      String
   locationId String
-  /// 엑셀의 "수량(전산)"
   qty        Int    @default(0)
 
   sku      Sku      @relation(fields: [skuId], references: [id])
@@ -57,7 +55,7 @@ model InventoryTx {
   skuId      String
   locationId String
   qty        Int
-  type       String // 'set' | 'adjust' 등
+  type       String
   createdAt  DateTime @default(now())
 
   sku      Sku      @relation(fields: [skuId], references: [id])
@@ -65,4 +63,67 @@ model InventoryTx {
 
   @@index([skuId], map: "InventoryTx_skuId_idx")
   @@index([locationId], map: "InventoryTx_locationId_idx")
+}
+
+model Job {
+  id        String   @id @default(cuid())
+  storeCode String   // 4000/4100/2400/5000...
+  title     String?
+  memo      String?
+
+  // ✅ SQLite enum 대신 문자열로
+  // allowed: 'open' | 'picking' | 'done' | 'cancelled'
+  status    String   @default("open")
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+  doneAt    DateTime?
+
+  items     JobItem[]
+  parcel    JobParcel?
+
+  @@index([storeCode])
+  @@index([status])
+  @@index([doneAt])
+}
+
+model JobItem {
+  id        String   @id @default(cuid())
+  jobId     String
+  skuId     String
+
+  qtyPlanned Int
+  qtyPicked  Int      @default(0)
+
+  makerCodeSnapshot String?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  job Job @relation(fields: [jobId], references: [id], onDelete: Cascade)
+  sku Sku @relation(fields: [skuId], references: [id])
+
+  @@index([jobId])
+  @@index([skuId])
+}
+
+model JobParcel {
+  id            String  @id @default(cuid())
+  jobId         String  @unique
+
+  orderNo       String?
+  recipientName String
+  phone         String
+  zip           String?
+  addr1         String
+  addr2         String?
+  memo          String?
+
+  carrierCode   String?
+  waybillNo     String?
+
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+
+  job Job @relation(fields: [jobId], references: [id], onDelete: Cascade)
 }

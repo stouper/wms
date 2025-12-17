@@ -1,0 +1,35 @@
+﻿폴더 PATH의 목록입니다.
+볼륨 일련 번호는 3684-C500입니다.
+C:.
+│  file.txt
+│  index.html
+│  
+├─dist
+│      bundle.js
+│      bundle.js.map
+│      
+└─src
+    │  App.jsx
+    │  main.jsx
+    │  
+    ├─components
+    │      Chip.jsx
+    │      TableParts.jsx
+    │      VirtualTable.jsx
+    │      
+    ├─lib
+    │      api.js
+    │      dates.js
+    │      parseJobFile.js
+    │      storage.js
+    │      toasts.jsx
+    │      
+    ├─pages
+    │      DashboardPage.jsx
+    │      EmptyPage.jsx
+    │      InventoryPage.jsx
+    │      JobsExcelWorkbench.jsx
+    │      
+    └─ui
+            styles.js
+            
