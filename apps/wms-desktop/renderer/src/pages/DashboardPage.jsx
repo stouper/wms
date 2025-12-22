@@ -1,97 +1,728 @@
-import React, { useState } from "react";
+import React, { useEffect, useMemo, useState } from "react";
 import { useToasts } from "../lib/toasts.jsx";
 import { ymdKST } from "../lib/dates";
 import { getApiBase } from "../lib/api";
 import { primaryBtn, inputStyle } from "../ui/styles";
+import { holidays as fetchHolidays } from "@kyungseopk1m/holidays-kr";
 
+/**
+ * Dashboard
+ * - 스케줄 달력(로컬 저장) + 🇰🇷 공휴일 표시(패키지)
+ * - EPMS Export: 기간(From~To) 선택 → 조회(목록) → 선택 다운로드 + 상세 보기
+ */
 export default function DashboardPage() {
   const { push, ToastHost } = useToasts();
-  const [dateYmd, setDateYmd] = useState(() => ymdKST(new Date())); // YYYY-MM-DD
-  const [downloading, setDownloading] = useState(false);
 
-  async function downloadExport() {
+  // ---------------------------
+  // EPMS Export (range -> list -> select -> download)
+  // ---------------------------
+  const [fromYmd, setFromYmd] = useState(() => ymdKST(new Date()));
+  const [toYmd, setToYmd] = useState(() => ymdKST(new Date()));
+
+  const [loadingList, setLoadingList] = useState(false);
+  const [jobs, setJobs] = useState([]); // export-source로 받은 job들 (중복제거/정렬)
+  const [selectedIds, setSelectedIds] = useState(() => new Set());
+  const [activeJobId, setActiveJobId] = useState(null);
+
+  const activeJob = useMemo(() => {
+    return (jobs || []).find((j) => j?.id === activeJobId) || null;
+  }, [jobs, activeJobId]);
+
+  const selectedJobs = useMemo(() => {
+    const ids = selectedIds;
+    return (jobs || []).filter((j) => ids.has(j?.id));
+  }, [jobs, selectedIds]);
+
+  const selectedCount = selectedJobs.length;
+
+  async function fetchJobsForRange() {
     const apiBase = getApiBase();
-    const d = (dateYmd || "").trim();
+    const from = (fromYmd || "").trim();
+    const to = (toYmd || "").trim();
 
-    if (!/^\d{4}-\d{2}-\d{2}$/.test(d)) {
-      push({ kind: "error", title: "날짜 형식", message: "YYYY-MM-DD로 입력" });
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(from) || !/^\d{4}-\d{2}-\d{2}$/.test(to)) {
+      push({ kind: "error", title: "날짜 형식", message: "From/To 모두 YYYY-MM-DD로 선택해줘" });
+      return;
+    }
+
+    const fromDate = new Date(from + "T00:00:00");
+    const toDate = new Date(to + "T00:00:00");
+    if (Number.isNaN(fromDate.getTime()) || Number.isNaN(toDate.getTime())) {
+      push({ kind: "error", title: "날짜", message: "From/To 날짜가 유효하지 않아" });
+      return;
+    }
+    if (fromDate > toDate) {
+      push({ kind: "warn", title: "기간", message: "From이 To보다 클 수는 없어" });
       return;
     }
 
     try {
-      setDownloading(true);
+      setLoadingList(true);
+      setActiveJobId(null);
+      setSelectedIds(new Set());
+      setJobs([]);
 
-      // ✅ 서버에서 export-source JSON 가져오기
-      const url = `${apiBase}/jobs/export-source?date=${encodeURIComponent(d)}`;
-      const data = await tryJsonFetch(url);
-
-      const jobs = Array.isArray(data) ? data : (data?.jobs || []);
-      if (!Array.isArray(jobs) || jobs.length === 0) {
-        push({ kind: "warn", title: "데이터 없음", message: `${d} 완료된 작지가 없어` });
+      // ✅ 기간이 너무 길면 서버 호출이 많아지니까 안전장치
+      const days = dateDiffDaysInclusive(fromDate, toDate);
+      if (days > 31) {
+        push({
+          kind: "warn",
+          title: "기간 제한",
+          message: "일단 31일 이내로 조회하자 (서버에 기간 API 만들면 제한 풀자)",
+        });
         return;
       }
 
-      // ✅ EPMS_OUT 포맷 CSV 만들기 (헤더 포함 / qtyPicked 기준)
-      const csvText = buildEpmsOutCsvWithHeader({
-        jobs,
-        type: 1, // 출고=1 (반품이면 2로 바꾸면 됨)
-        workDateYmd: d,
+      // ✅ 날짜별로 /jobs/export-source?date=YYYY-MM-DD 호출해서 합치기
+      const all = [];
+      for (let i = 0; i < days; i++) {
+        const d = new Date(fromDate);
+        d.setDate(fromDate.getDate() + i);
+        const ymd = ymdLocal(d);
+
+        const url = `${apiBase}/jobs/export-source?date=${encodeURIComponent(ymd)}`;
+        const data = await tryJsonFetch(url);
+
+        const list = Array.isArray(data) ? data : data?.jobs || [];
+        if (Array.isArray(list) && list.length > 0) {
+          // 각 job에 조회 기준일(=export date)을 메모
+          for (const j of list) {
+            all.push({ ...j, _exportDate: ymd });
+          }
+        }
+      }
+
+      if (all.length === 0) {
+        push({ kind: "warn", title: "조회 결과 없음", message: `${from} ~ ${to} 완료된 작지가 없어` });
+        return;
+      }
+
+      // ✅ job id 기준 중복 제거 (기간 중 중복 응답 방지)
+      const uniq = new Map();
+      for (const j of all) {
+        if (!j?.id) continue;
+        if (!uniq.has(j.id)) uniq.set(j.id, j);
+      }
+
+      // 정렬: exportDate → storeCode → updatedAt/completedAt(있으면) → id
+      const sorted = [...uniq.values()].sort((a, b) => {
+        const ad = String(a?._exportDate || "").localeCompare(String(b?._exportDate || ""));
+        if (ad !== 0) return ad;
+
+        const as = String(a?.storeCode || a?.store_code || "").localeCompare(
+          String(b?.storeCode || b?.store_code || "")
+        );
+        if (as !== 0) return as;
+
+        const at = Number(a?.completedAt || a?.completed_at || a?.updatedAt || a?.updated_at || 0);
+        const bt = Number(b?.completedAt || b?.completed_at || b?.updatedAt || b?.updated_at || 0);
+        if (at !== bt) return bt - at;
+
+        return String(a?.id || "").localeCompare(String(b?.id || ""));
       });
 
-      // ✅ 파일명: EPMS_OUT_YYYYMMDD.csv
-      const filename = `EPMS_OUT_${d.replaceAll("-", "")}.csv`;
+      setJobs(sorted);
+      push({ kind: "success", title: "조회 완료", message: `${from} ~ ${to} 작업 ${sorted.length}건` });
+    } catch (e) {
+      push({ kind: "error", title: "조회 실패", message: e?.message || String(e) });
+    } finally {
+      setLoadingList(false);
+    }
+  }
+
+  function toggleSelectJob(jobId) {
+    setSelectedIds((prev) => {
+      const next = new Set(prev);
+      if (next.has(jobId)) next.delete(jobId);
+      else next.add(jobId);
+      return next;
+    });
+  }
+
+  function selectAll() {
+    const next = new Set();
+    for (const j of jobs || []) {
+      if (j?.id) next.add(j.id);
+    }
+    setSelectedIds(next);
+  }
+
+  function clearSelection() {
+    setSelectedIds(new Set());
+  }
+
+  async function downloadSelected() {
+    if (selectedJobs.length === 0) {
+      push({ kind: "warn", title: "다운로드", message: "선택된 작업이 없어" });
+      return;
+    }
+
+    try {
+      const from = (fromYmd || "").trim();
+      const to = (toYmd || "").trim();
+
+      const csvText = buildEpmsOutCsvWithHeader({
+        jobs: selectedJobs,
+        type: 1,
+        workDateYmd: from, // fallback (실제 행은 job._exportDate 우선)
+      });
+
+      const filename = `EPMS_OUT_${from.replaceAll("-", "")}_${to.replaceAll("-", "")}_SEL${selectedJobs.length}.csv`;
       downloadTextFile(filename, csvText, "text/csv;charset=utf-8");
 
       push({
         kind: "success",
-        title: "EPMS Export",
-        message: `${d} 완료작지 기준 CSV 다운로드 (qtyPicked 기준, 헤더 포함)`,
+        title: "다운로드 완료",
+        message: `선택 ${selectedJobs.length}건 다운로드`,
       });
     } catch (e) {
-      push({
-        kind: "error",
-        title: "Export 실패",
-        message: e?.message || String(e),
-      });
-    } finally {
-      setDownloading(false);
+      push({ kind: "error", title: "다운로드 실패", message: e?.message || String(e) });
     }
   }
+
+  // ---------------------------
+  // Schedule Calendar (local) + 🇰🇷 Holidays
+  // ---------------------------
+  const SCHEDULE_KEY = "wms.dashboard.schedule.v1";
+
+  const [monthAnchor, setMonthAnchor] = useState(() => {
+    const now = new Date();
+    return new Date(now.getFullYear(), now.getMonth(), 1);
+  });
+
+  const [selectedYmd, setSelectedYmd] = useState(() => ymdKST(new Date()));
+  const [eventsMap, setEventsMap] = useState(() => safeReadJson(SCHEDULE_KEY, {}));
+  const [newTitle, setNewTitle] = useState("");
+  const [newTime, setNewTime] = useState(""); // optional: HH:MM
+
+  const monthInfo = useMemo(() => buildMonthGrid(monthAnchor), [monthAnchor]);
+  const selectedEvents = useMemo(() => {
+    const list = eventsMap?.[selectedYmd] || [];
+    return Array.isArray(list) ? list : [];
+  }, [eventsMap, selectedYmd]);
+
+  function persist(next) {
+    setEventsMap(next);
+    safeWriteJson(SCHEDULE_KEY, next);
+  }
+
+  function addEvent() {
+    const title = (newTitle || "").trim();
+    if (!title) {
+      push({ kind: "warn", title: "일정", message: "일정 제목을 입력해줘" });
+      return;
+    }
+
+    const ev = {
+      id: `ev_${Date.now()}_${Math.random().toString(16).slice(2)}`,
+      title,
+      time: (newTime || "").trim(),
+      createdAt: Date.now(),
+    };
+
+    const next = { ...(eventsMap || {}) };
+    const prevList = Array.isArray(next[selectedYmd]) ? next[selectedYmd] : [];
+    next[selectedYmd] = [ev, ...prevList];
+
+    persist(next);
+    setNewTitle("");
+    setNewTime("");
+    push({ kind: "success", title: "일정 추가", message: `${selectedYmd}에 추가됨` });
+  }
+
+  function deleteEvent(id) {
+    const ok = confirm("이 일정 삭제할까?");
+    if (!ok) return;
+
+    const next = { ...(eventsMap || {}) };
+    const prevList = Array.isArray(next[selectedYmd]) ? next[selectedYmd] : [];
+    const filtered = prevList.filter((x) => x?.id !== id);
+    if (filtered.length === 0) delete next[selectedYmd];
+    else next[selectedYmd] = filtered;
+
+    persist(next);
+  }
+
+  function countEvents(ymd) {
+    const list = eventsMap?.[ymd];
+    return Array.isArray(list) ? list.length : 0;
+  }
+
+  function gotoToday() {
+    const today = ymdKST(new Date());
+    setSelectedYmd(today);
+    const now = new Date();
+    setMonthAnchor(new Date(now.getFullYear(), now.getMonth(), 1));
+  }
+
+  function moveMonth(delta) {
+    const d = new Date(monthAnchor);
+    d.setMonth(d.getMonth() + delta);
+    d.setDate(1);
+    setMonthAnchor(d);
+  }
+
+  // 🇰🇷 Holiday map: { "YYYY-MM-DD": "휴일명" }
+  const HOLI_CACHE_PREFIX = "wms.krHolidays.";
+  const [holidayMap, setHolidayMap] = useState(() => ({}));
+
+  async function loadHolidaysForYear(year) {
+    const cacheKey = `${HOLI_CACHE_PREFIX}${year}`;
+    const cached = safeReadJson(cacheKey, null);
+    if (cached && typeof cached === "object") return cached;
+
+    const res = await fetchHolidays(String(year));
+    const data = res?.data || [];
+
+    const map = {};
+    for (const h of data) {
+      const ymd = yyyymmddToYmd(h?.date);
+      const name = String(h?.name || "").trim();
+      if (ymd && name) map[ymd] = name;
+    }
+
+    safeWriteJson(cacheKey, map);
+    return map;
+  }
+
+  useEffect(() => {
+    let alive = true;
+    (async () => {
+      try {
+        const year = monthAnchor.getFullYear();
+        const map = await loadHolidaysForYear(year);
+        if (alive) setHolidayMap(map || {});
+      } catch (e) {
+        console.warn("holiday load failed:", e);
+      }
+    })();
+    return () => {
+      alive = false;
+    };
+  }, [monthAnchor]);
 
   return (
     <div style={{ display: "grid", gap: 14 }}>
       <ToastHost />
       <h1 style={{ margin: 0 }}>데쉬보드</h1>
 
+      {/* 스케줄 달력 */}
       <div style={{ border: "1px solid #e5e7eb", borderRadius: 12, padding: 12, background: "#fff" }}>
-        <h3 style={{ margin: "0 0 10px" }}>EPMS Export (완료된 작지 → EPMS_OUT CSV)</h3>
+        <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 10, flexWrap: "wrap" }}>
+          <h3 style={{ margin: 0 }}>스케줄 달력</h3>
 
-        <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
-          <label style={{ fontSize: 12, color: "#64748b" }}>date</label>
-          <input
-            value={dateYmd}
-            onChange={(e) => setDateYmd(e.target.value)}
-            placeholder="YYYY-MM-DD"
-            style={{ ...inputStyle, width: 140, fontFamily: "Consolas, monospace" }}
-          />
-
-          <button onClick={downloadExport} disabled={downloading} style={primaryBtn}>
-            {downloading ? "다운로드 중..." : "EPMS_OUT CSV 다운로드"}
-          </button>
+          <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
+            <button type="button" style={{ ...primaryBtn, padding: "8px 10px" }} onClick={() => moveMonth(-1)}>
+              ◀︎ 이전달
+            </button>
+            <div style={{ fontWeight: 900 }}>{monthInfo.label}</div>
+            <button type="button" style={{ ...primaryBtn, padding: "8px 10px" }} onClick={() => moveMonth(1)}>
+              다음달 ▶︎
+            </button>
+            <button type="button" style={{ ...primaryBtn, padding: "8px 10px" }} onClick={gotoToday}>
+              오늘
+            </button>
+          </div>
         </div>
 
-        <div style={{ marginTop: 8, fontSize: 12, color: "#94a3b8", lineHeight: 1.6 }}>
-          - 기준: 특정 날짜의 <b>완료된 작지 전체</b>
-          <br />
-          - 수량: <b>qtyPicked(실제 출고)</b>
-          <br />
-          - 헤더: <b>설명형 헤더 포함</b>
-          <br />
-          - 포맷: A=1, B=YYYYMMDD, C=00, D=storeCode, E=00, F=makerCode, G=qty, H~J 빈칸
+        <div style={{ marginTop: 10, display: "grid", gridTemplateColumns: "1.2fr 0.8fr", gap: 12 }}>
+          {/* calendar grid */}
+          <div style={{ border: "1px solid #e5e7eb", borderRadius: 12, overflow: "hidden" }}>
+            <div
+              style={{
+                display: "grid",
+                gridTemplateColumns: "repeat(7, 1fr)",
+                background: "#f8fafc",
+                borderBottom: "1px solid #e5e7eb",
+                fontSize: 12,
+                fontWeight: 900,
+              }}
+            >
+              {["일", "월", "화", "수", "목", "금", "토"].map((d, idx) => (
+                <div
+                  key={d}
+                  style={{
+                    padding: 10,
+                    textAlign: "center",
+                    color: idx === 0 ? "#ef4444" : idx === 6 ? "#3b82f6" : "#64748b",
+                    fontWeight: 900,
+                  }}
+                >
+                  {d}
+                </div>
+              ))}
+            </div>
+
+            <div style={{ display: "grid", gridTemplateColumns: "repeat(7, 1fr)" }}>
+              {monthInfo.days.map((cell) => {
+                const isSelected = cell.ymd === selectedYmd;
+                const evCount = cell.inMonth ? countEvents(cell.ymd) : 0;
+                const isToday = cell.ymd === ymdKST(new Date());
+
+                const dow = new Date(cell.ymd + "T00:00:00").getDay(); // 0=일 ... 6=토
+                const holidayName = cell.inMonth ? (holidayMap[cell.ymd] || "") : "";
+                const isHoliday = !!holidayName;
+                const dayColor = dow === 0 ? "#ef4444" : dow === 6 ? "#3b82f6" : "#111827";
+
+                return (
+                  <div
+                    key={cell.key}
+                    role="button"
+                    tabIndex={0}
+                    onClick={() => cell.inMonth && setSelectedYmd(cell.ymd)}
+                    onKeyDown={(e) => e.key === "Enter" && cell.inMonth && setSelectedYmd(cell.ymd)}
+                    style={{
+                      minHeight: 76,
+                      borderRight: "1px solid #e5e7eb",
+                      borderBottom: "1px solid #e5e7eb",
+                      padding: 8,
+                      cursor: cell.inMonth ? "pointer" : "default",
+                      background: isSelected ? "#eef2ff" : isHoliday ? "#fff7ed" : "#fff",
+                      opacity: cell.inMonth ? 1 : 0.4,
+                      outline: "none",
+                    }}
+                  >
+                    <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 8 }}>
+                      <div style={{ fontWeight: 900, fontSize: 12, color: dayColor }}>
+                        {cell.day}
+                        {isToday ? (
+                          <span
+                            style={{
+                              marginLeft: 6,
+                              fontSize: 11,
+                              padding: "2px 6px",
+                              borderRadius: 999,
+                              background: "#dcfce7",
+                              color: "#166534",
+                            }}
+                          >
+                            오늘
+                          </span>
+                        ) : null}
+                      </div>
+
+                      {evCount > 0 ? (
+                        <div
+                          style={{
+                            fontSize: 11,
+                            fontWeight: 900,
+                            padding: "2px 8px",
+                            borderRadius: 999,
+                            background: "#fef3c7",
+                            color: "#92400e",
+                            whiteSpace: "nowrap",
+                          }}
+                          title={`${evCount}개 일정`}
+                        >
+                          {evCount}
+                        </div>
+                      ) : null}
+                    </div>
+
+                    {cell.inMonth && holidayName ? (
+                      <div style={{ marginTop: 6, fontSize: 11, fontWeight: 900, color: "#c2410c" }}>
+                        {holidayName}
+                      </div>
+                    ) : null}
+
+                    {cell.inMonth && evCount > 0 ? (
+                      <div style={{ marginTop: 6, fontSize: 11, color: "#64748b", lineHeight: 1.3 }}>
+                        {(eventsMap?.[cell.ymd] || []).slice(0, 2).map((ev) => (
+                          <div
+                            key={ev.id}
+                            style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}
+                          >
+                            • {ev.time ? `${ev.time} ` : ""}{ev.title}
+                          </div>
+                        ))}
+                        {(eventsMap?.[cell.ymd] || []).length > 2 ? <div>…</div> : null}
+                      </div>
+                    ) : null}
+                  </div>
+                );
+              })}
+            </div>
+          </div>
+
+          {/* side panel */}
+          <div style={{ border: "1px solid #e5e7eb", borderRadius: 12, padding: 12 }}>
+            <div style={{ fontWeight: 900 }}>선택 날짜</div>
+            <div style={{ marginTop: 6, display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
+              <input type="date" value={selectedYmd} onChange={(e) => setSelectedYmd(e.target.value)} style={{ ...inputStyle, width: 170 }} />
+              <div style={{ fontSize: 12, color: "#94a3b8" }}>{selectedYmd}</div>
+            </div>
+
+            <div style={{ marginTop: 10, borderTop: "1px solid #e5e7eb", paddingTop: 10 }}>
+              <div style={{ fontWeight: 900, marginBottom: 8 }}>일정 추가</div>
+              <div style={{ display: "flex", gap: 8, flexWrap: "wrap", alignItems: "center" }}>
+                <input
+                  value={newTime}
+                  onChange={(e) => setNewTime(e.target.value)}
+                  placeholder="시간(옵션) HH:MM"
+                  style={{ ...inputStyle, width: 140, fontFamily: "Consolas, monospace" }}
+                />
+                <input
+                  value={newTitle}
+                  onChange={(e) => setNewTitle(e.target.value)}
+                  placeholder="일정 제목"
+                  style={{ ...inputStyle, minWidth: 220 }}
+                  onKeyDown={(e) => e.key === "Enter" && addEvent()}
+                />
+                <button type="button" style={{ ...primaryBtn, padding: "10px 12px" }} onClick={addEvent}>
+                  추가
+                </button>
+              </div>
+
+              <div style={{ marginTop: 12, fontWeight: 900 }}>오늘 일정</div>
+              <div style={{ marginTop: 8, display: "grid", gap: 8 }}>
+                {selectedEvents.length === 0 ? (
+                  <div style={{ fontSize: 12, color: "#94a3b8" }}>이 날짜엔 일정이 없어</div>
+                ) : (
+                  selectedEvents.map((ev) => (
+                    <div
+                      key={ev.id}
+                      style={{
+                        border: "1px solid #e5e7eb",
+                        borderRadius: 12,
+                        padding: 10,
+                        display: "grid",
+                        gridTemplateColumns: "1fr auto",
+                        gap: 10,
+                        alignItems: "center",
+                      }}
+                    >
+                      <div style={{ display: "grid", gap: 2 }}>
+                        <div style={{ fontWeight: 900, fontSize: 13 }}>
+                          {ev.time ? <span style={{ fontFamily: "Consolas, monospace" }}>{ev.time} </span> : null}
+                          {ev.title}
+                        </div>
+                        <div style={{ fontSize: 11, color: "#94a3b8" }}>id: {ev.id}</div>
+                      </div>
+                      <button
+                        type="button"
+                        onClick={() => deleteEvent(ev.id)}
+                        style={{
+                          padding: "10px 12px",
+                          borderRadius: 12,
+                          border: "1px solid #fecaca",
+                          background: "#fff",
+                          cursor: "pointer",
+                          fontSize: 12,
+                          color: "#ef4444",
+                          fontWeight: 900,
+                          whiteSpace: "nowrap",
+                        }}
+                      >
+                        삭제
+                      </button>
+                    </div>
+                  ))
+                )}
+              </div>
+
+              <div style={{ marginTop: 10, fontSize: 12, color: "#94a3b8", lineHeight: 1.6 }}>
+                - 저장 위치: <b>localStorage</b> ({SCHEDULE_KEY})
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      {/* ✅ EPMS Export: 기간 조회/목록/선택 다운로드 */}
+      <div style={{ border: "1px solid #e5e7eb", borderRadius: 12, padding: 12, background: "#fff" }}>
+        <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 10, flexWrap: "wrap" }}>
+          <h3 style={{ margin: 0 }}>EPMS Export</h3>
+
+          <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
+            <input type="date" value={fromYmd} onChange={(e) => setFromYmd(e.target.value)} style={{ ...inputStyle, width: 170 }} />
+            <span style={{ fontSize: 12, color: "#94a3b8" }}>~</span>
+            <input type="date" value={toYmd} onChange={(e) => setToYmd(e.target.value)} style={{ ...inputStyle, width: 170 }} />
+
+            <button
+              type="button"
+              style={{ ...primaryBtn, padding: "10px 12px" }}
+              onClick={() => {
+                const t = ymdKST(new Date());
+                setFromYmd(t);
+                setToYmd(t);
+              }}
+            >
+              오늘
+            </button>
+
+            <button type="button" style={{ ...primaryBtn, padding: "10px 12px" }} onClick={fetchJobsForRange} disabled={loadingList}>
+              {loadingList ? "조회중..." : "조회"}
+            </button>
+
+            <button
+              type="button"
+              style={{ ...primaryBtn, padding: "10px 12px", opacity: selectedCount === 0 ? 0.5 : 1 }}
+              onClick={downloadSelected}
+              disabled={selectedCount === 0}
+              title={selectedCount === 0 ? "작업을 선택해줘" : "선택한 작업만 다운로드"}
+            >
+              선택 다운로드 ({selectedCount})
+            </button>
+          </div>
         </div>
 
-        <div style={{ marginTop: 8, fontSize: 12, color: "#94a3b8" }}>
-          ※ API는 코드/로컬스토리지(wms.apiBase)로만 관리되고 화면에는 표시되지 않습니다.
+        {/* 조회 결과 목록 */}
+        <div style={{ marginTop: 12, display: "grid", gridTemplateColumns: "1.1fr 0.9fr", gap: 12 }}>
+          <div style={{ border: "1px solid #e5e7eb", borderRadius: 12, overflow: "hidden" }}>
+            <div
+              style={{
+                display: "flex",
+                alignItems: "center",
+                justifyContent: "space-between",
+                gap: 10,
+                padding: 10,
+                borderBottom: "1px solid #e5e7eb",
+                background: "#f8fafc",
+              }}
+            >
+              <div style={{ fontWeight: 900 }}>작업 목록 {jobs.length > 0 ? `(${jobs.length})` : ""}</div>
+              <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+                <button type="button" style={{ ...primaryBtn, padding: "8px 10px" }} onClick={selectAll} disabled={jobs.length === 0}>
+                  전체선택
+                </button>
+                <button type="button" style={{ ...primaryBtn, padding: "8px 10px" }} onClick={clearSelection} disabled={selectedIds.size === 0}>
+                  선택해제
+                </button>
+              </div>
+            </div>
+
+            {jobs.length === 0 ? (
+              <div style={{ padding: 12, fontSize: 12, color: "#94a3b8" }}>조회 버튼을 눌러서 목록을 불러와줘</div>
+            ) : (
+              <div style={{ maxHeight: 360, overflow: "auto" }}>
+                {(jobs || []).map((j) => {
+                  const id = j?.id;
+                  const storeCode = String(j?.storeCode || j?.store_code || "-");
+                  const items = j?.items || j?.jobItems || j?.job_items || [];
+                  const pickedSum = sumPicked(items);
+                  const plannedSum = sumPlanned(items);
+
+                  const checked = selectedIds.has(id);
+                  const isActive = activeJobId === id;
+
+                  const exportDate = String(j?._exportDate || "");
+
+                  return (
+                    <div
+                      key={id}
+                      style={{
+                        display: "grid",
+                        gridTemplateColumns: "auto 1fr auto",
+                        gap: 10,
+                        padding: 10,
+                        borderBottom: "1px solid #e5e7eb",
+                        cursor: "pointer",
+                        background: isActive ? "#eef2ff" : "#fff",
+                        alignItems: "center",
+                      }}
+                      onClick={() => setActiveJobId(id)}
+                      title="클릭하면 상세"
+                    >
+                      <input
+                        type="checkbox"
+                        checked={checked}
+                        onChange={() => toggleSelectJob(id)}
+                        onClick={(e) => e.stopPropagation()}
+                      />
+
+                      <div style={{ display: "grid", gap: 2 }}>
+                        <div style={{ fontWeight: 900 }}>
+                          {storeCode}{" "}
+                          <span style={{ fontSize: 12, color: "#94a3b8", fontWeight: 700 }}>
+                            ({shortId(id)})
+                          </span>
+                        </div>
+                        <div style={{ fontSize: 12, color: "#64748b" }}>
+                          {exportDate ? `${exportDate} · ` : ""}items: {items.length} · picked {pickedSum} / planned {plannedSum}
+                        </div>
+                      </div>
+
+                      <div style={{ fontSize: 12, color: "#94a3b8", fontWeight: 900, whiteSpace: "nowrap" }}>
+                        {checked ? "선택됨" : ""}
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            )}
+          </div>
+
+          {/* 상세 */}
+          <div style={{ border: "1px solid #e5e7eb", borderRadius: 12, overflow: "hidden" }}>
+            <div style={{ padding: 10, borderBottom: "1px solid #e5e7eb", background: "#f8fafc", fontWeight: 900 }}>
+              상세
+            </div>
+
+            {!activeJob ? (
+              <div style={{ padding: 12, fontSize: 12, color: "#94a3b8" }}>왼쪽 목록에서 작업을 클릭해줘</div>
+            ) : (
+              <div style={{ padding: 12 }}>
+                <div style={{ fontWeight: 900, marginBottom: 6 }}>
+                  {String(activeJob?.storeCode || activeJob?.store_code || "-")} ({shortId(activeJob?.id)})
+                </div>
+
+                {activeJob?._exportDate ? (
+                  <div style={{ fontSize: 12, color: "#94a3b8", marginBottom: 6 }}>
+                    exportDate: {String(activeJob._exportDate)}
+                  </div>
+                ) : null}
+
+                <div style={{ fontSize: 12, color: "#64748b", marginBottom: 10 }}>
+                  items: {(activeJob?.items || []).length} · picked {sumPicked(activeJob?.items || [])} / planned {sumPlanned(activeJob?.items || [])}
+                </div>
+
+                <div style={{ maxHeight: 320, overflow: "auto", display: "grid", gap: 8 }}>
+                  {(activeJob?.items || []).length === 0 ? (
+                    <div style={{ fontSize: 12, color: "#94a3b8" }}>아이템이 없어</div>
+                  ) : (
+                    (activeJob?.items || []).map((it, idx) => {
+                      const maker =
+                        it?.makerCodeSnapshot ||
+                        it?.makerCode ||
+                        it?.maker_code ||
+                        it?.sku?.makerCode ||
+                        it?.sku?.maker_code ||
+                        "-";
+
+                      const name =
+                        it?.nameSnapshot ||
+                        it?.name ||
+                        it?.sku?.name ||
+                        "-";
+
+                      const qtyP = Number(it?.qtyPicked ?? it?.qty_picked ?? 0);
+                      const qtyPl = Number(it?.qtyPlanned ?? it?.qty_planned ?? it?.qty ?? 0);
+
+                      return (
+                        <div
+                          key={it?.id || `${idx}`}
+                          style={{
+                            border: "1px solid #e5e7eb",
+                            borderRadius: 12,
+                            padding: 10,
+                            display: "grid",
+                            gap: 4,
+                          }}
+                        >
+                          <div style={{ fontWeight: 900, fontSize: 13 }}>
+                            {maker} · {name}
+                          </div>
+                          <div style={{ fontSize: 12, color: "#64748b" }}>
+                            picked {qtyP} / planned {qtyPl}
+                          </div>
+                        </div>
+                      );
+                    })
+                  )}
+                </div>
+              </div>
+            )}
+          </div>
         </div>
       </div>
     </div>
@@ -100,62 +731,64 @@ export default function DashboardPage() {
 
 /**
  * ✅ 헤더 포함 EPMS_OUT CSV 생성
- * - 합산/그룹핑 금지: 아이템 1개 = CSV 1줄
  * - qtyPicked(실제 출고)만 사용 (0이면 제외)
+ * - 기간 조회 시: 각 job의 _exportDate를 출고일자(B)로 사용 (fallback: workDateYmd)
  */
 function buildEpmsOutCsvWithHeader({ jobs, type = 1, workDateYmd }) {
-  const dateStr = String(workDateYmd || "").replaceAll("-", ""); // YYYYMMDD
+  const fallbackDateStr = String(workDateYmd || "").replaceAll("-", ""); // YYYYMMDD
 
-  // ✅ 1번: 설명형 헤더 고정
   const header = [
     "출고구분(1:출고,2:반품)", // A
-    "출고일자(YYYYMMDD)",     // B
-    "창고코드(고정:00)",       // C
-    "매장코드",               // D
-    "행사코드(고정:00)",       // E
-    "MAKER코드",              // F
-    "수량(qtyPicked)",        // G
-    "전표비고",                        // H
-    "출고의뢰전표번호",                        // I
-    "가격",                        // J
+    "출고일자(YYYYMMDD)", // B
+    "창고코드(고정:00)", // C
+    "매장코드", // D
+    "행사코드(고정:00)", // E
+    "MAKER코드", // F
+    "수량(qtyPicked)", // G
+    "전표비고", // H
+    "출고의뢰전표번호", // I
+    "가격", // J
   ];
 
   const rows = [header];
 
-  for (const job of jobs) {
-    const storeCode = String(job.storeCode || job.store_code || "").trim();
-    const items = job.items || job.jobItems || job.job_items || [];
+  for (const job of jobs || []) {
+    const storeCode = String(job?.storeCode || job?.store_code || "").trim();
+    const items = job?.items || job?.jobItems || job?.job_items || [];
+
+    // ✅ 행별 날짜: job._exportDate 우선
+    const jobDateStr = job?._exportDate
+      ? String(job._exportDate).replaceAll("-", "")
+      : fallbackDateStr;
 
     for (const it of items) {
       const maker = String(
-        it.makerCodeSnapshot ||
-          it.makerCode ||
-          it.maker_code ||
-          it.sku?.makerCode ||
-          it.sku?.maker_code ||
+        it?.makerCodeSnapshot ||
+          it?.makerCode ||
+          it?.maker_code ||
+          it?.sku?.makerCode ||
+          it?.sku?.maker_code ||
           ""
       ).trim();
 
-      const qtyPicked = Number(it.qtyPicked ?? it.qty_picked ?? 0);
-
+      const qtyPicked = Number(it?.qtyPicked ?? it?.qty_picked ?? 0);
       if (!storeCode || !maker || !Number.isFinite(qtyPicked) || qtyPicked <= 0) continue;
 
       rows.push([
-        String(type),       // A
-        dateStr,            // B
-        "00",               // C
-        storeCode,          // D
-        "00",               // E
-        maker,              // F
-        String(qtyPicked),  // G
-        "",                 // H
-        "",                 // I
-        "",                 // J
+        String(type), // A
+        jobDateStr, // B
+        "00", // C
+        storeCode, // D
+        "00", // E
+        maker, // F
+        String(qtyPicked), // G
+        "", // H
+        "", // I
+        "", // J
       ]);
     }
   }
 
-  // BOM 포함 (엑셀/한글 호환)
   const csv = rows
     .map((cols) =>
       cols
@@ -168,6 +801,7 @@ function buildEpmsOutCsvWithHeader({ jobs, type = 1, workDateYmd }) {
     )
     .join("\n");
 
+  // BOM 포함 (엑셀 호환)
   return "\uFEFF" + csv;
 }
 
@@ -197,4 +831,84 @@ function downloadTextFile(filename, text, mime) {
   a.click();
   a.remove();
   URL.revokeObjectURL(href);
+}
+
+function sumPicked(items) {
+  let s = 0;
+  for (const it of items || []) s += Number(it?.qtyPicked ?? it?.qty_picked ?? 0) || 0;
+  return s;
+}
+function sumPlanned(items) {
+  let s = 0;
+  for (const it of items || []) s += Number(it?.qtyPlanned ?? it?.qty_planned ?? it?.qty ?? 0) || 0;
+  return s;
+}
+
+function shortId(id) {
+  const s = String(id || "");
+  return s.length <= 8 ? s : s.slice(0, 8);
+}
+
+/** ---------------- calendar helpers ---------------- */
+function buildMonthGrid(anchor) {
+  const y = anchor.getFullYear();
+  const m = anchor.getMonth();
+
+  const first = new Date(y, m, 1);
+  const startDow = first.getDay();
+  const startDate = new Date(y, m, 1 - startDow);
+
+  const cells = [];
+  for (let i = 0; i < 42; i++) {
+    const d = new Date(startDate);
+    d.setDate(startDate.getDate() + i);
+    const inMonth = d.getMonth() === m;
+    const ymd = ymdLocal(d);
+    cells.push({
+      key: `${ymd}_${i}`,
+      ymd,
+      day: d.getDate(),
+      inMonth,
+    });
+  }
+
+  return { label: `${y}-${String(m + 1).padStart(2, "0")}`, days: cells };
+}
+
+function ymdLocal(date) {
+  const y = date.getFullYear();
+  const m = String(date.getMonth() + 1).padStart(2, "0");
+  const d = String(date.getDate()).padStart(2, "0");
+  return `${y}-${m}-${d}`;
+}
+
+function yyyymmddToYmd(n) {
+  const s = String(n || "");
+  if (!/^\d{8}$/.test(s)) return "";
+  return `${s.slice(0, 4)}-${s.slice(4, 6)}-${s.slice(6, 8)}`;
+}
+
+function dateDiffDaysInclusive(a, b) {
+  const ms = b.getTime() - a.getTime();
+  const days = Math.floor(ms / 86400000);
+  return days + 1;
+}
+
+function safeReadJson(key, fallback) {
+  try {
+    const raw = localStorage.getItem(key);
+    if (!raw) return fallback;
+    const v = JSON.parse(raw);
+    return v ?? fallback;
+  } catch {
+    return fallback;
+  }
+}
+
+function safeWriteJson(key, value) {
+  try {
+    localStorage.setItem(key, JSON.stringify(value ?? null));
+  } catch {
+    // ignore
+  }
 }

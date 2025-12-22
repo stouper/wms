@@ -1,0 +1,59 @@
+﻿폴더 PATH의 목록입니다.
+볼륨 일련 번호는 3684-C500입니다.
+C:.
+│  app.module.ts
+│  file.txt
+│  main.ts
+│  
+├─modules
+│  ├─auth
+│  ├─carriers
+│  │  │  carrier.interface.ts
+│  │  │  carriers.controller.ts
+│  │  │  carriers.module.ts
+│  │  │  carriers.service.ts
+│  │  │  
+│  │  └─adapters
+│  │          carrier.dummy.ts
+│  │          
+│  ├─exports
+│  │      exports.controller.ts
+│  │      exports.module.ts
+│  │      exports.service.ts
+│  │      
+│  ├─health
+│  │      health.controller.ts
+│  │      health.module.ts
+│  │      
+│  ├─imports
+│  │      header-map.ts
+│  │      hq-inventory.service.ts
+│  │      imports.controller.ts
+│  │      imports.module.ts
+│  │      imports.service.ts
+│  │      
+│  ├─inventory
+│  │  │  inventory.controller.ts
+│  │  │  inventory.module.ts
+│  │  │  inventory.service.ts
+│  │  │  
+│  │  └─dto
+│  │          inventory-out.dto.ts
+│  │          
+│  ├─jobs
+│  │  │  jobs.controller.ts
+│  │  │  jobs.module.ts
+│  │  │  jobs.service.ts
+│  │  │  
+│  │  └─dto
+│  │          add-items.dto.ts
+│  │          create-job.dto.ts
+│  │          scan.dto.ts
+│  │          upsert-parcel.dto.ts
+│  │          
+│  ├─orders
+│  └─shipments
+└─prisma
+        prisma.module.ts
+        prisma.service.ts
+        
