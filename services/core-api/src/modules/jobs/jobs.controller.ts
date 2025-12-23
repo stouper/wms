@@ -64,6 +64,12 @@ export class JobsController {
     return this.jobs.scan(id, dto);
   }
 
+   // ✅ 반품입고용: Job 진행률만 반영 (재고 X)
+  @Post(':id/receive')
+  receive(@Param('id') id: string, @Body() dto: ScanDto) {
+    return this.jobs.receive(id, dto);
+  }
+
   @Post(':id/done')
   done(@Param('id') id: string) {
     return this.jobs.markDone(id);

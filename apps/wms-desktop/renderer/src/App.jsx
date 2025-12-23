@@ -16,7 +16,8 @@ const MENUS = [
 ];
 
 function WarehouseInboundPage() {
-  return <EmptyPage title="창고 입고" subtitle="입고는 다음 단계(OUT 안정화 후)로 붙일게." />;
+  // ✅ 창고 입고(반품): 동일 Workbench 재사용
+  return <JobsExcelWorkbench pageKey="whInbound" pageTitle="창고 입고(반품)" defaultStoreCode="" />;
 }
 function WarehouseOutboundPage() {
   return <EmptyPage title="창고 출고" />;
@@ -56,12 +57,7 @@ export default function App() {
         <div style={{ fontWeight: 800, marginBottom: 12 }}>ESKA WMS Desktop</div>
         <nav>
           {MENUS.map((m) => (
-            <button
-              key={m.key}
-              onClick={() => setActiveKey(m.key)}
-              style={navBtnStyle(activeKey === m.key)}
-              type="button"
-            >
+            <button key={m.key} onClick={() => setActiveKey(m.key)} style={navBtnStyle(activeKey === m.key)} type="button">
               {m.label}
             </button>
           ))}

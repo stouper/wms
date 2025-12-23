@@ -41,9 +41,9 @@ export class HqInventoryService {
       }
 
       await this.inventory.setQuantity({
-        sku,
-        quantity: Number(r?.qty ?? 0),
-        location,
+        skuCode: sku,
+        qty: Number(r?.qty ?? 0),
+        locationCode: location,
         makerCode: r?.makerCode ?? null,
         name: r?.name ?? null,
       });

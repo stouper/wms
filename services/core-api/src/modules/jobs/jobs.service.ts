@@ -426,5 +426,57 @@ export class JobsService {
     return { ok: true, id: jobId };
   }
 
+// ✅ 반품입고용: 재고는 건드리지 않고 Job 진행률만 올림
+  async receive(jobId: string, dto: { value: string; qty?: number }) {
+    const job: any = await this.prisma.job.findUnique({
+      where: { id: jobId } as any,
+      include: { items: true } as any,
+    } as any);
+    if (!job) throw new NotFoundException(`Job not found: ${jobId}`);
 
+    const qtyReq = Math.floor(Number(dto.qty ?? 1));
+    if (!Number.isFinite(qtyReq) || qtyReq <= 0) throw new BadRequestException('qty must be >= 1');
+
+    const sku = await this.resolveSkuByValue(dto.value);
+
+    // 남은 수량이 있는 아이템 찾기
+    const item = (job.items as any[]).find(
+      (x) => x.skuId === sku.id && (x.qtyPicked ?? 0) < x.qtyPlanned,
+    );
+    if (!item) throw new BadRequestException('This SKU is not in job, or already completed');
+
+    const remaining = (item.qtyPlanned ?? 0) - (item.qtyPicked ?? 0);
+    const applyQty = Math.min(qtyReq, remaining);
+    if (applyQty <= 0) throw new BadRequestException('Already completed');
+
+    const result = await this.prisma.$transaction(async (tx) => {
+      const updatedItem = await tx.jobItem.update({
+        where: { id: item.id } as any,
+        data: { qtyPicked: { increment: applyQty } } as any,
+      } as any);
+
+      const items = await tx.jobItem.findMany({ where: { jobId } as any } as any);
+      const done = items.every((x: any) => (x.qtyPicked ?? 0) >= x.qtyPlanned);
+
+      if (done) {
+        await tx.job.update({
+          where: { id: jobId } as any,
+          data: { status: 'done', doneAt: new Date() } as any,
+        } as any);
+      }
+
+      return { updatedItem, done };
+    });
+
+    return {
+      ok: true,
+      sku,
+      picked: result.updatedItem,
+      jobDone: result.done,
+      appliedQty: applyQty,
+    };
+  }
 }
+
+  
+

@@ -1,20 +1,17 @@
-import { IsInt, IsOptional, IsString, Min } from 'class-validator';
+import { IsInt, IsNotEmpty, IsString, Min } from 'class-validator';
+import { Type } from 'class-transformer';
 
 export class InventoryOutDto {
-  @IsOptional()
   @IsString()
-  skuCode?: string; // 사람이 치는 코드
+  @IsNotEmpty()
+  skuCode!: string;
 
-  @IsOptional()
-  @IsString()
-  makerCode?: string; // 스캐너 바코드
-
-  @IsOptional()
-  @IsString()
-  locationCode?: string; // 있으면 그 위치 우선, 부족하면 자동 폴백
-
-  @IsOptional()
+  @Type(() => Number)
   @IsInt()
   @Min(1)
-  qty?: number;
+  qty!: number;
+
+  @IsString()
+  @IsNotEmpty()
+  locationCode!: string;
 }

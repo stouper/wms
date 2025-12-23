@@ -6,28 +6,30 @@ import { parseJobFileToRows } from "../lib/parseJobFile";
 import { inputStyle, primaryBtn } from "../ui/styles";
 import { Th, Td } from "../components/TableParts";
 
+const DEFAULT_RETURN_LOCATION = "RET-01";
+
 export default function JobsExcelWorkbench({ pageTitle, defaultStoreCode = "", pageKey }) {
   const { push, ToastHost } = useToasts();
   const apiBase = getApiBase();
 
   const [loading, setLoading] = useState(false);
-  const [preview, setPreview] = useState(null); // {kind, rows, sample, fileName}
+  const [preview, setPreview] = useState(null); // {fileType, jobKind, mixedKinds, rows, sample, fileName}
 
   const createdKey = `wms.jobs.created.${pageKey}`;
   const selectedKey = `wms.jobs.selected.${pageKey}`;
 
-  // created: [{storeCode, jobId, lines}]
   const [created, setCreated] = useState(() => safeReadJson(createdKey, []));
   const [selectedJobId, setSelectedJobId] = useState(() => safeReadLocal(selectedKey) || "");
   const [job, setJob] = useState(null);
 
-  // ✅ 완료/진행중 표시를 위해 job summary 캐시
-  // jobMeta[jobId] = { done: boolean, doneText: string, picked: number, planned: number }
-  const [jobMeta, setJobMeta] = useState({});
+  const [jobMeta, setJobMeta] = useState({}); // jobMeta[jobId] = { done, planned, picked }
 
   const [scanValue, setScanValue] = useState("");
   const [scanQty, setScanQty] = useState(1);
-  const [scanLoc, setScanLoc] = useState("");
+
+  // ✅ 반품입고(whInbound)는 기본 로케이션 RET-01 자동 세팅
+  const [scanLoc, setScanLoc] = useState(() => (pageKey === "whInbound" ? DEFAULT_RETURN_LOCATION : ""));
+
   const scanRef = useRef(null);
   const fileRef = useRef(null);
 
@@ -35,6 +37,13 @@ export default function JobsExcelWorkbench({ pageTitle, defaultStoreCode = "", p
 
   useEffect(() => safeWriteJson(createdKey, created), [createdKey, created]);
   useEffect(() => safeWriteLocal(selectedKey, selectedJobId || ""), [selectedKey, selectedJobId]);
+
+  // pageKey가 바뀌면 loc 기본값도 같이 반영
+  useEffect(() => {
+    if (pageKey === "whInbound") setScanLoc((prev) => prev || DEFAULT_RETURN_LOCATION);
+    else setScanLoc("");
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [pageKey]);
 
   // ---------- file upload ----------
   async function onPickFile(file) {
@@ -48,13 +57,36 @@ export default function JobsExcelWorkbench({ pageTitle, defaultStoreCode = "", p
       const buf = await file.arrayBuffer();
       if (!buf || buf.byteLength === 0) throw new Error("파일을 읽지 못했어(0 bytes).");
 
-      // ✅ 첫 파싱 미끄럼 방지: 실패하면 1번만 재시도
       let parsed;
       try {
         parsed = parseJobFileToRows(buf, file.name);
       } catch {
         await wait(80);
         parsed = parseJobFileToRows(buf, file.name);
+      }
+
+      const jobKind = parsed?.jobKind || null; // '출고' | '반품' | null
+      const mixedKinds = Boolean(parsed?.mixedKinds);
+
+      if (mixedKinds) {
+        throw new Error("출고/반품이 섞인 파일입니다. EPMS 파일을 확인해주세요.");
+      }
+
+      // 안전 모드: 구분이 없으면 경고(원하면 여기서 throw로 바꿔도 됨)
+      if (!jobKind) {
+        push({
+          kind: "warn",
+          title: "구분(D열) 없음",
+          message: "출고/반품 구분이 감지되지 않았어. (EPMS 파일 D열 확인 권장)",
+        });
+      }
+
+      // ✅ 화면별 업로드 제한
+      if (pageKey === "storeShip" && jobKind === "반품") {
+        throw new Error("반품작지는 [창고 입고] 메뉴에서 업로드하세요.");
+      }
+      if (pageKey === "whInbound" && jobKind === "출고") {
+        throw new Error("출고작지는 [매장 출고] 메뉴에서 업로드하세요.");
       }
 
       setPreview({ ...parsed, fileName: file.name });
@@ -72,7 +104,7 @@ export default function JobsExcelWorkbench({ pageTitle, defaultStoreCode = "", p
   // ---------- grouping ----------
   const grouped = useMemo(() => {
     const rows = preview?.rows || [];
-    const map = new Map(); // storeCode => lines[]
+    const map = new Map();
     for (const r of rows) {
       const storeCode = (r.storeCode || defaultStoreCode || "").trim();
       if (!storeCode) continue;
@@ -103,16 +135,13 @@ export default function JobsExcelWorkbench({ pageTitle, defaultStoreCode = "", p
         newCreated.push({ storeCode: g.storeCode, jobId, lines: g.lines.length });
         push({ kind: "success", title: "작지 생성", message: `${g.storeCode} → ${jobId} (${g.lines.length}줄)` });
 
-        // ✅ 생성 직후 meta 한번 로드해서 상태 배지 바로 표시
         loadJobMeta(jobId).catch(() => {});
       }
 
       setCreated((prev) => [...newCreated, ...prev]);
 
       const first = newCreated?.[0]?.jobId;
-      if (first) {
-        selectJob(first);
-      }
+      if (first) selectJob(first);
     } catch (e) {
       push({ kind: "error", title: "작지 생성 실패", message: e?.message || String(e) });
     } finally {
@@ -171,17 +200,13 @@ export default function JobsExcelWorkbench({ pageTitle, defaultStoreCode = "", p
     try {
       const data = await tryJsonFetch(`${apiBase}/jobs/${jobId}`);
       setJob(data);
-
-      // ✅ meta 동기화
-      const meta = calcJobMeta(data);
-      setJobMeta((prev) => ({ ...prev, [jobId]: meta }));
+      setJobMeta((prev) => ({ ...prev, [jobId]: calcJobMeta(data) }));
     } catch (e) {
       push({ kind: "error", title: "Job 조회 실패", message: e?.message || String(e) });
       setJob(null);
     }
   }
 
-  // useEffect도 유지(이중 안전)
   useEffect(() => {
     if (!selectedJobId) {
       setJob(null);
@@ -191,18 +216,15 @@ export default function JobsExcelWorkbench({ pageTitle, defaultStoreCode = "", p
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [selectedJobId, apiBase]);
 
-  // ---------- meta loader for cards ----------
   async function loadJobMeta(jobId) {
     try {
       const data = await tryJsonFetch(`${apiBase}/jobs/${jobId}`);
-      const meta = calcJobMeta(data);
-      setJobMeta((prev) => ({ ...prev, [jobId]: meta }));
+      setJobMeta((prev) => ({ ...prev, [jobId]: calcJobMeta(data) }));
     } catch {
-      // meta는 조용히 실패해도 됨
+      // ignore
     }
   }
 
-  // created가 바뀌면 meta를 미리 당겨와서 완료/진행중 표시
   useEffect(() => {
     const ids = created.map((c) => c.jobId).filter(Boolean);
     ids.slice(0, 12).forEach((id) => {
@@ -217,33 +239,72 @@ export default function JobsExcelWorkbench({ pageTitle, defaultStoreCode = "", p
       push({ kind: "warn", title: "Job 선택", message: "먼저 Job을 선택해줘" });
       return;
     }
+
     const val = scanValue.trim();
     if (!val) return;
 
     const qty = Number(scanQty || 1);
-    const body = {
-      value: val,
-      qty: Number.isFinite(qty) && qty > 0 ? qty : 1,
-      locationCode: (scanLoc || "").trim() || undefined,
-      location: (scanLoc || "").trim() || undefined,
-    };
+    const safeQty = Number.isFinite(qty) && qty > 0 ? qty : 1;
+
+    // ✅ 로케이션은 whInbound에서 필수 (서버 검증도 걸려있음)
+    const loc = (scanLoc || "").trim();
+    if (pageKey === "whInbound" && !loc) {
+      push({ kind: "error", title: "로케이션 필요", message: `반품입고는 locationCode가 필수야. (예: ${DEFAULT_RETURN_LOCATION})` });
+      return;
+    }
 
     try {
       setLoading(true);
+
+            if (pageKey === "whInbound") {
+        const body = {
+          makerCode: val,
+          qty: safeQty,
+          locationCode: loc || DEFAULT_RETURN_LOCATION,
+        };
+
+        await postJson(`${apiBase}/inventory/in`, body);
+
+        // ✅ 이거 추가!
+        await postJson(`${apiBase}/jobs/${selectedJobId}/receive`, {
+          value: val,
+          qty: safeQty,
+        });
+
+        push({
+          kind: "success",
+          title: "입고 처리",
+          message: `${val} +${safeQty} @${body.locationCode}`,
+        });
+
+        setScanValue("");
+        scanRef.current?.focus?.();
+        await loadJob(selectedJobId);
+        return;
+      }
+
+
+      // ✅ 매장출고: 기존 pick/scan 엔드포인트 유지
+      const body = {
+        value: val,
+        qty: safeQty,
+        locationCode: loc || undefined,
+        location: loc || undefined,
+      };
 
       const paths = [
         `${apiBase}/jobs/${selectedJobId}/scan`,
         `${apiBase}/jobs/${selectedJobId}/pick`,
         `${apiBase}/jobs/${selectedJobId}/items/scan`,
       ];
+
       await tryPostJson(paths, body);
 
       setScanValue("");
       scanRef.current?.focus?.();
-
       await loadJob(selectedJobId);
     } catch (e) {
-      push({ kind: "error", title: "스캔 실패", message: e?.message || String(e) });
+      push({ kind: "error", title: "처리 실패", message: e?.message || String(e) });
     } finally {
       setLoading(false);
     }
@@ -280,15 +341,26 @@ export default function JobsExcelWorkbench({ pageTitle, defaultStoreCode = "", p
 
       <div style={{ fontSize: 12, color: "#64748b" }}>
         업로드 파일: <b>{preview?.fileName || "-"}</b>
+        {pageKey === "whInbound" ? (
+          <>
+            {" "}
+            / 반품입고 기본 로케이션: <b>{(scanLoc || DEFAULT_RETURN_LOCATION).trim()}</b>
+          </>
+        ) : null}
       </div>
 
-      {/* preview */}
       {preview ? (
         <div style={{ border: "1px solid #e5e7eb", borderRadius: 12, padding: 12, background: "#fff" }}>
           <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 12, flexWrap: "wrap" }}>
             <div style={{ fontWeight: 900 }}>미리보기</div>
             <div style={{ fontSize: 12, color: "#94a3b8" }}>
               rows: <b>{preview.rows.length}</b> / storeCode groups: <b>{grouped.length}</b>
+              {preview.jobKind ? (
+                <>
+                  {" "}
+                  / 구분: <b>{preview.jobKind}</b>
+                </>
+              ) : null}
             </div>
           </div>
 
@@ -306,7 +378,9 @@ export default function JobsExcelWorkbench({ pageTitle, defaultStoreCode = "", p
                 {(preview.sample || []).map((r, idx) => (
                   <tr key={idx}>
                     <Td style={{ fontFamily: "Consolas, monospace" }}>{r.storeCode || defaultStoreCode || "-"}</Td>
-                    <Td style={{ fontFamily: "Consolas, monospace" }}>{(r.skuCode || "").toUpperCase?.() || r.skuCode || "-"}</Td>
+                    <Td style={{ fontFamily: "Consolas, monospace" }}>
+                      {(r.skuCode || "").toUpperCase?.() || r.skuCode || "-"}
+                    </Td>
                     <Td style={{ fontFamily: "Consolas, monospace" }}>{r.makerCode || "-"}</Td>
                     <Td>{r.qty}</Td>
                   </tr>
@@ -353,7 +427,6 @@ export default function JobsExcelWorkbench({ pageTitle, defaultStoreCode = "", p
                   minWidth: 320,
                 }}
               >
-                {/* ✅ 카드 내부: 클릭 영역 */}
                 <div
                   role="button"
                   tabIndex={0}
@@ -365,7 +438,6 @@ export default function JobsExcelWorkbench({ pageTitle, defaultStoreCode = "", p
                   <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
                     <div style={{ fontWeight: 900, fontSize: 16 }}>{c.storeCode}</div>
 
-                    {/* ✅ 완료/진행 배지 */}
                     <span
                       style={{
                         padding: "2px 8px",
@@ -377,7 +449,8 @@ export default function JobsExcelWorkbench({ pageTitle, defaultStoreCode = "", p
                       }}
                       title={meta ? `${meta.picked}/${meta.planned}` : "상태 로딩중"}
                     >
-                      {badge}{meta ? ` (${meta.picked}/${meta.planned})` : ""}
+                      {badge}
+                      {meta ? ` (${meta.picked}/${meta.planned})` : ""}
                     </span>
                   </div>
 
@@ -385,7 +458,6 @@ export default function JobsExcelWorkbench({ pageTitle, defaultStoreCode = "", p
                   <div style={{ color: "#94a3b8", fontSize: 12 }}>lines: {c.lines}</div>
                 </div>
 
-                {/* ✅ 같은 칸: 삭제 버튼 */}
                 <button
                   type="button"
                   onClick={() => deleteJob(c.jobId)}
@@ -426,11 +498,16 @@ export default function JobsExcelWorkbench({ pageTitle, defaultStoreCode = "", p
             value={scanValue}
             onChange={(e) => setScanValue(e.target.value)}
             onKeyDown={(e) => e.key === "Enter" && doScan()}
-            placeholder="바코드/단품코드 스캔 후 Enter"
+            placeholder={pageKey === "whInbound" ? "바코드(makerCode) 스캔 후 Enter" : "바코드/단품코드 스캔 후 Enter"}
             style={{ ...inputStyle, minWidth: 320, fontFamily: "Consolas, monospace" }}
           />
           <input value={scanQty} onChange={(e) => setScanQty(e.target.value)} style={{ ...inputStyle, width: 80 }} placeholder="qty" />
-          <input value={scanLoc} onChange={(e) => setScanLoc(e.target.value)} style={{ ...inputStyle, width: 140 }} placeholder="loc(옵션)" />
+          <input
+            value={scanLoc}
+            onChange={(e) => setScanLoc(e.target.value)}
+            style={{ ...inputStyle, width: 140 }}
+            placeholder={pageKey === "whInbound" ? `loc(필수) 예:${DEFAULT_RETURN_LOCATION}` : "loc(옵션)"}
+          />
           <button type="button" style={primaryBtn} onClick={doScan} disabled={loading}>
             적용
           </button>
@@ -504,7 +581,6 @@ function calcJobMeta(job) {
     picked += Number(it.qtyPicked || 0);
   }
 
-  // ✅ “완료” 정의: 전체 아이템이 picked >= planned (planned 0인 줄은 완료판정에서 제외)
   const done =
     items.length > 0 &&
     items.every((it) => {
@@ -528,7 +604,7 @@ async function createOneJob(apiBase, storeCode, title) {
     try {
       const data = await postJson(c.url, c.body);
       const id = data?.id || data?.jobId || data?.job?.id;
-      if (!id) throw new Error(`서버 응답에 job id 없음: ${safeStringify(data)}`);
+      if (!id) throw new Error(`서버 응답에 job id 없음`);
       return id;
     } catch (e) {
       lastErr = e;
@@ -631,14 +707,6 @@ async function tryPostJson(urls, body) {
     }
   }
   throw lastErr || new Error("요청 실패");
-}
-
-function safeStringify(v) {
-  try {
-    return JSON.stringify(v);
-  } catch {
-    return String(v);
-  }
 }
 
 function wait(ms) {
