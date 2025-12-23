@@ -14,97 +14,129 @@ model Store {
   locations Location[]
 }
 
-model Sku {
-  id        String  @id @default(cuid())
-  code      String  @unique
-  makerCode String?
-  name      String?
-
-  inventories Inventory[]
-  txs         InventoryTx[]
-  jobItems    JobItem[]
-}
-
 model Location {
   id      String @id @default(cuid())
-  code    String
   storeId String
+  code    String
+  name    String?
 
-  store       Store         @relation(fields: [storeId], references: [id])
-  inventories Inventory[]
-  txs         InventoryTx[]
+  store Store @relation(fields: [storeId], references: [id], onDelete: Cascade)
+
+  inventories  Inventory[]
+  inventoryTxs InventoryTx[]
 
   @@unique([storeId, code], map: "Location_storeId_code_key")
+  @@index([storeId], map: "Location_storeId_idx")
   @@index([code], map: "Location_code_idx")
 }
 
+model Sku {
+  id        String  @id @default(cuid())
+  sku       String  @unique          // ✅ “SKU 코드”는 이 필드
+  makerCode String?
+  name      String?
+
+  inventories  Inventory[]
+  inventoryTxs InventoryTx[]
+  jobItems     JobItem[]
+
+  @@index([makerCode], map: "Sku_makerCode_idx")
+}
+
 model Inventory {
-  id         String @id @default(cuid())
+  id         String   @id @default(cuid())
   skuId      String
   locationId String
-  qty        Int    @default(0)
+  qty        Int      @default(0)
 
-  sku      Sku      @relation(fields: [skuId], references: [id])
-  location Location @relation(fields: [locationId], references: [id])
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  sku      Sku      @relation(fields: [skuId], references: [id], onDelete: Cascade)
+  location Location @relation(fields: [locationId], references: [id], onDelete: Cascade)
 
   @@unique([skuId, locationId], map: "Inventory_skuId_locationId_key")
+  @@index([skuId], map: "Inventory_skuId_idx")
+  @@index([locationId], map: "Inventory_locationId_idx")
 }
 
 model InventoryTx {
   id         String   @id @default(cuid())
-  skuId      String
-  locationId String
+  type       String   // 'in' | 'out' | 'move' | 'adjust' 등
   qty        Int
-  type       String
-  createdAt  DateTime @default(now())
+  skuId      String
+  locationId String?
 
-  sku      Sku      @relation(fields: [skuId], references: [id])
-  location Location @relation(fields: [locationId], references: [id])
+  // ✅ 강제출고(0유지)용 로그
+  isForced     Boolean @default(false)
+  forcedReason String?
+  beforeQty    Int?
+  afterQty     Int?
 
+  // ✅ 추적용(있으면 진짜 편함)
+  jobId     String?
+  jobItemId String?
+
+  createdAt DateTime @default(now())
+
+  sku      Sku       @relation(fields: [skuId], references: [id], onDelete: Cascade)
+  location Location? @relation(fields: [locationId], references: [id], onDelete: SetNull)
+
+  job     Job?     @relation(fields: [jobId], references: [id], onDelete: SetNull)
+  jobItem JobItem? @relation(fields: [jobItemId], references: [id], onDelete: SetNull)
+
+  @@index([createdAt], map: "InventoryTx_createdAt_idx")
   @@index([skuId], map: "InventoryTx_skuId_idx")
   @@index([locationId], map: "InventoryTx_locationId_idx")
+  @@index([isForced], map: "InventoryTx_isForced_idx")
+  @@index([jobId], map: "InventoryTx_jobId_idx")
+  @@index([jobItemId], map: "InventoryTx_jobItemId_idx")
 }
 
 model Job {
   id        String   @id @default(cuid())
-  storeCode String   // 4000/4100/2400/5000...
+  storeCode String   // 매장코드(숫자) 그대로 저장
+  allowOverpick Boolean @default(false)
   title     String?
   memo      String?
 
-  // ✅ SQLite enum 대신 문자열로
-  // allowed: 'open' | 'picking' | 'done' | 'cancelled'
+  // 'open' | 'picking' | 'done' | 'cancelled'
   status    String   @default("open")
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
   doneAt    DateTime?
 
-  items     JobItem[]
-  parcel    JobParcel?
+  items  JobItem[]
+  parcel JobParcel?
+  txs    InventoryTx[]
 
-  @@index([storeCode])
-  @@index([status])
-  @@index([doneAt])
+  @@index([storeCode], map: "Job_storeCode_idx")
+  @@index([doneAt], map: "Job_doneAt_idx")
 }
 
 model JobItem {
-  id        String   @id @default(cuid())
-  jobId     String
-  skuId     String
+  id         String   @id @default(cuid())
+  jobId      String
+  skuId      String
 
   qtyPlanned Int
   qtyPicked  Int      @default(0)
 
   makerCodeSnapshot String?
+  nameSnapshot      String?
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
   job Job @relation(fields: [jobId], references: [id], onDelete: Cascade)
-  sku Sku @relation(fields: [skuId], references: [id])
+  sku Sku @relation(fields: [skuId], references: [id], onDelete: Cascade)
 
-  @@index([jobId])
-  @@index([skuId])
+  txs InventoryTx[]
+
+  @@unique([jobId, skuId], map: "JobItem_jobId_skuId_key")
+  @@index([jobId], map: "JobItem_jobId_idx")
+  @@index([skuId], map: "JobItem_skuId_idx")
 }
 
 model JobParcel {

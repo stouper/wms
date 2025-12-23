@@ -1,10 +1,8 @@
-import type { Response } from 'express';
-import { Body, Controller, Delete, Get, Param, Post, Query, BadRequestException, Res } from '@nestjs/common';
+import { Body, Controller, Delete, Get, Param, Patch, Post, Query } from '@nestjs/common';
 import { JobsService } from './jobs.service';
 import { CreateJobDto } from './dto/create-job.dto';
 import { AddItemsDto } from './dto/add-items.dto';
 import { UpsertParcelDto } from './dto/upsert-parcel.dto';
-import { ScanDto } from './dto/scan.dto';
 
 @Controller('jobs')
 export class JobsController {
@@ -17,31 +15,8 @@ export class JobsController {
 
   @Get()
   list(@Query('date') date?: string) {
-    return this.jobs.listJobs({ date });
-  }
-
-
-  @Get('export-xlsx')
-  async exportXlsx(@Query('date') date: string, @Res() res: Response) {
-    if (!date) throw new BadRequestException('date is required (YYYY-MM-DD)');
-    const buf = await this.jobs.exportXlsxByStore({ date });
-
-    res.setHeader(
-      'Content-Type',
-      'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
-    );
-    res.setHeader('Content-Disposition', `attachment; filename="export_${date}.xlsx"`);
-    res.send(buf);
-  }
-
-
-  // ✅ EPMS Export Source (Dashboard CSV용)
-  @Get('export-source')
-  exportSource(@Query('date') date: string) {
-    if (!date || !/^\d{4}-\d{2}-\d{2}$/.test(date)) {
-      throw new BadRequestException('date is required (YYYY-MM-DD)');
-    }
-    return this.jobs.exportSource({ date });
+    // 너희 서비스가 date로 목록 필터하는 형태라 그대로 맞춤
+    return this.jobs.listJobs({ date } as any);
   }
 
   @Get(':id')
@@ -51,23 +26,25 @@ export class JobsController {
 
   @Post(':id/items')
   addItems(@Param('id') id: string, @Body() dto: AddItemsDto) {
-    return this.jobs.addItems(id, dto.items);
+    // ✅ addItems는 배열을 받음
+    return this.jobs.addItems(id, dto.items as any);
+  }
+
+  // ✅ 데스크탑이 호출하는 스캔 엔드포인트
+  @Post(':id/items/scan')
+  scanItem(@Param('id') id: string, @Body() dto: any) {
+    return this.jobs.scan(id, dto);
+  }
+
+  // (혹시 예전 클라이언트가 이 경로를 쓰면 같이 지원)
+  @Post(':id/scan')
+  scanAlias(@Param('id') id: string, @Body() dto: any) {
+    return this.jobs.scan(id, dto);
   }
 
   @Post(':id/parcel')
   upsertParcel(@Param('id') id: string, @Body() dto: UpsertParcelDto) {
-    return this.jobs.upsertParcel(id, dto);
-  }
-
-  @Post(':id/scan')
-  scan(@Param('id') id: string, @Body() dto: ScanDto) {
-    return this.jobs.scan(id, dto);
-  }
-
-   // ✅ 반품입고용: Job 진행률만 반영 (재고 X)
-  @Post(':id/receive')
-  receive(@Param('id') id: string, @Body() dto: ScanDto) {
-    return this.jobs.receive(id, dto);
+    return this.jobs.upsertParcel(id, dto as any);
   }
 
   @Post(':id/done')
@@ -75,9 +52,16 @@ export class JobsController {
     return this.jobs.markDone(id);
   }
 
-  // ✅ 삭제 API
   @Delete(':id')
   delete(@Param('id') id: string) {
     return this.jobs.deleteJob(id);
+  }
+
+  // =========================
+  // ✅ C안: 실재고 우선 토글 (추가된 부분)
+  // =========================
+  @Patch(':id/allow-overpick')
+  setAllowOverpick(@Param('id') id: string, @Body() body: { allowOverpick: boolean }) {
+    return this.jobs.setAllowOverpick(id, Boolean(body?.allowOverpick));
   }
 }

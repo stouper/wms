@@ -304,7 +304,40 @@ export default function JobsExcelWorkbench({ pageTitle, defaultStoreCode = "", p
       scanRef.current?.focus?.();
       await loadJob(selectedJobId);
     } catch (e) {
-      push({ kind: "error", title: "처리 실패", message: e?.message || String(e) });
+      const msg = String(e?.message || e || "");
+      // ✅ RET-01 자동 오버픽: 전산재고 부족(또는 오버픽 locationCode 요구)인 경우
+      // 1) allowOverpick ON
+      // 2) locationCode=RET-01로 /items/scan 재시도
+      if (msg.includes("Insufficient stock") || msg.includes("Overpick enabled. locationCode is required")) {
+        try {
+          const retLoc = DEFAULT_RETURN_LOCATION; // RET-01
+          if (!scanLoc) setScanLoc(retLoc);
+
+          await patchJson(`${apiBase}/jobs/${selectedJobId}/allow-overpick`, { allowOverpick: true });
+
+          await postJson(`${apiBase}/jobs/${selectedJobId}/items/scan`, {
+            value: val,
+            qty: safeQty,
+            locationCode: retLoc,
+          });
+
+          push({
+            kind: "success",
+            title: "RET-01 처리",
+            message: "전산재고 부족 → RET-01(부족 모음)으로 처리했어.",
+          });
+
+          setScanValue("");
+          scanRef.current?.focus?.();
+          await loadJob(selectedJobId);
+          return;
+        } catch (e2) {
+          push({ kind: "error", title: "RET-01 자동 처리 실패", message: e2?.message || String(e2) });
+          return;
+        }
+      }
+
+      push({ kind: "error", title: "처리 실패", message: msg });
     } finally {
       setLoading(false);
     }
@@ -667,6 +700,29 @@ async function tryJsonFetch(url) {
   } catch {
     data = t;
   }
+  if (!r.ok) {
+    const msg = data?.message || data?.error || (typeof data === "string" ? data : r.statusText);
+    throw new Error(`[${r.status}] ${msg}`);
+  }
+  return data;
+}
+
+
+async function patchJson(url, body) {
+  const r = await fetch(url, {
+    method: "PATCH",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(body || {}),
+  });
+
+  const t = await r.text();
+  let data = null;
+  try {
+    data = t ? JSON.parse(t) : null;
+  } catch {
+    data = t;
+  }
+
   if (!r.ok) {
     const msg = data?.message || data?.error || (typeof data === "string" ? data : r.statusText);
     throw new Error(`[${r.status}] ${msg}`);

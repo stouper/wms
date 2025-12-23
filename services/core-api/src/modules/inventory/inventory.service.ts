@@ -16,7 +16,7 @@ export class InventoryService {
   private clampLimit(n: number, min: number, max: number) {
     const x = Number(n);
     if (!Number.isFinite(x)) return min;
-    return Math.max(min, Math.min(max, x));
+    return Math.max(min, Math.min(max, Math.floor(x)));
   }
 
   /* -------------------- Store(HQ) -------------------- */
@@ -33,62 +33,59 @@ export class InventoryService {
   /* -------------------- SKU -------------------- */
 
   private async resolveSku(input: { skuCode?: string | null; makerCode?: string | null; name?: string | null }) {
-    const code = this.normUpper(input.skuCode ?? '');
-    const maker = this.norm(input.makerCode ?? '');
+    const code = this.normUpper(input.skuCode);
+    const makerCode = this.norm(input.makerCode);
+    const name = this.norm(input.name);
 
     // 1) skuCode 우선
     if (code) {
-      const found = await this.prisma.sku.findUnique({ where: { code } });
+      const found = await this.prisma.sku.findUnique({ where: { sku: code } });
       if (found) {
         // 선택: 들어온 makerCode/name이 있으면 보강 업데이트
-        const nextMaker = maker || null;
-        const nextName = this.norm(input.name ?? '') || null;
-
-        if (
-          (nextMaker && (found as any).makerCode !== nextMaker) ||
-          (nextName && (found as any).name !== nextName)
-        ) {
-          await this.prisma.sku.update({
-            where: { id: found.id },
-            data: {
-              ...(nextMaker ? { makerCode: nextMaker } : {}),
-              ...(nextName ? { name: nextName } : {}),
-            } as any,
-          });
+        const data: any = {};
+        if (makerCode && !found.makerCode) data.makerCode = makerCode;
+        if (name && !found.name) data.name = name;
+        if (Object.keys(data).length) {
+          await this.prisma.sku.update({ where: { id: found.id }, data });
         }
         return found;
       }
-
-      // skuCode는 신규 생성 허용 (HQ 대량입고/마스터 보강용)
-      return this.prisma.sku.create({
-        data: {
-          code,
-          makerCode: maker ? maker : null,
-          name: input.name ? this.norm(input.name) : null,
-        } as any,
-      });
     }
 
-    // 2) skuCode가 없으면 makerCode로 조회만 (스캔 반품입고용)
-    if (maker) {
-      const list = await this.prisma.sku.findMany({
-        where: { makerCode: maker },
-        take: 2,
+    // 2) makerCode로 찾기
+    if (makerCode) {
+      const found = await this.prisma.sku.findFirst({
+        where: { makerCode },
+        orderBy: { id: 'desc' } as any,
       });
-      if (list.length === 0) throw new BadRequestException('SKU not found for makerCode');
-      if (list.length > 1) throw new BadRequestException('Duplicate makerCode detected');
-      return list[0];
+      if (found) {
+        // skuCode가 있으면 sku 필드도 보강(중복만 아니면)
+        if (code && found.sku !== code) {
+          // sku는 unique라 충돌나면 그냥 무시
+          try {
+            await this.prisma.sku.update({ where: { id: found.id }, data: { sku: code } as any });
+          } catch {}
+        }
+        if (name && !found.name) {
+          await this.prisma.sku.update({ where: { id: found.id }, data: { name } });
+        }
+        return found;
+      }
     }
 
-    throw new BadRequestException('skuCode or makerCode is required');
+    // 3) 없으면 생성 (skuCode가 없으면 생성 불가)
+    if (!code) throw new BadRequestException('skuCode is required to create sku');
+
+    return this.prisma.sku.create({
+      data: { sku: code, makerCode: makerCode || null, name: name || null } as any,
+    });
   }
 
-  /* -------------------- Location -------------------- */
+  /* -------------------- Location (HQ) -------------------- */
 
-  private async resolveOrCreateLocationByCode(codeRaw: string) {
+  private async resolveOrCreateLocationByCode(codeRaw: any) {
     const code = this.norm(codeRaw);
     if (!code) throw new BadRequestException('locationCode is required');
-
     const hq = await this.getHqStore();
 
     const found = await this.prisma.location.findFirst({
@@ -105,25 +102,63 @@ export class InventoryService {
 
   /* -------------------- OnHand -------------------- */
 
+  // ✅ 전산 재고는 "강제출고(isForced=true)" 트랜잭션을 제외하고 계산
   private async getOnHand(skuId: string, locationId: string) {
     const agg = await this.prisma.inventoryTx.aggregate({
-      where: { skuId, locationId },
+      where: { skuId, locationId, isForced: false },
       _sum: { qty: true },
     });
     return Number(agg._sum.qty ?? 0);
   }
 
   /* =========================================================
-     ✅ (복구) HQ 대량입고(imports)에서 쓰는 유틸 메서드들
-     ========================================================= */
+   * Inbound (IN)
+   * ========================================================= */
 
-  // ✅ 특정 로케이션(들)의 재고를 0으로 리셋 (현재 onhand 만큼 반대방향 tx를 추가)
-  async resetLocationsToZeroByCodes(params: { locationCodes: string[] }) {
-    const locationCodes = (params.locationCodes || []).map((c) => this.norm(c)).filter(Boolean);
-    if (locationCodes.length === 0) return { ok: true, locations: 0, touchedSkus: 0 };
+  async in(dto: InventoryInDto) {
+    const skuCode = this.normUpper((dto as any).skuCode);
+    const locationCode = this.norm((dto as any).locationCode);
+    const qty = Number((dto as any).qty);
+
+    if (!skuCode) throw new BadRequestException('skuCode is required');
+    if (!locationCode) throw new BadRequestException('locationCode is required');
+    if (!Number.isFinite(qty) || qty <= 0) throw new BadRequestException('qty must be > 0');
+
+    const sku = await this.resolveSku({
+      skuCode,
+      makerCode: (dto as any).makerCode ?? null,
+      name: (dto as any).name ?? null,
+    });
+
+    const loc = await this.resolveOrCreateLocationByCode(locationCode);
+
+    const beforeQty = await this.getOnHand(sku.id, loc.id);
+
+    await this.prisma.inventoryTx.create({
+      data: {
+        skuId: sku.id,
+        locationId: loc.id,
+        qty,
+        type: 'in',
+        isForced: false,
+        beforeQty,
+        afterQty: beforeQty + qty,
+      } as any,
+    });
+
+    const onHand = await this.getOnHand(sku.id, loc.id);
+    return { ok: true, skuCode, locationCode, changed: qty, onHand };
+  }
+
+  /* =========================================================
+   * Bulk / Reset helpers (기존 로직 유지 + onHand는 forced 제외)
+   * ========================================================= */
+
+  async resetLocationsToZero(params: { locationCodes: string[] }) {
+    const locationCodes = (params.locationCodes ?? []).map((x) => this.norm(x)).filter(Boolean);
+    if (!locationCodes.length) throw new BadRequestException('locationCodes is required');
 
     const hq = await this.getHqStore();
-
     const locations = await this.prisma.location.findMany({
       where: { storeId: hq.id, code: { in: locationCodes } },
       select: { id: true, code: true },
@@ -134,7 +169,7 @@ export class InventoryService {
     for (const loc of locations) {
       const groups = await this.prisma.inventoryTx.groupBy({
         by: ['skuId'],
-        where: { locationId: loc.id },
+        where: { locationId: loc.id, isForced: false },
         _sum: { qty: true },
       });
 
@@ -142,123 +177,29 @@ export class InventoryService {
         const onHand = Number(g._sum.qty ?? 0);
         if (!onHand) continue;
 
-        // 0으로 만들기 위해 -onHand 만큼 조정 tx 추가
+        // 0으로 만들기 위해 -onHand 만큼 조정 tx 추가 (forced 제외)
         await this.prisma.inventoryTx.create({
           data: {
             skuId: g.skuId,
             locationId: loc.id,
             qty: -onHand,
-            type: 'reset',
+            type: 'adjust',
+            isForced: false,
+            beforeQty: onHand,
+            afterQty: 0,
           } as any,
         });
-        touchedSkus++;
+
+        touchedSkus += 1;
       }
     }
 
     return { ok: true, locations: locations.length, touchedSkus };
   }
 
-  // ✅ sku+location의 절대 수량을 qty로 "맞추기" (delta만큼 tx 추가)
-  async setQuantity(params: { skuCode: string; locationCode: string; qty: number; makerCode?: string | null; name?: string | null; }) {
-    const skuCode = this.normUpper(params.skuCode);
-    const locationCode = this.norm(params.locationCode);
-    const qty = Number(params.qty);
-
-    if (!skuCode) throw new BadRequestException('skuCode is required');
-    if (!locationCode) throw new BadRequestException('locationCode is required');
-    if (!Number.isFinite(qty) || qty < 0) throw new BadRequestException('qty must be >= 0');
-
-    const sku = await this.resolveSku({
-      skuCode,
-      makerCode: params.makerCode ?? null,
-      name: params.name ?? null,
-    });
-
-    const loc = await this.resolveOrCreateLocationByCode(locationCode);
-    const current = await this.getOnHand(sku.id, loc.id);
-    const delta = qty - current;
-
-    if (delta !== 0) {
-      await this.prisma.inventoryTx.create({
-        data: {
-          skuId: sku.id,
-          locationId: loc.id,
-          qty: delta,
-          type: 'set',
-        } as any,
-      });
-    }
-
-    const onHand = await this.getOnHand(sku.id, loc.id);
-    return {
-      ok: true,
-      skuCode: sku.code,
-      makerCode: (sku as any).makerCode ?? null,
-      locationCode,
-      changed: delta,
-      onHand,
-    };
-  }
-
-  // ✅ (복구) 코드 기반 onhand 조회 (컨트롤러에서 사용)
-  async onHandByCodes(params: { skuCode: string; locationCode: string }) {
-    const skuCode = this.normUpper(params.skuCode);
-    const locationCode = this.norm(params.locationCode);
-
-    if (!skuCode) throw new BadRequestException('skuCode is required');
-    if (!locationCode) throw new BadRequestException('locationCode is required');
-
-    const sku = await this.prisma.sku.findUnique({ where: { code: skuCode } });
-    if (!sku) throw new NotFoundException('SKU not found');
-
-    const hq = await this.getHqStore();
-    const loc = await this.prisma.location.findFirst({ where: { storeId: hq.id, code: locationCode } });
-
-    if (!loc) return { skuCode, locationCode, onHand: 0 };
-
-    const onHand = await this.getOnHand(sku.id, loc.id);
-    return { skuCode, locationCode, onHand };
-  }
-
-  /* -------------------- API -------------------- */
-
-  async inbound(dto: InventoryInDto) {
-    const skuCode = this.normUpper(dto.skuCode ?? '');
-    const makerCode = this.norm((dto as any).makerCode ?? '');
-    const locationCode = this.norm(dto.locationCode);
-    const qty = Number(dto.qty);
-
-    if (!locationCode) throw new BadRequestException('locationCode is required');
-    if (!Number.isFinite(qty) || qty <= 0) throw new BadRequestException('qty must be > 0');
-    if (!skuCode && !makerCode) throw new BadRequestException('skuCode or makerCode is required');
-
-    const sku = await this.resolveSku({
-      skuCode: skuCode || null,
-      makerCode: makerCode || null,
-      name: (dto as any).name ?? null,
-    });
-
-    const loc = await this.resolveOrCreateLocationByCode(locationCode);
-
-    await this.prisma.inventoryTx.create({
-      data: {
-        skuId: sku.id,
-        locationId: loc.id,
-        qty: qty,
-        type: 'in',
-      } as any,
-    });
-
-    const onHand = await this.getOnHand(sku.id, loc.id);
-    return {
-      ok: true,
-      skuCode: sku.code,
-      makerCode: (sku as any).makerCode ?? null,
-      locationCode,
-      changed: qty,
-      onHand,
-    };
-  }
+  /* =========================================================
+   * Outbound (OUT) + FORCE
+   * ========================================================= */
 
   async out(dto: InventoryOutDto) {
     const skuCode = this.normUpper((dto as any).skuCode);
@@ -277,18 +218,56 @@ export class InventoryService {
 
     const loc = await this.resolveOrCreateLocationByCode(locationCode);
 
+    // 현재 전산 재고(강제 출고 제외)
+    const beforeQty = await this.getOnHand(sku.id, loc.id);
+
+    // 재고가 충분하면 정상 출고 (전산 재고 차감)
+    if (beforeQty >= qty) {
+      await this.prisma.inventoryTx.create({
+        data: {
+          skuId: sku.id,
+          locationId: loc.id,
+          qty: -qty,
+          type: 'out',
+          isForced: false,
+          beforeQty,
+          afterQty: beforeQty - qty,
+        } as any,
+      });
+
+      const onHand = await this.getOnHand(sku.id, loc.id);
+      return { ok: true, skuCode, locationCode, changed: -qty, onHand, isForced: false };
+    }
+
+    // 재고 부족 → 강제 출고(전산 재고 0 유지) 옵션
+    const force = Boolean((dto as any).force);
+    const forceReason = this.norm((dto as any).forceReason);
+
+    if (!force) {
+      throw new BadRequestException(`재고 부족: onHand=${beforeQty}, 요청=${qty}`);
+    }
+
+    // ✅ 강제 출고: tx는 남기되, getOnHand 계산에서는 제외(isForced=true)
     await this.prisma.inventoryTx.create({
       data: {
         skuId: sku.id,
         locationId: loc.id,
-        qty: -qty,
+        qty: -qty, // 로그용(-qty)으로 남기고, onHand 계산에서는 제외
         type: 'out',
+        isForced: true,
+        forcedReason: forceReason || 'FORCED_OUT',
+        beforeQty,
+        afterQty: beforeQty, // 전산 재고는 그대로(0 유지)
       } as any,
     });
 
     const onHand = await this.getOnHand(sku.id, loc.id);
-    return { ok: true, skuCode, locationCode, changed: -qty, onHand };
+    return { ok: true, skuCode, locationCode, changed: 0, forcedQty: qty, onHand, isForced: true };
   }
+
+  /* =========================================================
+   * Queries
+   * ========================================================= */
 
   async listTx(params: { q?: string; limit?: number }) {
     const q = this.norm(params.q ?? '');
@@ -298,7 +277,7 @@ export class InventoryService {
       where: q
         ? {
             OR: [
-              { sku: { code: { contains: q, mode: 'insensitive' } } as any },
+              { sku: { sku: { contains: q, mode: 'insensitive' } } as any },
               { sku: { makerCode: { contains: q, mode: 'insensitive' } } as any },
               { location: { code: { contains: q, mode: 'insensitive' } } as any },
             ],
@@ -310,8 +289,12 @@ export class InventoryService {
         id: true,
         qty: true,
         type: true,
+        isForced: true,
+        forcedReason: true,
+        beforeQty: true,
+        afterQty: true,
         createdAt: true,
-        sku: { select: { code: true, makerCode: true, name: true } },
+        sku: { select: { sku: true, makerCode: true, name: true } },
         location: { select: { code: true } },
       },
     });
@@ -321,22 +304,25 @@ export class InventoryService {
     const q = this.norm(params.q ?? '');
     const take = this.clampLimit(params.limit ?? 200, 1, 2000);
 
+    // ✅ summary/onHand는 강제출고 제외
+    const where: any = { isForced: false };
+
+    if (q) {
+      where.OR = [
+        { sku: { sku: { contains: q, mode: 'insensitive' } } as any },
+        { sku: { makerCode: { contains: q, mode: 'insensitive' } } as any },
+        { location: { code: { contains: q, mode: 'insensitive' } } as any },
+      ];
+    }
+
     const list = await this.prisma.inventoryTx.findMany({
-      where: q
-        ? {
-            OR: [
-              { sku: { code: { contains: q, mode: 'insensitive' } } as any },
-              { sku: { makerCode: { contains: q, mode: 'insensitive' } } as any },
-              { location: { code: { contains: q, mode: 'insensitive' } } as any },
-            ],
-          }
-        : undefined,
+      where,
       take,
       select: {
         qty: true,
         skuId: true,
         locationId: true,
-        sku: { select: { code: true, makerCode: true, name: true } },
+        sku: { select: { sku: true, makerCode: true, name: true } },
         location: { select: { code: true } },
       },
     });
@@ -345,7 +331,7 @@ export class InventoryService {
     for (const r of list as any[]) {
       const key = `${r.skuId}:${r.locationId}`;
       const cur = map.get(key) || {
-        skuCode: r.sku?.code,
+        skuCode: r.sku?.sku,
         makerCode: r.sku?.makerCode ?? null,
         name: r.sku?.name ?? null,
         locationCode: r.location?.code,
@@ -357,4 +343,93 @@ export class InventoryService {
 
     return Array.from(map.values()).sort((a, b) => String(a.skuCode).localeCompare(String(b.skuCode)));
   }
+
+    // =========================
+  // Backward-compatible aliases
+  // (기존 모듈들이 쓰던 메서드명 유지용)
+  // =========================
+
+  // 기존 imports/hq-inventory.service.ts에서 호출
+  async resetLocationsToZeroByCodes(params: { locationCodes: string[] }) {
+    return this.resetLocationsToZero(params);
+  }
+
+  // 기존 inventory.controller.ts에서 호출
+  async inbound(dto: InventoryInDto) {
+    return this.in(dto);
+  }
+
+  // 기존 inventory.controller.ts에서 호출
+  async onHandByCodes(params: { skuCode: string; locationCode: string }) {
+    const skuCode = this.normUpper(params.skuCode);
+    const locationCode = this.norm(params.locationCode);
+
+    if (!skuCode) throw new BadRequestException('skuCode is required');
+    if (!locationCode) throw new BadRequestException('locationCode is required');
+
+    const sku = await this.resolveSku({ skuCode });
+    const loc = await this.resolveOrCreateLocationByCode(locationCode);
+
+    const onHand = await this.getOnHand(sku.id, loc.id);
+    return { ok: true, skuCode, locationCode, onHand };
+  }
+
+  // 기존 imports/hq-inventory.service.ts에서 호출
+  // "절대 수량으로 세팅" (전산 재고를 qty로 맞춤)
+  async setQuantity(params: {
+    skuCode: string;
+    locationCode: string;
+    qty: number;
+    makerCode?: string | null;
+    name?: string | null;
+    reason?: string | null;
+  }) {
+    const skuCode = this.normUpper(params.skuCode);
+    const locationCode = this.norm(params.locationCode);
+    const targetQty = Number(params.qty);
+
+    if (!skuCode) throw new BadRequestException('skuCode is required');
+    if (!locationCode) throw new BadRequestException('locationCode is required');
+    if (!Number.isFinite(targetQty) || targetQty < 0) {
+      throw new BadRequestException('qty must be >= 0');
+    }
+
+    const sku = await this.resolveSku({
+      skuCode,
+      makerCode: params.makerCode ?? null,
+      name: params.name ?? null,
+    });
+
+    const loc = await this.resolveOrCreateLocationByCode(locationCode);
+
+    // 현재 전산 재고(강제출고 제외)
+    const beforeQty = await this.getOnHand(sku.id, loc.id);
+
+    // 이미 같은 값이면 아무것도 안 함
+    if (beforeQty === targetQty) {
+      return { ok: true, skuCode, locationCode, changed: 0, onHand: beforeQty };
+    }
+
+    const diff = targetQty - beforeQty; // +면 증가, -면 감소
+
+    // adjust 트랜잭션으로 절대수량 맞추기 (forced 제외)
+    await this.prisma.inventoryTx.create({
+      data: {
+        skuId: sku.id,
+        locationId: loc.id,
+        qty: diff,
+        type: 'adjust',
+        isForced: false,
+        forcedReason: null,
+        beforeQty,
+        afterQty: targetQty,
+      } as any,
+    });
+
+    const onHand = await this.getOnHand(sku.id, loc.id);
+    return { ok: true, skuCode, locationCode, changed: diff, onHand };
+  }
+
+
+
 }
