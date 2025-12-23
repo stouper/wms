@@ -1,5 +1,6 @@
 import { BadRequestException, Injectable, NotFoundException } from '@nestjs/common';
 import { PrismaService } from '../../prisma/prisma.service';
+import { Prisma } from '@prisma/client';
 import * as ExcelJS from 'exceljs';
 
 @Injectable()
@@ -230,7 +231,7 @@ export class JobsService {
       usedLocationCode = loc.code;
     }
 
-    const result = await this.prisma.$transaction(async (tx) => {
+    const result = await this.prisma.$transaction(async (tx: Prisma.TransactionClient) => {
       const invTx = await tx.inventoryTx.create({
         data: {
           skuId: sku.id,
@@ -449,7 +450,8 @@ export class JobsService {
     const applyQty = Math.min(qtyReq, remaining);
     if (applyQty <= 0) throw new BadRequestException('Already completed');
 
-    const result = await this.prisma.$transaction(async (tx) => {
+    const result = await this.prisma.$transaction(async (tx: Prisma.TransactionClient) => {
+
       const updatedItem = await tx.jobItem.update({
         where: { id: item.id } as any,
         data: { qtyPicked: { increment: applyQty } } as any,
