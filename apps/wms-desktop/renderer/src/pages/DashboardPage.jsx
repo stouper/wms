@@ -20,7 +20,7 @@ export default function DashboardPage() {
   const [toYmd, setToYmd] = useState(() => ymdKST(new Date()));
 
   const [loadingList, setLoadingList] = useState(false);
-  const [jobs, setJobs] = useState([]); // export-source로 받은 job들 (중복제거/정렬)
+  const [jobs, setJobs] = useState([]); // done 전체를 받아서 기간 필터링
   const [selectedIds, setSelectedIds] = useState(() => new Set());
   const [activeJobId, setActiveJobId] = useState(null);
 
@@ -35,6 +35,40 @@ export default function DashboardPage() {
 
   const selectedCount = selectedJobs.length;
 
+  // ✅ ISO 문자열 / 숫자 / Date 모두 timestamp(ms)로 안전 변환
+  function toTs(v) {
+    if (!v) return 0;
+    if (typeof v === "number") return Number.isFinite(v) ? v : 0;
+    if (v instanceof Date) {
+      const t = v.getTime();
+      return Number.isFinite(t) ? t : 0;
+    }
+    if (typeof v === "string") {
+      const s = v.trim();
+      if (!s) return 0;
+      // 숫자 문자열이면 숫자로
+      if (/^\d+$/.test(s)) {
+        const n = Number(s);
+        return Number.isFinite(n) ? n : 0;
+      }
+      // ISO 문자열이면 Date.parse
+      const t = Date.parse(s);
+      return Number.isFinite(t) ? t : 0;
+    }
+    return 0;
+  }
+
+  // ✅ 완료 기준 시간: doneAt(우선) → completedAt → updatedAt → createdAt
+  function getDoneTs(j) {
+    return (
+      toTs(j?.doneAt || j?.done_at) ||
+      toTs(j?.completedAt || j?.completed_at) ||
+      toTs(j?.updatedAt || j?.updated_at) ||
+      toTs(j?.createdAt || j?.created_at) ||
+      0
+    );
+  }
+
   async function fetchJobsForRange() {
     const apiBase = getApiBase();
     const from = (fromYmd || "").trim();
@@ -45,6 +79,7 @@ export default function DashboardPage() {
       return;
     }
 
+    // 비교 검증만 (타임존 문제 방지용으로 단순 문자열 비교도 가능하지만, 기존 유지)
     const fromDate = new Date(from + "T00:00:00");
     const toDate = new Date(to + "T00:00:00");
     if (Number.isNaN(fromDate.getTime()) || Number.isNaN(toDate.getTime())) {
@@ -62,49 +97,42 @@ export default function DashboardPage() {
       setSelectedIds(new Set());
       setJobs([]);
 
-      // ✅ 기간이 너무 길면 서버 호출이 많아지니까 안전장치
-      const days = dateDiffDaysInclusive(fromDate, toDate);
-      if (days > 31) {
-        push({
-          kind: "warn",
-          title: "기간 제한",
-          message: "일단 31일 이내로 조회하자 (서버에 기간 API 만들면 제한 풀자)",
+      // ✅ done 전체 1번 호출 → 프론트에서 기간 필터링
+      const url = `${apiBase}/jobs?status=done`;
+      const data = await tryJsonFetch(url);
+
+      const all = Array.isArray(data) ? data : data?.jobs || data?.data || [];
+      const filtered = (all || [])
+        .filter((j) => {
+          // status가 혹시 문자열/대문자 등으로 올 수 있어도 방어
+          const st = String(j?.status || "").toLowerCase().trim();
+          if (st && st !== "done") return false;
+
+          const t = getDoneTs(j);
+          if (!t) return false;
+
+          const ymd = ymdKST(new Date(t)); // ✅ KST 기준
+          return ymd >= from && ymd <= to;
+        })
+        .map((j) => {
+          const t = getDoneTs(j);
+          const ymd = t ? ymdKST(new Date(t)) : "";
+          return { ...j, _exportDate: ymd };
         });
-        return;
-      }
 
-      // ✅ 날짜별로 /jobs/export-source?date=YYYY-MM-DD 호출해서 합치기
-      const all = [];
-      for (let i = 0; i < days; i++) {
-        const d = new Date(fromDate);
-        d.setDate(fromDate.getDate() + i);
-        const ymd = ymdLocal(d);
-
-        const url = `${apiBase}/jobs/export-source?date=${encodeURIComponent(ymd)}`;
-        const data = await tryJsonFetch(url);
-
-        const list = Array.isArray(data) ? data : data?.jobs || [];
-        if (Array.isArray(list) && list.length > 0) {
-          // 각 job에 조회 기준일(=export date)을 메모
-          for (const j of list) {
-            all.push({ ...j, _exportDate: ymd });
-          }
-        }
-      }
-
-      if (all.length === 0) {
+      if (filtered.length === 0) {
         push({ kind: "warn", title: "조회 결과 없음", message: `${from} ~ ${to} 완료된 작지가 없어` });
         return;
       }
 
-      // ✅ job id 기준 중복 제거 (기간 중 중복 응답 방지)
+      // ✅ job id 기준 중복 제거
       const uniq = new Map();
-      for (const j of all) {
+      for (const j of filtered) {
         if (!j?.id) continue;
         if (!uniq.has(j.id)) uniq.set(j.id, j);
       }
 
-      // 정렬: exportDate → storeCode → updatedAt/completedAt(있으면) → id
+      // 정렬: exportDate → storeCode → doneAt/updatedAt → id
       const sorted = [...uniq.values()].sort((a, b) => {
         const ad = String(a?._exportDate || "").localeCompare(String(b?._exportDate || ""));
         if (ad !== 0) return ad;
@@ -114,8 +142,8 @@ export default function DashboardPage() {
         );
         if (as !== 0) return as;
 
-        const at = Number(a?.completedAt || a?.completed_at || a?.updatedAt || a?.updated_at || 0);
-        const bt = Number(b?.completedAt || b?.completed_at || b?.updatedAt || b?.updated_at || 0);
+        const at = getDoneTs(a);
+        const bt = getDoneTs(b);
         if (at !== bt) return bt - at;
 
         return String(a?.id || "").localeCompare(String(b?.id || ""));
@@ -164,7 +192,7 @@ export default function DashboardPage() {
       const csvText = buildEpmsOutCsvWithHeader({
         jobs: selectedJobs,
         type: 1,
-        workDateYmd: from, // fallback (실제 행은 job._exportDate 우선)
+        workDateYmd: from, // fallback
       });
 
       const filename = `EPMS_OUT_${from.replaceAll("-", "")}_${to.replaceAll("-", "")}_SEL${selectedJobs.length}.csv`;
@@ -428,10 +456,7 @@ export default function DashboardPage() {
                     {cell.inMonth && evCount > 0 ? (
                       <div style={{ marginTop: 6, fontSize: 11, color: "#64748b", lineHeight: 1.3 }}>
                         {(eventsMap?.[cell.ymd] || []).slice(0, 2).map((ev) => (
-                          <div
-                            key={ev.id}
-                            style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}
-                          >
+                          <div key={ev.id} style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
                             • {ev.time ? `${ev.time} ` : ""}{ev.title}
                           </div>
                         ))}
@@ -528,7 +553,7 @@ export default function DashboardPage() {
         </div>
       </div>
 
-      {/* ✅ EPMS Export: 기간 조회/목록/선택 다운로드 */}
+      {/* ✅ EPMS Export */}
       <div style={{ border: "1px solid #e5e7eb", borderRadius: 12, padding: 12, background: "#fff" }}>
         <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 10, flexWrap: "wrap" }}>
           <h3 style={{ margin: 0 }}>EPMS Export</h3>
@@ -604,7 +629,6 @@ export default function DashboardPage() {
 
                   const checked = selectedIds.has(id);
                   const isActive = activeJobId === id;
-
                   const exportDate = String(j?._exportDate || "");
 
                   return (
@@ -886,12 +910,6 @@ function yyyymmddToYmd(n) {
   const s = String(n || "");
   if (!/^\d{8}$/.test(s)) return "";
   return `${s.slice(0, 4)}-${s.slice(4, 6)}-${s.slice(6, 8)}`;
-}
-
-function dateDiffDaysInclusive(a, b) {
-  const ms = b.getTime() - a.getTime();
-  const days = Math.floor(ms / 86400000);
-  return days + 1;
 }
 
 function safeReadJson(key, fallback) {

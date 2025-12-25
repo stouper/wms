@@ -15,11 +15,23 @@ export class JobsController {
 
   // ✅ 목록 (date 쿼리는 지금은 무시: 필요하면 service 쪽에 필터 다시 붙이면 됨)
   @Get()
-  list(@Query('date') _date?: string) {
-    return this.jobs.listJobs();
+  list(
+    @Query('date') date?: string,
+    @Query('status') status?: string,
+  ) {
+    const s = (status ?? '').toString().trim().toLowerCase();
+
+    // ✅ desktop/레거시 호환: completed -> done
+    const normalized =
+      s === 'completed' || s === 'complete' || s === 'finished' ? 'done' : s;
+
+    return this.jobs.listJobs({
+      date,
+      status: (normalized || undefined) as any,
+    } as any);
   }
 
-  // ✅ 디테일: 반드시 items(+sku) 포함해서 내려줘야 desktop에서 보임
+// ✅ 디테일: 반드시 items(+sku) 포함해서 내려줘야 desktop에서 보임
   @Get(':id')
   get(@Param('id') id: string) {
     return this.jobs.getJob(id);
@@ -81,4 +93,16 @@ export class JobsController {
   setAllowOverpick(@Param('id') id: string, @Body() body: { allowOverpick: boolean }) {
     return this.jobs.setAllowOverpick(id, Boolean(body?.allowOverpick));
   }
+  // ✅ (호환) Desktop: POST /jobs/:jobId/approve-extra  (body: { jobItemId, qty })
+  // 기존 라우트(PATCH /jobs/:id/items/:itemId/approve-extra)는 그대로 두고,
+  // 워크벤치 UI에서 쓰는 간단한 엔드포인트를 별칭으로 추가한다.
+  @Post(':jobId/approve-extra')
+  approveExtraAlias(
+    @Param('jobId') jobId: string,
+    @Body() body: { jobItemId: string; qty: number },
+  ) {
+    const qty = Number(body?.qty ?? 0);
+    return this.jobs.approveExtra(jobId, body?.jobItemId, qty);
+  }
+
 }

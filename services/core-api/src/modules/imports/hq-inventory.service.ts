@@ -9,6 +9,21 @@ type HqRow = {
   name?: string;
 };
 
+type HqSkuAgg =
+  | { qty: number; makerCode?: string; name?: string }
+  | { sku: any; targetQty: number; info: { makerCode?: string; name?: string } };
+
+function normalizeAgg(v: HqSkuAgg | undefined) {
+  if (!v) return { qty: 0, makerCode: undefined as string | undefined, name: undefined as string | undefined };
+  if ((v as any).qty !== undefined) {
+    const a = v as any;
+    return { qty: Number(a.qty ?? 0), makerCode: a.makerCode, name: a.name };
+  }
+  const b = v as any;
+  return { qty: Number(b.targetQty ?? 0), makerCode: b.info?.makerCode, name: b.info?.name };
+}
+
+
 @Injectable()
 export class HqInventoryService {
   constructor(private readonly prisma: PrismaService) {}
@@ -35,16 +50,24 @@ export class HqInventoryService {
   async replaceAll(rows: HqRow[], opts?: { warehouseLocationCode?: string }) {
     if (!rows?.length) throw new BadRequestException('replaceAll: rows is empty');
 
-    const fallbackLoc = this.normUpper(opts?.warehouseLocationCode);
-    if (!fallbackLoc) throw new BadRequestException('replaceAll: warehouseLocationCode is required');
+    // location이 비어있을 때 사용할 기본 로케이션
+    const fallbackLoc = this.normUpper(opts?.warehouseLocationCode) || 'RET-01';
 
     // ✅ HQ store 확보
     const hqStore = await this.getOrCreateHqStore();
 
+    // ✅ 기본 로케이션(RET-01) 항상 보장 (Prisma 수동 작업 제거)
+    await this.prisma.location.upsert({
+      where: { storeId_code: { storeId: hqStore.id, code: 'RET-01' } },
+      update: {},
+      create: { storeId: hqStore.id, code: 'RET-01', name: null } as any,
+    });
+
+
     /**
      * 1) location + sku 기준으로 rows 합산
      */
-    const byLoc = new Map<string, Map<string, { qty: number; makerCode?: string; name?: string }>>();
+    const byLoc = new Map<string, Map<string, HqSkuAgg>>();
 
     for (const r of rows) {
       const sku = this.normUpper(r.sku);
@@ -55,22 +78,31 @@ export class HqInventoryService {
       if (!loc) continue;
       if (!Number.isFinite(qty) || qty < 0) continue;
 
-      if (!byLoc.has(loc)) byLoc.set(loc, new Map());
+      if (!byLoc.has(loc)) byLoc.set(loc, new Map<string, HqSkuAgg>());
       const skuMap = byLoc.get(loc)!;
 
       const prev = skuMap.get(sku);
       if (!prev) {
         skuMap.set(sku, { qty, makerCode: r.makerCode, name: r.name });
       } else {
+        const p = normalizeAgg(prev);
         skuMap.set(sku, {
-          qty: prev.qty + qty,
-          makerCode: prev.makerCode ?? r.makerCode,
-          name: prev.name ?? r.name,
+          qty: p.qty + qty,
+          makerCode: p.makerCode ?? r.makerCode,
+          name: p.name ?? r.name,
         });
       }
     }
 
-    const uniqLocCodes = Array.from(byLoc.keys());
+    // ✅ 업로드 파일에 없는 기존 로케이션도 전부 0으로 reset되도록 포함 (HQ 전체 스냅샷)
+    const existingLocs = await this.prisma.location.findMany({
+      where: { storeId: hqStore.id } as any,
+      select: { code: true } as any,
+    });
+    const uniqLocCodes = Array.from(
+      new Set<string>(['RET-01', ...existingLocs.map((l: any) => String(l.code)), ...byLoc.keys()]),
+    ).map((c) => this.normUpper(c)).filter(Boolean);
+
     let applied = 0;
 
     /**
@@ -90,7 +122,7 @@ export class HqInventoryService {
         } as any,
       });
 
-      const skuMap = byLoc.get(locCode)!;
+      const skuMap = byLoc.get(locCode) ?? new Map<string, HqSkuAgg>();
 
       await this.prisma.$transaction(async (tx) => {
         /**
@@ -129,7 +161,8 @@ export class HqInventoryService {
          * (B) 엑셀 기준 최종 수량 SET
          */
         for (const [skuCode, info] of skuMap.entries()) {
-          const targetQty = Number(info.qty ?? 0);
+          const nInfo = normalizeAgg(info);
+          const targetQty = Number(nInfo.qty ?? 0);
           if (!Number.isFinite(targetQty) || targetQty < 0) continue;
 
           // SKU 확보 (sku 필드가 unique가 아닐 수 있으니 findFirst→create 시도→재조회 안전)
@@ -139,8 +172,8 @@ export class HqInventoryService {
               sku = await tx.sku.create({
                 data: {
                   sku: skuCode,
-                  makerCode: info.makerCode ?? null,
-                  name: info.name ?? null,
+                  makerCode: nInfo.makerCode ?? null,
+                  name: nInfo.name ?? null,
                 } as any,
               });
             } catch (e) {

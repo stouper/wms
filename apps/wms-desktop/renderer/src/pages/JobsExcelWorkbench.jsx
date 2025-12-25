@@ -28,6 +28,10 @@ export default function JobsExcelWorkbench({ pageTitle, defaultStoreCode = "", p
   const [scanQty, setScanQty] = useState(1);
   const [lastScan, setLastScan] = useState(null); // { status, pickResult, usedLocationCode, sku, picked }
 
+  const [extraApproveInput, setExtraApproveInput] = useState({}); // { [jobItemId]: string }
+  const [approvingExtra, setApprovingExtra] = useState(false);
+
+
 
   // ✅ 반품입고(whInbound)는 기본 로케이션 RET-01 자동 세팅
   const [scanLoc, setScanLoc] = useState(() => (pageKey === "whInbound" ? DEFAULT_RETURN_LOCATION : ""));
@@ -234,7 +238,25 @@ export default function JobsExcelWorkbench({ pageTitle, defaultStoreCode = "", p
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [created]);
 
-  // ---------- scan ----------
+  
+  // ---------- extra picking approve ----------
+  async function approveExtra(jobItemId, qty) {
+    if (!selectedJobId) throw new Error("jobId is required");
+    const n = Number(qty);
+    if (!Number.isFinite(n) || n <= 0) throw new Error("qty must be > 0");
+
+    setApprovingExtra(true);
+    try {
+      await postJson(`${apiBase}/jobs/${selectedJobId}/approve-extra`, { jobItemId, qty: n });
+      push({ kind: "success", title: "추가피킹 승인", message: `+${n} 승인 완료` });
+      setExtraApproveInput((prev) => ({ ...prev, [jobItemId]: "" }));
+      await loadJob(selectedJobId);
+    } finally {
+      setApprovingExtra(false);
+    }
+  }
+
+// ---------- scan ----------
   async function doScan() {
     if (!selectedJobId) {
       push({ kind: "warn", title: "Job 선택", message: "먼저 Job을 선택해줘" });
@@ -645,6 +667,8 @@ if (pageKey === "whInbound") {
                   <Th>이름</Th>
                   <Th>Planned</Th>
                   <Th>Picked</Th>
+                  <Th>Extra(사용/승인)</Th>
+                  <Th>추가 승인</Th>
                 </tr>
               </thead>
               <tbody>
@@ -660,12 +684,41 @@ if (pageKey === "whInbound") {
                       <Td>{it.nameSnapshot || it.sku?.name || "-"}</Td>
                       <Td>{planned}</Td>
                       <Td style={{ fontWeight: 900, color: done ? "#16a34a" : "#0f172a" }}>{picked}</Td>
+                      <Td style={{ fontFamily: "Consolas, monospace" }}>
+                        {Number(it.extraPickedQty || 0)}/{Number(it.extraApprovedQty || 0)}
+                      </Td>
+                      <Td>
+                        <div style={{ display: "flex", gap: 6, alignItems: "center" }}>
+                          <input
+                            value={extraApproveInput[it.id] ?? ""}
+                            onChange={(e) =>
+                              setExtraApproveInput((p) => ({ ...p, [it.id]: e.target.value }))
+                            }
+                            placeholder="수량"
+                            style={{ ...inputStyle, width: 70, padding: "4px 6px" }}
+                            inputMode="numeric"
+                          />
+                          <button
+                            type="button"
+                            style={{ ...primaryBtn, padding: "4px 10px" }}
+                            disabled={approvingExtra}
+                            onClick={() => {
+                              const v = extraApproveInput[it.id];
+                              approveExtra(it.id, v).catch((e) =>
+                                push({ kind: "error", title: "승인 실패", message: e?.message || String(e) })
+                              );
+                            }}
+                          >
+                            승인
+                          </button>
+                        </div>
+                      </Td>
                     </tr>
                   );
                 })}
                 {(job.items || []).length === 0 ? (
                   <tr>
-                    <td colSpan={5} style={{ padding: 12, color: "#94a3b8", textAlign: "center" }}>
+                    <td colSpan={7} style={{ padding: 12, color: "#94a3b8", textAlign: "center" }}>
                       아이템이 아직 없음
                     </td>
                   </tr>
