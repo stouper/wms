@@ -31,8 +31,6 @@ export default function JobsExcelWorkbench({ pageTitle, defaultStoreCode = "", p
   const [extraApproveInput, setExtraApproveInput] = useState({}); // { [jobItemId]: string }
   const [approvingExtra, setApprovingExtra] = useState(false);
 
-
-
   // ✅ 반품입고(whInbound)는 기본 로케이션 RET-01 자동 세팅
   const [scanLoc, setScanLoc] = useState(() => (pageKey === "whInbound" ? DEFAULT_RETURN_LOCATION : ""));
 
@@ -77,7 +75,7 @@ export default function JobsExcelWorkbench({ pageTitle, defaultStoreCode = "", p
         throw new Error("출고/반품이 섞인 파일입니다. EPMS 파일을 확인해주세요.");
       }
 
-      // 안전 모드: 구분이 없으면 경고(원하면 여기서 throw로 바꿔도 됨)
+      // 안전 모드: 구분이 없으면 경고
       if (!jobKind) {
         push({
           kind: "warn",
@@ -238,7 +236,6 @@ export default function JobsExcelWorkbench({ pageTitle, defaultStoreCode = "", p
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [created]);
 
-  
   // ---------- extra picking approve ----------
   async function approveExtra(jobItemId, qty) {
     if (!selectedJobId) throw new Error("jobId is required");
@@ -256,7 +253,7 @@ export default function JobsExcelWorkbench({ pageTitle, defaultStoreCode = "", p
     }
   }
 
-// ---------- scan ----------
+  // ---------- scan ----------
   async function doScan() {
     if (!selectedJobId) {
       push({ kind: "warn", title: "Job 선택", message: "먼저 Job을 선택해줘" });
@@ -273,89 +270,83 @@ export default function JobsExcelWorkbench({ pageTitle, defaultStoreCode = "", p
 
     // ✅ 반품입고는 locationCode 필수
     if (pageKey === "whInbound" && !loc) {
-      push({ kind: "error", title: "로케이션 필요", message: `반품입고는 locationCode가 필수야. (예: ${DEFAULT_RETURN_LOCATION})` });
+      push({
+        kind: "error",
+        title: "로케이션 필요",
+        message: `반품입고는 locationCode가 필수야. (예: ${DEFAULT_RETURN_LOCATION})`,
+      });
       return;
     }
 
+    setLoading(true);
     try {
-      setLoading(true);
-
       // ---------- whInbound (반품 입고) ----------
-      
-if (pageKey === "whInbound") {
-  // ✅ 반품입고
-  // - "잡 선택"이 되어있으면: /jobs/:jobId/receive 로 처리 (JobItem 카운팅 반영)
-  // - 잡 선택이 없으면: /inventory/in 으로만 처리 (재고만 반영, 카운팅은 안 올라감)
-  const locationCode = loc || DEFAULT_RETURN_LOCATION;
+      if (pageKey === "whInbound") {
+        const locationCode = loc || DEFAULT_RETURN_LOCATION;
 
-  if (!selectedJobId) {
-    // fallback: 재고만 올리고, 잡 카운팅은 불가
-    const bodyIn = {
-      skuCode: val, // inventory/in 은 skuCode 기준 (바코드/sku가 skuCode로 들어온다는 전제)
-      qty: safeQty,
-      locationCode,
-    };
-    const res = await postJson(`${apiBase}/inventory/in`, bodyIn);
-
-    setLastScan(res);
-    push({
-      kind: "warning",
-      title: "반품 처리(재고만)",
-      message: `작지 선택이 없어서 재고만 +${safeQty} 처리했어. 카운팅 필요하면 먼저 작지를 선택해줘.`,
-    });
-
-    setScanValue("");
-    scanRef.current?.focus?.();
-    return;
-  }
-
-  // 잡 귀속 반품(카운팅 반영)
-  const bodyReceive = {
-    value: val,
-    qty: safeQty,
-    locationCode,
-  };
-
-  const res = await postJson(`${apiBase}/jobs/${selectedJobId}/receive`, bodyReceive);
-
-  setLastScan(res);
-  push({
-    kind: "success",
-    title: "반품 처리",
-    message: `${val} +${safeQty} @${locationCode}`,
-  });
-
-  setScanValue("");
-  scanRef.current?.focus?.();
-  await loadJob(selectedJobId);
-  return;
-}
-
-      // ---------- storeShip (매장 출고) ----------
-      // ✅ items/scan 하나로 통일
-      try {
-        const res = await postJson(`${apiBase}/jobs/${selectedJobId}/items/scan`, {
+        const res = await postJson(`${apiBase}/jobs/${selectedJobId}/receive`, {
           value: val,
           qty: safeQty,
-          ...(loc ? { locationCode: loc } : {}),
+          locationCode,
         });
 
         setLastScan(res);
-
-        const isShortage = res?.pickResult === "SHORTAGE_TO_RET01" || res?.status === "SHORTAGE" || res?.usedLocationCode === DEFAULT_RETURN_LOCATION;
-
         push({
-          kind: isShortage ? "warn" : "success",
-          title: isShortage ? "부족분 처리(RET-01)" : "피킹 처리",
-          message: isShortage
-            ? `${val} ${safeQty}족 → RET-01(부족풀) 적재`
-            : `${val} -${safeQty} @${res?.usedLocationCode || loc || "-"}`,
+          kind: "success",
+          title: "반품 처리",
+          message: `${val} +${safeQty} @${locationCode}`,
         });
 
+        setScanValue("");
+        scanRef.current?.focus?.();
+        await loadJob(selectedJobId);
+        return;
+      }
+
+      // ---------- storeShip (매장 출고) ----------
+      // ✅ 서버가 location 우선순위를 결정 (loc 입력하면 그 location 강제 가능)
+      const body = {
+        value: val,
+        qty: safeQty,
+        ...(loc ? { locationCode: loc } : {}),
+      };
+
+      try {
+        const res = await postJson(`${apiBase}/jobs/${selectedJobId}/items/scan`, body);
+
+        // 1) SKU가 어떤 location에도 없을 때 → NEED_FORCE_OUT
+        if (res?.status === "NEED_FORCE_OUT") {
+          const ok = confirm(
+            res?.message ||
+              "해당 SKU는 어느 로케이션에도 재고가 없습니다.\nUNASSIGNED로 강제 출고할까요?"
+          );
+          if (!ok) return;
+
+          const res2 = await postJson(`${apiBase}/jobs/${selectedJobId}/items/scan`, {
+            ...body,
+            force: true,
+            forceReason: "NO_LOCATION",
+          });
+
+          setLastScan(res2);
+          push({
+            kind: "warn",
+            title: "강제 출고(UNASSIGNED)",
+            message: `${val} -${safeQty} @UNASSIGNED`,
+          });
+
+          setScanValue("");
+          scanRef.current?.focus?.();
+          await loadJob(selectedJobId);
+          return;
+        }
+
+        // 2) 정상 출고
+        setLastScan(res);
         push({
           kind: "success",
           title: "피킹 처리",
-          message: `${val} -${safeQty} @${loc}`,
+          message: `${val} -${safeQty} @${res?.usedLocationCode || loc || "-"}`,
         });
 
         setScanValue("");
@@ -365,38 +356,42 @@ if (pageKey === "whInbound") {
       } catch (e1) {
         const msg = e1?.message || String(e1);
 
-        // ✅ RET-01 자동 오버픽:
-        // - 특정 로케이션 재고가 부족하면 → allowOverpick 켜고 → RET-01로 재시도
-        if (msg.includes("Insufficient stock") || msg.includes("Overpick enabled. locationCode is required")) {
-          try {
-            const retLoc = DEFAULT_RETURN_LOCATION;
+        // 3) 재고 부족(409) → allowOverpick 허용 여부 confirm → 허용하면 PATCH 후 재시도
+        // (백엔드에서 409 ConflictException: Insufficient stock... 던지는 케이스)
+        const looksLikeInsufficient =
+          msg.includes("Insufficient stock") ||
+          msg.includes("[409]") ||
+          msg.includes("409");
 
-            await patchJson(`${apiBase}/jobs/${selectedJobId}/allow-overpick`, { allowOverpick: true });
-
-            const res2 = await postJson(`${apiBase}/jobs/${selectedJobId}/items/scan`, {
-              value: val,
-              qty: safeQty,
-              locationCode: retLoc,
-            });
-
-            setLastScan(res2);
-
-            push({
-              kind: "warn",
-              title: "부족분 처리(RET-01)",
-              message: "전산재고 부족 → RET-01(부족풀)로 적재했어.",
-            });
-
-            setScanValue("");
-            scanRef.current?.focus?.();
-            await loadJob(selectedJobId);
-            return;
-          } catch (e2) {
-            push({ kind: "error", title: "RET-01 자동 처리 실패", message: e2?.message || String(e2) });
+        if (looksLikeInsufficient) {
+          const ok = confirm(
+            `전산재고 부족으로 출고가 막혔어.\n오버픽(allowOverpick)을 이 Job에 허용하고 진행할까?\n\n${msg}`
+          );
+          if (!ok) {
+            push({ kind: "warn", title: "중단", message: "오버픽 허용 안 함" });
             return;
           }
+
+          // ✅ allowOverpick 토글
+          await patchJson(`${apiBase}/jobs/${selectedJobId}/allow-overpick`, { allowOverpick: true });
+
+          // ✅ 재시도 (같은 바디로)
+          const res2 = await postJson(`${apiBase}/jobs/${selectedJobId}/items/scan`, body);
+
+          setLastScan(res2);
+          push({
+            kind: "warn",
+            title: "오버픽 출고",
+            message: `${val} -${safeQty} @${res2?.usedLocationCode || loc || "-"}`,
+          });
+
+          setScanValue("");
+          scanRef.current?.focus?.();
+          await loadJob(selectedJobId);
+          return;
         }
 
+        // 그 외 에러
         push({ kind: "error", title: "처리 실패", message: msg });
         return;
       }
@@ -444,7 +439,7 @@ if (pageKey === "whInbound") {
         ) : (
           <>
             {" "}
-            / 매장출고: <b>locationCode 선택</b> (미입력 시 작지 기본 로케이션 사용)
+            / 매장출고: <b>locationCode 선택</b> (미입력 시 서버 우선순위 location 사용)
           </>
         )}
       </div>
@@ -611,37 +606,37 @@ if (pageKey === "whInbound") {
           <button type="button" style={primaryBtn} onClick={doScan} disabled={loading}>
             적용
           </button>
-        {lastScan ? (
-          <div style={{ marginTop: 10, display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
-            <span
-              style={{
-                padding: "3px 10px",
-                borderRadius: 999,
-                fontSize: 12,
-                fontWeight: 900,
-                background: lastScan?.status === "SHORTAGE" ? "#fff7ed" : "#ecfeff",
-                color: lastScan?.status === "SHORTAGE" ? "#9a3412" : "#155e75",
-                border: "1px solid #e5e7eb",
-              }}
-              title={lastScan?.pickResult || lastScan?.status || ""}
-            >
-              {lastScan?.status === "SHORTAGE" ? "⚠️ 부족처리" : "✅ 정상"}
-            </span>
 
-            <span style={{ fontSize: 12, color: "#64748b" }}>
-              loc: <b>{lastScan?.usedLocationCode || "-"}</b>
-            </span>
+          {lastScan ? (
+            <div style={{ marginTop: 10, display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
+              <span
+                style={{
+                  padding: "3px 10px",
+                  borderRadius: 999,
+                  fontSize: 12,
+                  fontWeight: 900,
+                  background: lastScan?.status === "SHORTAGE" ? "#fff7ed" : "#ecfeff",
+                  color: lastScan?.status === "SHORTAGE" ? "#9a3412" : "#155e75",
+                  border: "1px solid #e5e7eb",
+                }}
+                title={lastScan?.pickResult || lastScan?.status || ""}
+              >
+                {lastScan?.status === "SHORTAGE" ? "⚠️ 부족처리" : "✅ 정상"}
+              </span>
 
-            <span style={{ fontSize: 12, color: "#64748b" }}>
-              sku: <b style={{ fontFamily: "Consolas, monospace" }}>{lastScan?.sku?.sku || lastScan?.sku?.code || "-"}</b>
-            </span>
+              <span style={{ fontSize: 12, color: "#64748b" }}>
+                loc: <b>{lastScan?.usedLocationCode || "-"}</b>
+              </span>
 
-            <span style={{ fontSize: 12, color: "#64748b" }}>
-              picked: <b>{lastScan?.picked?.qtyPicked ?? "-"}</b>/<b>{lastScan?.picked?.qtyPlanned ?? "-"}</b>
-            </span>
-          </div>
-        ) : null}
+              <span style={{ fontSize: 12, color: "#64748b" }}>
+                sku: <b style={{ fontFamily: "Consolas, monospace" }}>{lastScan?.sku?.sku || lastScan?.sku?.code || "-"}</b>
+              </span>
 
+              <span style={{ fontSize: 12, color: "#64748b" }}>
+                picked: <b>{lastScan?.picked?.qtyPicked ?? "-"}</b>/<b>{lastScan?.picked?.qtyPlanned ?? "-"}</b>
+              </span>
+            </div>
+          ) : null}
         </div>
       </div>
 
@@ -678,7 +673,6 @@ if (pageKey === "whInbound") {
                   const done = picked >= planned && planned > 0;
                   return (
                     <tr key={it.id} style={{ background: done ? "#f0fdf4" : "transparent" }}>
-                      {/* ✅ prisma field가 sku(문자열)인 케이스 대응 */}
                       <Td style={{ fontFamily: "Consolas, monospace" }}>{it.sku?.sku || it.sku?.code || "-"}</Td>
                       <Td style={{ fontFamily: "Consolas, monospace" }}>{it.makerCodeSnapshot || it.sku?.makerCode || "-"}</Td>
                       <Td>{it.nameSnapshot || it.sku?.name || "-"}</Td>
@@ -691,9 +685,7 @@ if (pageKey === "whInbound") {
                         <div style={{ display: "flex", gap: 6, alignItems: "center" }}>
                           <input
                             value={extraApproveInput[it.id] ?? ""}
-                            onChange={(e) =>
-                              setExtraApproveInput((p) => ({ ...p, [it.id]: e.target.value }))
-                            }
+                            onChange={(e) => setExtraApproveInput((p) => ({ ...p, [it.id]: e.target.value }))}
                             placeholder="수량"
                             style={{ ...inputStyle, width: 70, padding: "4px 6px" }}
                             inputMode="numeric"

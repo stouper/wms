@@ -371,118 +371,47 @@ export class JobsService {
 
         extraInc = deltaExceed;
       }
-// 4-1) ✅ 사용할 locationId 결정
+      // 4-1) ✅ 사용할 locationId 결정 (정석: 고정 우선순위)
+      // - locationCode가 스캔/입력되면 그 location을 사용
+      // - locationCode가 없으면: 해당 SKU의 inventory row 중 location.code 오름차순(고정 우선순위) 1개 선택
+      // - 어느 location에도 row가 없으면: NEED_FORCE_OUT (확인 후 force=true면 UNASSIGNED로 강제 출고)
       let useLocationId: string | null = scannedLocation?.id ?? null;
       let useLocationCode: string | null = scannedLocation?.code ?? null;
-      // ✅ RET-01(부족풀)로 직접 스캔된 경우:
-      // - RET-01에서는 재고 차감(-)을 하지 않는다.
-      // - 부족분을 RET-01에 +qty로 "적재"만 기록하고, jobItem.qtyPicked는 증가시킨다.
+
+      // 출고 스캔에서 RET-01(반품풀)은 사용 금지
       if (useLocationCode === 'RET-01') {
-        const poolLoc = scannedLocation ?? (await tx.location.findFirst({ where: { code: 'RET-01' } as any } as any));
-        if (!poolLoc) throw new NotFoundException('Return pool location not found: RET-01');
-
-        const beforePool = await tx.inventoryTx
-          .aggregate({
-            where: { skuId: sku.id, locationId: poolLoc.id, isForced: false } as any,
-            _sum: { qty: true },
-          } as any)
-          .then((a: any) => Number(a._sum?.qty ?? 0));
-
-        const invTx = await tx.inventoryTx.create({
-          data: {
-            skuId: sku.id,
-            locationId: poolLoc.id,
-            qty: +qty,
-            type: 'overpick', // ✅ 부족모음(적재) 기록
-            isForced: false,
-            forcedReason: null,
-            beforeQty: beforePool,
-            afterQty: beforePool + qty,
-          } as any,
-        } as any);
-
-        // ✅ Inventory 스냅샷 갱신(부족풀/오버픽 풀)
-        await (tx as any).inventory.upsert({
-          where: { skuId_locationId: { skuId: sku.id, locationId: poolLoc.id } } as any,
-          create: { skuId: sku.id, locationId: poolLoc.id, qty: beforePool + qty } as any,
-          update: { qty: { increment: qty } as any } as any,
-        } as any);
-
-        const updatedItem = await tx.jobItem.update({
-          where: { id: item.id } as any,
-          data: {
-            qtyPicked: { increment: qty } as any,
-            extraPickedQty: { increment: extraInc } as any,
-            makerCodeSnapshot: (item as any).makerCodeSnapshot ?? sku.makerCode ?? null,
-            nameSnapshot: (item as any).nameSnapshot ?? sku.name ?? null,
-          } as any,
-          include: { sku: true } as any,
-        } as any);
-
-        await maybeMarkDone();
-        return {
-          ok: true,
-          status: 'SHORTAGE',
-          pickResult: 'SHORTAGE_TO_RET01',
-          usedLocationCode: 'RET-01',
-          extra: { used: extraInc, approved: extraApproved, picked: extraPicked + extraInc, remaining: Math.max(0, extraApproved - (extraPicked + extraInc)) },
-          sku: { id: sku.id, sku: (sku as any).sku ?? (sku as any).code ?? null, makerCode: (sku as any).makerCode ?? null, name: (sku as any).name ?? null },
-          picked: {
-            id: updatedItem.id,
-            jobId,
-            skuId: sku.id,
-            qtyPlanned: updatedItem.qtyPlanned,
-            qtyPicked: updatedItem.qtyPicked,
-            makerCodeSnapshot: updatedItem.makerCodeSnapshot,
-            nameSnapshot: updatedItem.nameSnapshot,
-            createdAt: updatedItem.createdAt,
-            updatedAt: updatedItem.updatedAt,
-          },
-          invTx: invTx ? { id: invTx.id } : null,
-        };
+        throw new ConflictException('RET-01 is return pool. Not allowed for outbound scan.');
       }
 
-
-
       if (!useLocationId) {
-        // locationCode 미입력(RF): 전산재고가 있는 로케이션 중 qty가 가장 큰 곳 자동 선택
-        let groups: any[] = [];
-        try {
-          groups = await (tx.inventoryTx as any).groupBy({
-            by: ['locationId'],
-            where: { skuId: sku.id, isForced: false } as any,
-            _sum: { qty: true },
-          });
-        } catch {
-          groups = [];
-        }
+        const invs = await tx.inventory.findMany({
+          where: { skuId: sku.id } as any,
+          include: { location: true } as any,
+          orderBy: [{ location: { code: 'asc' } }] as any,
+        } as any);
 
-        // JS에서 정렬/필터
-        const candidates = (groups || [])
-          .map((g: any) => ({ locationId: g.locationId, qty: Number(g._sum?.qty ?? 0) }))
-          .filter((g: any) => g.locationId && g.qty > 0)
-          .sort((a: any, b: any) => b.qty - a.qty);
-
-        const best = candidates[0];
-        if (!best) {
-          // 재고가 어디에도 없을 때:
-          // - force/allowOverpick 이면: '알 수 없는 출고 버킷'으로 RET-01을 사용(음수 허용)
-          // - 아니면: 재고 부족으로 차단
-          if (force || allowOverpick) {
-            const fallback = await tx.location.findFirst({ where: { code: 'RET-01' } as any } as any);
-            if (!fallback) throw new NotFoundException('RET-01 location not found');
-            useLocationId = fallback.id;
-            useLocationCode = fallback.code;
-          } else {
-            throw new ConflictException(`Insufficient stock. total=0, requested=${qty}`);
+        if (!invs || invs.length === 0) {
+          // ✅ SKU가 어느 location에도 없음 → 프론트에 확인 요청
+          if (!force) {
+            return {
+              ok: false,
+              status: 'NEED_FORCE_OUT',
+              reason: 'NO_LOCATION',
+              message: '해당 SKU는 어느 로케이션에도 재고가 없습니다. UNASSIGNED로 강제 출고할까요?',
+              sku: { id: sku.id, sku: (sku as any).sku ?? (sku as any).code ?? null, makerCode: (sku as any).makerCode ?? null, name: (sku as any).name ?? null },
+              jobItemId: item.id,
+            } as any;
           }
-        } else {
-          useLocationId = best.locationId;
-        }
 
-        if (useLocationId) {
-          const locRow = await tx.location.findUnique({ where: { id: useLocationId } as any } as any);
-          useLocationCode = locRow?.code ?? null;
+          // ✅ force=true → UNASSIGNED로 강제 출고
+          const unassigned = await tx.location.findFirst({ where: { code: 'UNASSIGNED' } as any } as any);
+          if (!unassigned) throw new NotFoundException('UNASSIGNED location not found');
+          useLocationId = unassigned.id;
+          useLocationCode = unassigned.code;
+        } else {
+          // ✅ 고정 우선순위 1개 선택
+          useLocationId = invs[0].locationId;
+          useLocationCode = (invs[0] as any).location?.code ?? null;
         }
       }
 

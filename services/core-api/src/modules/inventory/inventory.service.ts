@@ -10,332 +10,222 @@ export class InventoryService {
   private norm(v: any): string {
     return String(v ?? '').trim();
   }
+
   private normUpper(v: any): string {
     return this.norm(v).toUpperCase();
   }
-  private clampLimit(n: number, min: number, max: number) {
-    const x = Number(n);
-    if (!Number.isFinite(x)) return min;
-    return Math.max(min, Math.min(max, Math.floor(x)));
+
+  private clampLimit(v: number, min: number, max: number) {
+    const n = Number(v);
+    if (!Number.isFinite(n)) return min;
+    return Math.max(min, Math.min(max, n));
   }
 
-  /* -------------------- Store(HQ) -------------------- */
+  private async resolveSku(params: { skuCode: string }) {
+    const skuCode = this.normUpper(params.skuCode);
+    if (!skuCode) throw new BadRequestException('skuCode is required');
 
-  private async getHqStore() {
-    const store = await this.prisma.store.findFirst({
-      where: { code: 'HQ' },
-      select: { id: true, code: true },
+    const sku = await this.prisma.sku.findFirst({
+      where: { sku: skuCode } as any,
+      select: { id: true, sku: true, makerCode: true, name: true } as any,
+    } as any);
+
+    if (!sku) throw new NotFoundException(`SKU not found: ${skuCode}`);
+    return sku as any;
+  }
+
+  private async resolveOrCreateLocationByCode(code: string) {
+    const locationCode = this.norm(code);
+    if (!locationCode) throw new BadRequestException('locationCode is required');
+
+    const loc = await this.prisma.location.upsert({
+      where: { storeId_code: { storeId: 0, code: locationCode } } as any,
+      update: {} as any,
+      create: { storeId: 0, code: locationCode } as any,
+      select: { id: true, code: true } as any,
+    } as any);
+
+    return loc as any;
+  }
+
+  async getOnHand(skuId: string, locationId: string) {
+    const inv = await this.prisma.inventory.findUnique({
+      where: { skuId_locationId: { skuId, locationId } },
+      select: { qty: true },
     });
-    if (!store) throw new NotFoundException('HQ Store not found. (Store.code="HQ")');
-    return store;
-  }
 
-  /* -------------------- SKU -------------------- */
+    if (inv) return Number(inv.qty ?? 0);
 
-  private async resolveSku(input: { skuCode?: string | null; makerCode?: string | null; name?: string | null }) {
-    const code = this.normUpper(input.skuCode);
-    const makerCode = this.norm(input.makerCode);
-    const name = this.norm(input.name);
-
-    // 1) skuCode 우선
-    if (code) {
-      const found = await this.prisma.sku.findUnique({ where: { sku: code } });
-      if (found) {
-        // 선택: 들어온 makerCode/name이 있으면 보강 업데이트
-        const data: any = {};
-        if (makerCode && !found.makerCode) data.makerCode = makerCode;
-        if (name && !found.name) data.name = name;
-        if (Object.keys(data).length) {
-          await this.prisma.sku.update({ where: { id: found.id }, data });
-        }
-        return found;
-      }
-    }
-
-    // 2) makerCode로 찾기
-    if (makerCode) {
-      const found = await this.prisma.sku.findFirst({
-        where: { makerCode },
-        orderBy: { id: 'desc' } as any,
-      });
-      if (found) {
-        // skuCode가 있으면 sku 필드도 보강(중복만 아니면)
-        if (code && found.sku !== code) {
-          // sku는 unique라 충돌나면 그냥 무시
-          try {
-            await this.prisma.sku.update({ where: { id: found.id }, data: { sku: code } as any });
-          } catch {}
-        }
-        if (name && !found.name) {
-          await this.prisma.sku.update({ where: { id: found.id }, data: { name } });
-        }
-        return found;
-      }
-    }
-
-    // 3) 없으면 생성 (skuCode가 없으면 생성 불가)
-    if (!code) throw new BadRequestException('skuCode is required to create sku');
-
-    return this.prisma.sku.create({
-      data: { sku: code, makerCode: makerCode || null, name: name || null } as any,
+    // fallback (초기/예외용)
+    const agg = await this.prisma.inventoryTx.aggregate({
+      where: { skuId, locationId },
+      _sum: { qty: true },
     });
+
+    return Number((agg as any)?._sum?.qty ?? 0);
   }
 
-  /* -------------------- Location (HQ) -------------------- */
+  private async applyInventoryTx(params: {
+    skuId: string;
+    locationId: string;
+    qty: number;
+    type: 'in' | 'out' | 'set';
+    memo?: string;
+    isForced?: boolean;
+  }) {
+    const { skuId, locationId, qty, type } = params;
+    const memo = this.norm(params.memo ?? '');
+    const isForced = Boolean(params.isForced);
 
-  private async resolveOrCreateLocationByCode(codeRaw: any) {
-    const code = this.norm(codeRaw);
-    if (!code) throw new BadRequestException('locationCode is required');
-    const hq = await this.getHqStore();
+    // ✅ inventory upsert
+    const inv = await this.prisma.inventory.upsert({
+      where: { skuId_locationId: { skuId, locationId } },
+      create: { skuId, locationId, qty } as any,
+      update: { qty: { increment: qty } } as any,
+      select: { qty: true } as any,
+    } as any);
 
-    const found = await this.prisma.location.findFirst({
-      where: { storeId: hq.id, code },
-      select: { id: true, code: true },
-    });
-    if (found) return found;
+    const afterQty = Number((inv as any)?.qty ?? 0);
+    const beforeQty = afterQty - Number(qty ?? 0);
 
-    return this.prisma.location.create({
-      data: { storeId: hq.id, code } as any,
-      select: { id: true, code: true },
-    });
+    // ✅ tx insert
+    await this.prisma.inventoryTx.create({
+      data: {
+        skuId,
+        locationId,
+        qty,
+        type,
+        memo: memo || null,
+        beforeQty,
+        afterQty,
+        isForced,
+      } as any,
+    } as any);
+
+    return { beforeQty, afterQty };
   }
 
-   // ✅ onHand는 Inventory.qty를 기준으로 (없으면 Tx 합산 fallback)
-  private async getOnHand(skuId: string, locationId: string) {
-  const inv = await this.prisma.inventory.findUnique({
-    where: { skuId_locationId: { skuId, locationId } },
-    select: { qty: true },
-  });
-
-  if (inv) return Number(inv.qty ?? 0);
-
-  // fallback (초기/예외용)
-  const agg = await this.prisma.inventoryTx.aggregate({
-    where: { skuId, locationId, isForced: false },
-    _sum: { qty: true },
-  });
-  return Number(agg._sum.qty ?? 0);
-  }
-
-  /* =========================================================
-   * Inbound (IN)
-   * ========================================================= */
-
-  async in(dto: InventoryInDto) {
-    const skuCode = this.normUpper((dto as any).skuCode);
-    const locationCode = this.norm((dto as any).locationCode);
-    const qty = Number((dto as any).qty);
+  // ✅ 창고입고 (IN)
+  async inbound(dto: InventoryInDto) {
+    const skuCode = this.normUpper((dto as any).skuCode || (dto as any).sku);
+    const qty = Number((dto as any).qty ?? 0);
+    const locationCode = this.norm((dto as any).locationCode || (dto as any).location);
 
     if (!skuCode) throw new BadRequestException('skuCode is required');
-    if (!locationCode) throw new BadRequestException('locationCode is required');
     if (!Number.isFinite(qty) || qty <= 0) throw new BadRequestException('qty must be > 0');
+    if (!locationCode) throw new BadRequestException('locationCode is required');
 
-    const sku = await this.resolveSku({
-      skuCode,
-      makerCode: (dto as any).makerCode ?? null,
-      name: (dto as any).name ?? null,
-    });
-
+    const sku = await this.resolveSku({ skuCode });
     const loc = await this.resolveOrCreateLocationByCode(locationCode);
 
-    const beforeQty = await this.getOnHand(sku.id, loc.id);
-
-    const inv = await this.prisma.$transaction(async (tx) => {
-  await tx.inventoryTx.create({
-    data: {
+    const { beforeQty, afterQty } = await this.applyInventoryTx({
       skuId: sku.id,
       locationId: loc.id,
       qty,
       type: 'in',
+      memo: (dto as any).memo,
       isForced: false,
-      beforeQty,
-      afterQty: beforeQty + qty,
-    } as any,
-  });
-
-  const invRow = await tx.inventory.upsert({
-    where: {
-      skuId_locationId: {
-        skuId: sku.id,
-        locationId: loc.id,
-      },
-    },
-    update: {
-      qty: { increment: qty },
-    },
-    create: {
-      skuId: sku.id,
-      locationId: loc.id,
-      qty,
-    },
-  });
-
-  return invRow; // ✅ 여기!
-});
-
-// ✅ 확정 로그 (잠깐만)
-console.log('[INBOUND] skuId=', sku.id, 'locId=', loc.id, 'delta=', qty, 'inventoryQty=', inv.qty);
-
-return { ok: true, skuCode, locationCode, changed: qty, onHand: inv.qty };
-
-  }
-
-  /* =========================================================
-   * Bulk / Reset helpers (기존 로직 유지 + onHand는 forced 제외)
-   * ========================================================= */
-
-  async resetLocationsToZero(params: { locationCodes: string[] }) {
-    const locationCodes = (params.locationCodes ?? []).map((x) => this.norm(x)).filter(Boolean);
-    if (!locationCodes.length) throw new BadRequestException('locationCodes is required');
-
-    const hq = await this.getHqStore();
-    const locations = await this.prisma.location.findMany({
-      where: { storeId: hq.id, code: { in: locationCodes } },
-      select: { id: true, code: true },
     });
 
-    let touchedSkus = 0;
-
-    for (const loc of locations) {
-      const groups = await this.prisma.inventoryTx.groupBy({
-        by: ['skuId'],
-        where: { locationId: loc.id, isForced: false },
-        _sum: { qty: true },
-      });
-
-      for (const g of groups) {
-        const onHand = Number(g._sum.qty ?? 0);
-        if (!onHand) continue;
-
-        // 0으로 만들기 위해 -onHand 만큼 조정 tx 추가 (forced 제외)
-        await this.prisma.inventoryTx.create({
-          data: {
-            skuId: g.skuId,
-            locationId: loc.id,
-            qty: -onHand,
-            type: 'adjust',
-            isForced: false,
-            beforeQty: onHand,
-            afterQty: 0,
-          } as any,
-        });
-
-        touchedSkus += 1;
-      }
-    }
-
-    return { ok: true, locations: locations.length, touchedSkus };
+    return {
+      ok: true,
+      sku: { id: sku.id, sku: sku.sku, makerCode: sku.makerCode, name: sku.name },
+      location: { id: loc.id, code: loc.code },
+      qty,
+      beforeQty,
+      afterQty,
+    };
   }
 
-  /* =========================================================
-   * Outbound (OUT) + FORCE
-   * ========================================================= */
-
+  // ✅ 창고출고 (OUT) — 강제출고 옵션 포함
   async out(dto: InventoryOutDto) {
-    const skuCode = this.normUpper((dto as any).skuCode);
-    const locationCode = this.norm((dto as any).locationCode);
-    const qty = Number((dto as any).qty);
+    const skuCode = this.normUpper((dto as any).skuCode || (dto as any).sku);
+    const qty = Number((dto as any).qty ?? 0);
+    const locationCode = this.norm((dto as any).locationCode || (dto as any).location);
+    const force = Boolean((dto as any).force);
+    const forceReason = this.norm((dto as any).forceReason || (dto as any).memo || '');
 
     if (!skuCode) throw new BadRequestException('skuCode is required');
-    if (!locationCode) throw new BadRequestException('locationCode is required');
     if (!Number.isFinite(qty) || qty <= 0) throw new BadRequestException('qty must be > 0');
+    if (!locationCode) throw new BadRequestException('locationCode is required');
 
-    const sku = await this.resolveSku({
-      skuCode,
-      makerCode: (dto as any).makerCode ?? null,
-      name: (dto as any).name ?? null,
-    });
-
+    const sku = await this.resolveSku({ skuCode });
     const loc = await this.resolveOrCreateLocationByCode(locationCode);
 
-    // 현재 전산 재고(강제 출고 제외)
-    const beforeQty = await this.getOnHand(sku.id, loc.id);
-
-    // 재고가 충분하면 정상 출고 (전산 재고 차감)
-    if (beforeQty >= qty) {
-      await this.prisma.inventoryTx.create({
-        data: {
-          skuId: sku.id,
-          locationId: loc.id,
-          qty: -qty,
-          type: 'out',
-          isForced: false,
-          beforeQty,
-          afterQty: beforeQty - qty,
-        } as any,
-      });
-
-      const onHand = await this.getOnHand(sku.id, loc.id);
-      return { ok: true, skuCode, locationCode, changed: -qty, onHand, isForced: false };
+    const onHand = await this.getOnHand(sku.id, loc.id);
+    if (!force && onHand < qty) {
+      throw new BadRequestException(`not enough onHand. onHand=${onHand}, requested=${qty}`);
     }
 
-    // 재고 부족 → 강제 출고(전산 재고 0 유지) 옵션
-    const force = Boolean((dto as any).force);
-    const forceReason = this.norm((dto as any).forceReason);
-
-    if (!force) {
-      throw new BadRequestException(`재고 부족: onHand=${beforeQty}, 요청=${qty}`);
-    }
-
-    // ✅ 강제 출고: tx는 남기되, getOnHand 계산에서는 제외(isForced=true)
-    await this.prisma.inventoryTx.create({
-      data: {
-        skuId: sku.id,
-        locationId: loc.id,
-        qty: -qty, // 로그용(-qty)으로 남기고, onHand 계산에서는 제외
-        type: 'out',
-        isForced: true,
-        forcedReason: forceReason || 'FORCED_OUT',
-        beforeQty,
-        afterQty: beforeQty, // 전산 재고는 그대로(0 유지)
-      } as any,
+    const { beforeQty, afterQty } = await this.applyInventoryTx({
+      skuId: sku.id,
+      locationId: loc.id,
+      qty: -Math.abs(qty),
+      type: 'out',
+      memo: force ? (forceReason || 'forced out') : (dto as any).memo,
+      isForced: force,
     });
 
-    const onHand = await this.getOnHand(sku.id, loc.id);
-    return { ok: true, skuCode, locationCode, changed: 0, forcedQty: qty, onHand, isForced: true };
+    return {
+      ok: true,
+      sku: { id: sku.id, sku: sku.sku, makerCode: sku.makerCode, name: sku.name },
+      location: { id: loc.id, code: loc.code },
+      qty: -Math.abs(qty),
+      beforeQty,
+      afterQty,
+      forced: force,
+    };
   }
 
-  /* =========================================================
-   * Queries
-   * ========================================================= */
-
+  // ✅ 트랜잭션 목록 (감사용)
   async listTx(params: { q?: string; limit?: number }) {
     const q = this.norm(params.q ?? '');
-    const take = this.clampLimit(params.limit ?? 200, 1, 1000);
+    const take = this.clampLimit(params.limit ?? 200, 1, 2000);
+
+    const where: any = {};
+
+    if (q) {
+      where.OR = [
+        { sku: { sku: { contains: q, mode: 'insensitive' } } as any },
+        { sku: { makerCode: { contains: q, mode: 'insensitive' } } as any },
+        { location: { code: { contains: q, mode: 'insensitive' } } as any },
+        { memo: { contains: q, mode: 'insensitive' } } as any,
+      ];
+    }
 
     return this.prisma.inventoryTx.findMany({
-      where: q
-        ? {
-            OR: [
-              { sku: { sku: { contains: q, mode: 'insensitive' } } as any },
-              { sku: { makerCode: { contains: q, mode: 'insensitive' } } as any },
-              { location: { code: { contains: q, mode: 'insensitive' } } as any },
-            ],
-          }
-        : undefined,
-      orderBy: { createdAt: 'desc' } as any,
+      where,
       take,
+      orderBy: { createdAt: 'desc' } as any,
       select: {
         id: true,
+        skuId: true,
+        locationId: true,
         qty: true,
         type: true,
+        memo: true,
         isForced: true,
-        forcedReason: true,
         beforeQty: true,
         afterQty: true,
         createdAt: true,
         sku: { select: { sku: true, makerCode: true, name: true } },
         location: { select: { code: true } },
       },
-    });
+    } as any);
   }
 
-  async summary(params: { q?: string; limit?: number }) {
+  /**
+   * 창고재고(요약) — SKU + Location 단위 현재고.
+   * - 기본: 강제출고(isForced) 포함 (현장/실재고 관점에서 음수도 보여야 함)
+   * - 필요하면 excludeForced=true 로 제외 가능
+   */
+  async summary(params: { q?: string; limit?: number; excludeForced?: boolean }) {
     const q = this.norm(params.q ?? '');
     const take = this.clampLimit(params.limit ?? 200, 1, 2000);
+    const excludeForced = Boolean((params as any).excludeForced);
 
-    // ✅ summary/onHand는 강제출고 제외
-    const where: any = { isForced: false };
+    const where: any = {};
+    if (excludeForced) where.isForced = false;
 
     if (q) {
       where.OR = [
@@ -345,51 +235,56 @@ return { ok: true, skuCode, locationCode, changed: qty, onHand: inv.qty };
       ];
     }
 
-    const list = await this.prisma.inventoryTx.findMany({
+    // ✅ DB에서 직접 집계 (JS에서 tx를 더하지 않음)
+    const grouped = await (this.prisma.inventoryTx as any).groupBy({
+      by: ['skuId', 'locationId'],
       where,
-      take,
-      select: {
-        qty: true,
-        skuId: true,
-        locationId: true,
-        sku: { select: { sku: true, makerCode: true, name: true } },
-        location: { select: { code: true } },
-      },
+      _sum: { qty: true },
     });
 
-    const map = new Map<string, any>();
-    for (const r of list as any[]) {
-      const key = `${r.skuId}:${r.locationId}`;
-      const cur = map.get(key) || {
-        skuCode: r.sku?.sku,
-        makerCode: r.sku?.makerCode ?? null,
-        name: r.sku?.name ?? null,
-        locationCode: r.location?.code,
-        onHand: 0,
-      };
-      cur.onHand += Number(r.qty ?? 0);
-      map.set(key, cur);
-    }
+    const skuIds = Array.from(new Set(grouped.map((r: any) => r.skuId).filter(Boolean)));
+    const locationIds = Array.from(new Set(grouped.map((r: any) => r.locationId).filter(Boolean)));
 
-    return Array.from(map.values()).sort((a, b) => String(a.skuCode).localeCompare(String(b.skuCode)));
+    const [skus, locations] = await Promise.all([
+      this.prisma.sku.findMany({
+        where: { id: { in: skuIds } as any } as any,
+        select: { id: true, sku: true, makerCode: true, name: true } as any,
+      } as any),
+      this.prisma.location.findMany({
+        where: { id: { in: locationIds } as any } as any,
+        select: { id: true, code: true } as any,
+      } as any),
+    ]);
+
+    const skuMap = new Map<string, any>(skus.map((s: any) => [String(s.id), s]));
+    const locMap = new Map<string, any>(locations.map((l: any) => [String(l.id), l]));
+
+    const rows = grouped
+      .map((r: any) => {
+        const s = skuMap.get(String(r.skuId));
+        const l = locMap.get(String(r.locationId));
+        const onHand = Number(r?._sum?.qty ?? 0);
+        return {
+          skuCode: s?.sku ?? null,
+          makerCode: s?.makerCode ?? null,
+          name: s?.name ?? null,
+          locationCode: l?.code ?? null,
+          onHand,
+        };
+      })
+      // sku/location이 깨진 레코드 방어
+      .filter((x: any) => x.skuCode && x.locationCode);
+
+    rows.sort((a: any, b: any) => {
+      // 기존과 동일하게 skuCode 기준 정렬 유지 (+ locationCode)
+      const c = String(a.skuCode).localeCompare(String(b.skuCode));
+      if (c !== 0) return c;
+      return String(a.locationCode).localeCompare(String(b.locationCode));
+    });
+
+    return rows.slice(0, take);
   }
 
-    // =========================
-  // Backward-compatible aliases
-  // (기존 모듈들이 쓰던 메서드명 유지용)
-  // =========================
-
-  // 기존 imports/hq-inventory.service.ts에서 호출
-  async resetLocationsToZeroByCodes(params: { locationCodes: string[] }) {
-    return this.resetLocationsToZero(params);
-  }
-
-  // 기존 inventory.controller.ts에서 호출
-  async inbound(dto: InventoryInDto) {
-    return this.in(dto);
-  }
-
-  // 기존 inventory.controller.ts에서 호출
   async onHandByCodes(params: { skuCode: string; locationCode: string }) {
     const skuCode = this.normUpper(params.skuCode);
     const locationCode = this.norm(params.locationCode);
@@ -403,63 +298,4 @@ return { ok: true, skuCode, locationCode, changed: qty, onHand: inv.qty };
     const onHand = await this.getOnHand(sku.id, loc.id);
     return { ok: true, skuCode, locationCode, onHand };
   }
-
-  // 기존 imports/hq-inventory.service.ts에서 호출
-  // "절대 수량으로 세팅" (전산 재고를 qty로 맞춤)
-  async setQuantity(params: {
-    skuCode: string;
-    locationCode: string;
-    qty: number;
-    makerCode?: string | null;
-    name?: string | null;
-    reason?: string | null;
-  }) {
-    const skuCode = this.normUpper(params.skuCode);
-    const locationCode = this.norm(params.locationCode);
-    const targetQty = Number(params.qty);
-
-    if (!skuCode) throw new BadRequestException('skuCode is required');
-    if (!locationCode) throw new BadRequestException('locationCode is required');
-    if (!Number.isFinite(targetQty) || targetQty < 0) {
-      throw new BadRequestException('qty must be >= 0');
-    }
-
-    const sku = await this.resolveSku({
-      skuCode,
-      makerCode: params.makerCode ?? null,
-      name: params.name ?? null,
-    });
-
-    const loc = await this.resolveOrCreateLocationByCode(locationCode);
-
-    // 현재 전산 재고(강제출고 제외)
-    const beforeQty = await this.getOnHand(sku.id, loc.id);
-
-    // 이미 같은 값이면 아무것도 안 함
-    if (beforeQty === targetQty) {
-      return { ok: true, skuCode, locationCode, changed: 0, onHand: beforeQty };
-    }
-
-    const diff = targetQty - beforeQty; // +면 증가, -면 감소
-
-    // adjust 트랜잭션으로 절대수량 맞추기 (forced 제외)
-    await this.prisma.inventoryTx.create({
-      data: {
-        skuId: sku.id,
-        locationId: loc.id,
-        qty: diff,
-        type: 'adjust',
-        isForced: false,
-        forcedReason: null,
-        beforeQty,
-        afterQty: targetQty,
-      } as any,
-    });
-
-    const onHand = await this.getOnHand(sku.id, loc.id);
-    return { ok: true, skuCode, locationCode, changed: diff, onHand };
-  }
-
-
-
 }
