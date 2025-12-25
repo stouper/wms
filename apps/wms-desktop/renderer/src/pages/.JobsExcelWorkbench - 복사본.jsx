@@ -5,13 +5,25 @@ import { safeReadJson, safeReadLocal, safeWriteJson, safeWriteLocal } from "../l
 import { parseJobFileToRows } from "../lib/parseJobFile";
 import { inputStyle, primaryBtn } from "../ui/styles";
 import { Th, Td } from "../components/TableParts";
+import { storeShipMode, whInboundMode, parcelShipMode } from "../workflows/jobsExcel";
 
 const DEFAULT_RETURN_LOCATION = "RET-01";
+
+const MODE_BY_PAGEKEY = {
+  storeShip: storeShipMode,
+  whInbound: whInboundMode,
+  parcelShip: parcelShipMode,
+};
+
+function getMode(pageKey) {
+  return MODE_BY_PAGEKEY[pageKey] || storeShipMode;
+}
 
 export default function JobsExcelWorkbench({ pageTitle, defaultStoreCode = "", pageKey }) {
   const { push, ToastHost } = useToasts();
   const apiBase = getApiBase();
-
+  const mode = getMode(pageKey);
+   
   const [loading, setLoading] = useState(false);
   const [preview, setPreview] = useState(null); // {fileType, jobKind, mixedKinds, rows, sample, fileName}
 
@@ -32,7 +44,7 @@ export default function JobsExcelWorkbench({ pageTitle, defaultStoreCode = "", p
   const [approvingExtra, setApprovingExtra] = useState(false);
 
   // ✅ 반품입고(whInbound)는 기본 로케이션 RET-01 자동 세팅
-  const [scanLoc, setScanLoc] = useState(() => (pageKey === "whInbound" ? DEFAULT_RETURN_LOCATION : ""));
+  const [scanLoc, setScanLoc] = useState(() => mode.defaultLocationCode || "");
 
   const scanRef = useRef(null);
   const fileRef = useRef(null);
@@ -43,10 +55,13 @@ export default function JobsExcelWorkbench({ pageTitle, defaultStoreCode = "", p
 
   // pageKey가 바뀌면 loc 기본값도 같이 반영
   useEffect(() => {
-    if (pageKey === "whInbound") setScanLoc((prev) => prev || DEFAULT_RETURN_LOCATION);
-    else setScanLoc("");
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [pageKey]);
+  if (mode.defaultLocationCode) {
+    setScanLoc((prev) => prev || mode.defaultLocationCode);
+  } else {
+    setScanLoc("");
+  }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+}, [mode.key]);
 
   // ---------- file upload ----------
   async function onPickFile(file) {
@@ -405,7 +420,7 @@ export default function JobsExcelWorkbench({ pageTitle, defaultStoreCode = "", p
       <ToastHost />
 
       <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 12, flexWrap: "wrap" }}>
-        <h1 style={{ margin: 0 }}>{pageTitle}</h1>
+        <h1 style={{ margin: 0 }}>{pageTitle || mode.title}</h1>
 
         <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
           <button type="button" style={primaryBtn} onClick={() => fileRef.current?.click?.()} disabled={loading}>

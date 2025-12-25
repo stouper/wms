@@ -1,10 +1,14 @@
 import React, { useMemo, useState } from "react";
 import { layoutStyle, asideStyle, mainStyle, navBtnStyle } from "./ui/styles";
-
 import DashboardPage from "./pages/DashboardPage";
 import InventoryPage from "./pages/InventoryPage";
 import EmptyPage from "./pages/EmptyPage";
-import JobsExcelWorkbench from "./pages/JobsExcelWorkbench";
+
+// ✅ 이제 Workbench를 App에서 직접 호출하지 않는다.
+// ✅ 메뉴별 전용 Page로 분리 (창고입고/매장출고)
+import WarehouseInboundPage from "./pages/WarehouseInboundPage";
+import StoreOutboundPage from "./pages/StoreOutboundPage";
+import ParcelRequestPage from "./pages/ParcelRequestPage";
 
 const MENUS = [
   { key: "dashboard", label: "데쉬보드" },
@@ -15,18 +19,9 @@ const MENUS = [
   { key: "delivery", label: "택배 출고" },
 ];
 
-function WarehouseInboundPage() {
-  // ✅ 창고 입고(반품): 동일 Workbench 재사용
-  return <JobsExcelWorkbench pageKey="whInbound" pageTitle="창고 입고(반품)" defaultStoreCode="" />;
-}
 function WarehouseOutboundPage() {
+  // TODO: 창고 출고 전용 페이지 만들 때 여기 교체
   return <EmptyPage title="창고 출고" />;
-}
-function DeliveryOutboundPage() {
-  return <EmptyPage title="택배 출고" />;
-}
-function StoreOutboundPage() {
-  return <JobsExcelWorkbench pageKey="storeShip" pageTitle="매장 출고" defaultStoreCode="" />;
 }
 
 export default function App() {
@@ -42,10 +37,10 @@ export default function App() {
         return WarehouseInboundPage;
       case "whOutbound":
         return WarehouseOutboundPage;
-      case "delivery":
-        return DeliveryOutboundPage;
       case "storeShip":
         return StoreOutboundPage;
+      case "delivery":
+        return ParcelRequestPage;
       default:
         return () => <EmptyPage title="페이지 없음" />;
     }
@@ -55,9 +50,15 @@ export default function App() {
     <div style={layoutStyle}>
       <aside style={asideStyle}>
         <div style={{ fontWeight: 800, marginBottom: 12 }}>ESKA WMS Desktop</div>
+
         <nav>
           {MENUS.map((m) => (
-            <button key={m.key} onClick={() => setActiveKey(m.key)} style={navBtnStyle(activeKey === m.key)} type="button">
+            <button
+              key={m.key}
+              onClick={() => setActiveKey(m.key)}
+              style={navBtnStyle(activeKey === m.key)}
+              type="button"
+            >
               {m.label}
             </button>
           ))}
