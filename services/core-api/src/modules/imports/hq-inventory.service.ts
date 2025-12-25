@@ -1,59 +1,193 @@
 import { Injectable, BadRequestException } from '@nestjs/common';
-import { InventoryService } from '../inventory/inventory.service';
+import { PrismaService } from '../../prisma/prisma.service';
+
+type HqRow = {
+  sku: string;
+  qty: number;
+  location?: string;
+  makerCode?: string;
+  name?: string;
+};
 
 @Injectable()
 export class HqInventoryService {
-  constructor(private readonly inventory: InventoryService) {}
+  constructor(private readonly prisma: PrismaService) {}
 
-  async replaceAll(
-    rows: Array<{ sku: string; qty: number; location?: string; makerCode?: string; name?: string }>,
-    opts?: { warehouseLocationCode?: string },
-  ) {
-    if (!rows || rows.length === 0) {
-      throw new BadRequestException('replaceAll: rows is empty');
-    }
+  private normUpper(v: any) {
+    return String(v ?? '').trim().toUpperCase();
+  }
 
-    const fallbackLoc = String(opts?.warehouseLocationCode ?? '').trim();
+  private async getOrCreateHqStore() {
+    // Store.code는 @unique (스키마 기준)
+    const HQ_CODE = 'HQ';
+    const store =
+      (await this.prisma.store.findUnique({ where: { code: HQ_CODE } })) ??
+      (await this.prisma.store.create({ data: { code: HQ_CODE, name: 'HQ' } as any }));
+    return store;
+  }
 
-    const locCodes = rows
-      .map((r) => String(r?.location ?? '').trim() || fallbackLoc)
-      .filter((c) => !!c);
+  /**
+   * HQ 재고 업로드 (REPLACE ALL)
+   * - HQ store에 귀속된 location만 사용
+   * - Inventory.qty = 엑셀 최종 수량 (SET)
+   * - InventoryTx에는 delta만 기록
+   */
+  async replaceAll(rows: HqRow[], opts?: { warehouseLocationCode?: string }) {
+    if (!rows?.length) throw new BadRequestException('replaceAll: rows is empty');
 
-    const uniqLocCodes = Array.from(new Set(locCodes));
-    if (uniqLocCodes.length === 0) {
-      throw new BadRequestException('replaceAll: location codes not found (규격 컬럼 확인)');
-    }
+    const fallbackLoc = this.normUpper(opts?.warehouseLocationCode);
+    if (!fallbackLoc) throw new BadRequestException('replaceAll: warehouseLocationCode is required');
 
-    // ✅ 1) 엑셀에 등장한 로케이션들 전부 초기화
-    await this.inventory.resetLocationsToZeroByCodes({
-      locationCodes: uniqLocCodes,
-    });
+    // ✅ HQ store 확보
+    const hqStore = await this.getOrCreateHqStore();
 
-    // ✅ 2) set
-    let applied = 0;
+    /**
+     * 1) location + sku 기준으로 rows 합산
+     */
+    const byLoc = new Map<string, Map<string, { qty: number; makerCode?: string; name?: string }>>();
+
     for (const r of rows) {
-      const sku = String(r?.sku ?? '').trim();
+      const sku = this.normUpper(r.sku);
+      const loc = this.normUpper(r.location) || fallbackLoc;
+      const qty = Number(r.qty ?? 0);
+
       if (!sku) continue;
+      if (!loc) continue;
+      if (!Number.isFinite(qty) || qty < 0) continue;
 
-      const location = String(r?.location ?? '').trim() || fallbackLoc;
-      if (!location) {
-        throw new BadRequestException(`row location missing for sku=${sku} (규격 컬럼 확인)`);
+      if (!byLoc.has(loc)) byLoc.set(loc, new Map());
+      const skuMap = byLoc.get(loc)!;
+
+      const prev = skuMap.get(sku);
+      if (!prev) {
+        skuMap.set(sku, { qty, makerCode: r.makerCode, name: r.name });
+      } else {
+        skuMap.set(sku, {
+          qty: prev.qty + qty,
+          makerCode: prev.makerCode ?? r.makerCode,
+          name: prev.name ?? r.name,
+        });
       }
+    }
 
-      await this.inventory.setQuantity({
-        skuCode: sku,
-        qty: Number(r?.qty ?? 0),
-        locationCode: location,
-        makerCode: r?.makerCode ?? null,
-        name: r?.name ?? null,
+    const uniqLocCodes = Array.from(byLoc.keys());
+    let applied = 0;
+
+    /**
+     * 2) location 단위 처리
+     */
+    for (const locCode of uniqLocCodes) {
+      // ✅ Location은 storeId+code 유니크이므로 storeId_code로 upsert 가능
+      const loc = await this.prisma.location.upsert({
+        where: {
+          storeId_code: { storeId: hqStore.id, code: locCode },
+        },
+        update: {},
+        create: {
+          storeId: hqStore.id,
+          code: locCode,
+          name: null,
+        } as any,
       });
 
-      applied++;
+      const skuMap = byLoc.get(locCode)!;
+
+      await this.prisma.$transaction(async (tx) => {
+        /**
+         * (A) 기존 Inventory → 0으로 reset (HQ store의 해당 location만)
+         */
+        const existingInv = await tx.inventory.findMany({
+          where: { locationId: loc.id },
+          select: { skuId: true, qty: true },
+        });
+
+        for (const inv of existingInv) {
+          const beforeQty = Number(inv.qty ?? 0);
+          if (beforeQty === 0) continue;
+
+          await tx.inventoryTx.create({
+            data: {
+              skuId: inv.skuId,
+              locationId: loc.id,
+              qty: -beforeQty,
+              type: 'set',
+              isForced: false,
+              beforeQty,
+              afterQty: 0,
+            } as any,
+          });
+
+          await tx.inventory.update({
+            where: { skuId_locationId: { skuId: inv.skuId, locationId: loc.id } },
+            data: { qty: 0 },
+          });
+
+          applied++;
+        }
+
+        /**
+         * (B) 엑셀 기준 최종 수량 SET
+         */
+        for (const [skuCode, info] of skuMap.entries()) {
+          const targetQty = Number(info.qty ?? 0);
+          if (!Number.isFinite(targetQty) || targetQty < 0) continue;
+
+          // SKU 확보 (sku 필드가 unique가 아닐 수 있으니 findFirst→create 시도→재조회 안전)
+          let sku = await tx.sku.findFirst({ where: { sku: skuCode } as any });
+          if (!sku) {
+            try {
+              sku = await tx.sku.create({
+                data: {
+                  sku: skuCode,
+                  makerCode: info.makerCode ?? null,
+                  name: info.name ?? null,
+                } as any,
+              });
+            } catch (e) {
+              sku = await tx.sku.findFirst({ where: { sku: skuCode } as any });
+              if (!sku) throw e;
+            }
+          }
+
+          const curInv = await tx.inventory.findUnique({
+            where: { skuId_locationId: { skuId: sku.id, locationId: loc.id } },
+            select: { qty: true },
+          });
+
+          const beforeQty = Number(curInv?.qty ?? 0);
+          const delta = targetQty - beforeQty;
+
+          // Inventory 최종 수량 SET
+          await tx.inventory.upsert({
+            where: { skuId_locationId: { skuId: sku.id, locationId: loc.id } },
+            update: { qty: targetQty },
+            create: { skuId: sku.id, locationId: loc.id, qty: targetQty },
+          });
+
+          // Tx는 delta만 기록
+          if (delta !== 0) {
+            await tx.inventoryTx.create({
+              data: {
+                skuId: sku.id,
+                locationId: loc.id,
+                qty: delta,
+                type: 'set',
+                isForced: false,
+                beforeQty,
+                afterQty: targetQty,
+              } as any,
+            });
+          }
+
+          applied++;
+        }
+      });
     }
 
     return {
       ok: true,
-      mode: 'REPLACE_ALL_MULTI_LOCATION',
+      mode: 'HQ_REPLACE_ALL_SET',
+      storeCode: hqStore.code,
       locations: uniqLocCodes.length,
       applied,
       inputRows: rows.length,

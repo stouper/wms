@@ -100,15 +100,21 @@ export class InventoryService {
     });
   }
 
-  /* -------------------- OnHand -------------------- */
-
-  // ✅ 전산 재고는 "강제출고(isForced=true)" 트랜잭션을 제외하고 계산
+   // ✅ onHand는 Inventory.qty를 기준으로 (없으면 Tx 합산 fallback)
   private async getOnHand(skuId: string, locationId: string) {
-    const agg = await this.prisma.inventoryTx.aggregate({
-      where: { skuId, locationId, isForced: false },
-      _sum: { qty: true },
-    });
-    return Number(agg._sum.qty ?? 0);
+  const inv = await this.prisma.inventory.findUnique({
+    where: { skuId_locationId: { skuId, locationId } },
+    select: { qty: true },
+  });
+
+  if (inv) return Number(inv.qty ?? 0);
+
+  // fallback (초기/예외용)
+  const agg = await this.prisma.inventoryTx.aggregate({
+    where: { skuId, locationId, isForced: false },
+    _sum: { qty: true },
+  });
+  return Number(agg._sum.qty ?? 0);
   }
 
   /* =========================================================
@@ -134,20 +140,44 @@ export class InventoryService {
 
     const beforeQty = await this.getOnHand(sku.id, loc.id);
 
-    await this.prisma.inventoryTx.create({
-      data: {
+    const inv = await this.prisma.$transaction(async (tx) => {
+  await tx.inventoryTx.create({
+    data: {
+      skuId: sku.id,
+      locationId: loc.id,
+      qty,
+      type: 'in',
+      isForced: false,
+      beforeQty,
+      afterQty: beforeQty + qty,
+    } as any,
+  });
+
+  const invRow = await tx.inventory.upsert({
+    where: {
+      skuId_locationId: {
         skuId: sku.id,
         locationId: loc.id,
-        qty,
-        type: 'in',
-        isForced: false,
-        beforeQty,
-        afterQty: beforeQty + qty,
-      } as any,
-    });
+      },
+    },
+    update: {
+      qty: { increment: qty },
+    },
+    create: {
+      skuId: sku.id,
+      locationId: loc.id,
+      qty,
+    },
+  });
 
-    const onHand = await this.getOnHand(sku.id, loc.id);
-    return { ok: true, skuCode, locationCode, changed: qty, onHand };
+  return invRow; // ✅ 여기!
+});
+
+// ✅ 확정 로그 (잠깐만)
+console.log('[INBOUND] skuId=', sku.id, 'locId=', loc.id, 'delta=', qty, 'inventoryQty=', inv.qty);
+
+return { ok: true, skuCode, locationCode, changed: qty, onHand: inv.qty };
+
   }
 
   /* =========================================================

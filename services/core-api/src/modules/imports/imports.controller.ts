@@ -9,7 +9,11 @@ export class ImportsController {
 
   @Post('hq-inventory')
   @UseInterceptors(FileInterceptor('file'))
-  uploadHq(@UploadedFile() file: Express.Multer.File, @Body() _body: any, @Req() req: Request) {
-    return this.svc.processHqInventory(req, file);
+  uploadHq(
+    @UploadedFile() file: Express.Multer.File,
+    @Body() body: any,
+    @Req() req: Request,
+  ) {
+    return this.svc.processHqInventory(req, file, body);
   }
 }

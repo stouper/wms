@@ -1,110 +1,130 @@
 import { Injectable, BadRequestException } from '@nestjs/common';
 import * as XLSX from 'xlsx';
-import { HqInventoryService } from './hq-inventory.service';
 import { Request } from 'express';
+import { HqInventoryService } from './hq-inventory.service';
 
 @Injectable()
 export class ImportsService {
   constructor(private readonly hq: HqInventoryService) {}
 
   private normHeader(s: any) {
+    // 엑셀 헤더 정규화:
+    // - 공백 제거
+    // - 괄호 제거
+    // - 영문 소문자화
+    // 예) "수량(전산)" -> "수량전산"
+    //     "Maker코드" -> "maker코드"
     return String(s ?? '')
       .trim()
       .toLowerCase()
-      .replace(/\s+/g, '') // 공백/줄바꿈 제거
-      .replace(/[()]/g, ''); // 괄호 제거
+      .replace(/\s+/g, '')
+      .replace(/[()]/g, '');
   }
 
-  private toNumber(v: any) {
-    if (v == null) return NaN;
-    if (typeof v === 'number') return v;
-    const s = String(v).replace(/,/g, '').trim();
-    return Number(s);
+  private pickWarehouseLocationCode(req: Request, body?: any) {
+    // 데스크탑이 FormData로 보내면 body에 문자열로 들어올 수 있음
+    const fromBody = String(body?.warehouseLocationCode ?? '').trim();
+    const fromQuery = String((req.query as any)?.warehouseLocationCode ?? '').trim();
+    return (fromBody || fromQuery || 'HQ-01').toUpperCase();
   }
 
-  async processHqInventory(req: Request, file: Express.Multer.File) {
-    if (!file) throw new BadRequestException('파일이 없습니다.');
+  /**
+   * Desktop: POST /imports/hq-inventory (multipart/form-data file)
+   * - 헤더: 3행
+   * - 데이터: 4행부터
+   * - 코드 컬럼: "코드"
+   * - 수량 컬럼: "수량(전산)" (정규화 => "수량전산")
+   * - 위치 컬럼: G열(0-based index 6)
+   */
+  async processHqInventory(req: Request, file?: Express.Multer.File, body?: any) {
+    if (!file?.buffer?.length) throw new BadRequestException('file is required');
+
+    const warehouseLocationCode = this.pickWarehouseLocationCode(req, body);
 
     const wb = XLSX.read(file.buffer, { type: 'buffer' });
-    const sheetName = wb.SheetNames[0];
-    if (!sheetName) throw new BadRequestException('엑셀 시트가 없습니다.');
+    const sheetName = wb.SheetNames?.[0];
+    if (!sheetName) throw new BadRequestException('No sheet found');
 
-    const sheet = wb.Sheets[sheetName];
-    if (!sheet?.['!ref']) throw new BadRequestException('엑셀 범위를 읽을 수 없습니다(!ref 없음).');
-
-    const range = XLSX.utils.decode_range(sheet['!ref']);
-
-    // ✅ 브라더 파일: 3행이 헤더 (0-based r=2)
-    const headerRowIdx = 2;
-
-    // 헤더 읽기
-    const headers: string[] = [];
-    for (let c = range.s.c; c <= range.e.c; c++) {
-      const cell = sheet[XLSX.utils.encode_cell({ r: headerRowIdx, c })];
-      headers.push(String(cell?.v ?? '').trim());
-    }
-
-    const H = headers.map((h) => this.normHeader(h));
-
-    // ✅ 정확 매핑
-    const idxCode = H.findIndex((h) => h === '코드');
-    const idxMaker = H.findIndex((h) => h === 'maker코드' || h === 'makercode');
-    const idxName = H.findIndex((h) => h === '코드명');
-    const idxQty = H.findIndex((h) => h === '수량전산'); // 수량(전산) → 수량전산
-
-    // ✅ 핵심: '규격' 컬럼을 로케이션으로 사용
-    const idxLoc = H.findIndex((h) => h === '규격');
-
-    if (idxCode < 0) throw new BadRequestException('헤더에서 "코드" 컬럼을 찾지 못했습니다.');
-    if (idxQty < 0) throw new BadRequestException('헤더에서 "수량(전산)" 컬럼을 찾지 못했습니다.');
-    if (idxLoc < 0) throw new BadRequestException('헤더에서 "규격"(로케이션) 컬럼을 찾지 못했습니다.');
-
-    const rows: Array<{ sku: string; qty: number; location: string; makerCode?: string; name?: string }> = [];
-
-    for (let r = headerRowIdx + 1; r <= range.e.r; r++) {
-      const get = (idx: number) => sheet[XLSX.utils.encode_cell({ r, c: range.s.c + idx })]?.v;
-
-      const sku = String(get(idxCode) ?? '').trim();
-      if (!sku) continue;
-
-      const qty = this.toNumber(get(idxQty));
-      if (!Number.isFinite(qty)) continue;
-      if (qty < 0) continue;
-
-      if (qty > 1_000_000) {
-        throw new BadRequestException(
-          `수량이 비정상적으로 큽니다. (엑셀 ${r + 1}행) qty=${qty}. "수량(전산)" 컬럼 확인하세요.`,
-        );
-      }
-
-      const location = String(get(idxLoc) ?? '').trim();
-      if (!location) {
-        throw new BadRequestException(`로케이션(규격)이 비었습니다. (엑셀 ${r + 1}행)`);
-      }
-
-      const makerCode = idxMaker >= 0 ? String(get(idxMaker) ?? '').trim() : undefined;
-      const name = idxName >= 0 ? String(get(idxName) ?? '').trim() : undefined;
-
-      rows.push({ sku, qty, location, makerCode, name });
-    }
-
-    if (rows.length === 0) throw new BadRequestException('엑셀에 유효한 재고 데이터가 없습니다.');
-
-    // fallbackLoc (혹시 규격이 비어있을 경우 대비용)
-    const warehouseLocationCode = (req.body?.warehouseLocationCode
-      ? String(req.body.warehouseLocationCode)
-      : '').trim();
-
-    const result = await this.hq.replaceAll(rows as any, {
-      warehouseLocationCode: warehouseLocationCode || undefined,
+    const ws = wb.Sheets[sheetName];
+    const grid: any[][] = XLSX.utils.sheet_to_json(ws, {
+      header: 1,
+      raw: true,
+      defval: '',
     });
 
+    // ✅ 너 엑셀 포맷 고정: 3행이 헤더(0-based index 2)
+    let headerRowIdx = 2;
+    if (grid.length <= headerRowIdx) {
+      throw new BadRequestException('Header row not found (sheet too short)');
+    }
+
+    const headers = (grid[headerRowIdx] || []).map((c) => this.normHeader(c));
+
+    // ✅ 헤더 후보(너 엑셀 기준)
+    const CODE_HEADERS = ['코드', 'code', 'sku', 'skucode', '상품코드', '품번', '제품코드'].map((x) =>
+      this.normHeader(x),
+    );
+    const QTY_HEADERS = ['수량전산', 'qty', '수량', '재고', 'onhand', '재고수량', '기준수량'].map((x) =>
+      this.normHeader(x),
+    );
+    const MAKER_HEADERS = ['maker코드', 'makercode', '바코드', 'barcode'].map((x) => this.normHeader(x));
+    const NAME_HEADERS = ['코드명', 'name', '상품명', 'productname'].map((x) => this.normHeader(x));
+
+    const idxCode = headers.findIndex((x) => CODE_HEADERS.includes(x));
+    const idxQty = headers.findIndex((x) => QTY_HEADERS.includes(x));
+    const idxMaker = headers.findIndex((x) => MAKER_HEADERS.includes(x));
+    const idxName = headers.findIndex((x) => NAME_HEADERS.includes(x));
+
+    // ✅ G열이 위치라고 확정: A=0, B=1, ... G=6
+    const idxLoc = 6;
+
+    if (idxCode < 0 || idxQty < 0) {
+      throw new BadRequestException(
+        `Missing code/qty columns. headers=${headers.join(',')}`,
+      );
+    }
+
+    // 4행부터 데이터
+    const rows: Array<{ sku: string; qty: number; location?: string; makerCode?: string; name?: string }> = [];
+
+    for (let r = headerRowIdx + 1; r < grid.length; r++) {
+      const row = grid[r] || [];
+
+      const sku = String(row[idxCode] ?? '').trim();
+      if (!sku) continue;
+
+      const qty = Number(row[idxQty] ?? 0);
+      if (!Number.isFinite(qty) || qty < 0) continue;
+
+      const makerCode = idxMaker >= 0 ? String(row[idxMaker] ?? '').trim() : '';
+      const name = idxName >= 0 ? String(row[idxName] ?? '').trim() : '';
+
+      const location = String(row[idxLoc] ?? '').trim(); // G열
+      rows.push({
+        sku,
+        qty,
+        location: location || undefined, // 없으면 서비스에서 warehouseLocationCode로 fallback
+        makerCode: makerCode || undefined,
+        name: name || undefined,
+      });
+    }
+
+    // ✅ HQ 업로드는 “최종수량 SET” 로직
+    const result = await this.hq.replaceAll(rows, { warehouseLocationCode });
+
+    // ⚠️ result 안에 ok가 있을 수 있어서 중복 방지(이번에 겪은 TS2783)
     return {
-      headerRow: headerRowIdx + 1,
-      headers,
-      map: { code: idxCode, qty: idxQty, makerCode: idxMaker, name: idxName, location_from_spec: idxLoc },
+      sheet: sheetName,
+      headerRow: headerRowIdx + 1, // 사용자에게는 1-based
+      map: {
+        code: idxCode,
+        qty: idxQty,
+        makerCode: idxMaker,
+        name: idxName,
+        location: idxLoc,
+      },
       rows: rows.length,
-      warehouseLocationCode: warehouseLocationCode || null,
+      warehouseLocationCode,
       ...result,
     };
   }

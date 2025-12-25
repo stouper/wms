@@ -26,13 +26,14 @@ export default function JobsExcelWorkbench({ pageTitle, defaultStoreCode = "", p
 
   const [scanValue, setScanValue] = useState("");
   const [scanQty, setScanQty] = useState(1);
+  const [lastScan, setLastScan] = useState(null); // { status, pickResult, usedLocationCode, sku, picked }
+
 
   // ✅ 반품입고(whInbound)는 기본 로케이션 RET-01 자동 세팅
   const [scanLoc, setScanLoc] = useState(() => (pageKey === "whInbound" ? DEFAULT_RETURN_LOCATION : ""));
 
   const scanRef = useRef(null);
   const fileRef = useRef(null);
-
   const pickingRef = useRef(false);
 
   useEffect(() => safeWriteJson(createdKey, created), [createdKey, created]);
@@ -246,8 +247,9 @@ export default function JobsExcelWorkbench({ pageTitle, defaultStoreCode = "", p
     const qty = Number(scanQty || 1);
     const safeQty = Number.isFinite(qty) && qty > 0 ? qty : 1;
 
-    // ✅ 로케이션은 whInbound에서 필수 (서버 검증도 걸려있음)
     const loc = (scanLoc || "").trim();
+
+    // ✅ 반품입고는 locationCode 필수
     if (pageKey === "whInbound" && !loc) {
       push({ kind: "error", title: "로케이션 필요", message: `반품입고는 locationCode가 필수야. (예: ${DEFAULT_RETURN_LOCATION})` });
       return;
@@ -256,88 +258,126 @@ export default function JobsExcelWorkbench({ pageTitle, defaultStoreCode = "", p
     try {
       setLoading(true);
 
-            if (pageKey === "whInbound") {
-        const body = {
-          makerCode: val,
-          qty: safeQty,
-          locationCode: loc || DEFAULT_RETURN_LOCATION,
-        };
+      // ---------- whInbound (반품 입고) ----------
+      
+if (pageKey === "whInbound") {
+  // ✅ 반품입고
+  // - "잡 선택"이 되어있으면: /jobs/:jobId/receive 로 처리 (JobItem 카운팅 반영)
+  // - 잡 선택이 없으면: /inventory/in 으로만 처리 (재고만 반영, 카운팅은 안 올라감)
+  const locationCode = loc || DEFAULT_RETURN_LOCATION;
 
-        await postJson(`${apiBase}/inventory/in`, body);
+  if (!selectedJobId) {
+    // fallback: 재고만 올리고, 잡 카운팅은 불가
+    const bodyIn = {
+      skuCode: val, // inventory/in 은 skuCode 기준 (바코드/sku가 skuCode로 들어온다는 전제)
+      qty: safeQty,
+      locationCode,
+    };
+    const res = await postJson(`${apiBase}/inventory/in`, bodyIn);
 
-        // ✅ 이거 추가!
-        await postJson(`${apiBase}/jobs/${selectedJobId}/receive`, {
+    setLastScan(res);
+    push({
+      kind: "warning",
+      title: "반품 처리(재고만)",
+      message: `작지 선택이 없어서 재고만 +${safeQty} 처리했어. 카운팅 필요하면 먼저 작지를 선택해줘.`,
+    });
+
+    setScanValue("");
+    scanRef.current?.focus?.();
+    return;
+  }
+
+  // 잡 귀속 반품(카운팅 반영)
+  const bodyReceive = {
+    value: val,
+    qty: safeQty,
+    locationCode,
+  };
+
+  const res = await postJson(`${apiBase}/jobs/${selectedJobId}/receive`, bodyReceive);
+
+  setLastScan(res);
+  push({
+    kind: "success",
+    title: "반품 처리",
+    message: `${val} +${safeQty} @${locationCode}`,
+  });
+
+  setScanValue("");
+  scanRef.current?.focus?.();
+  await loadJob(selectedJobId);
+  return;
+}
+
+      // ---------- storeShip (매장 출고) ----------
+      // ✅ items/scan 하나로 통일
+      try {
+        const res = await postJson(`${apiBase}/jobs/${selectedJobId}/items/scan`, {
           value: val,
           qty: safeQty,
+          ...(loc ? { locationCode: loc } : {}),
+        });
+
+        setLastScan(res);
+
+        const isShortage = res?.pickResult === "SHORTAGE_TO_RET01" || res?.status === "SHORTAGE" || res?.usedLocationCode === DEFAULT_RETURN_LOCATION;
+
+        push({
+          kind: isShortage ? "warn" : "success",
+          title: isShortage ? "부족분 처리(RET-01)" : "피킹 처리",
+          message: isShortage
+            ? `${val} ${safeQty}족 → RET-01(부족풀) 적재`
+            : `${val} -${safeQty} @${res?.usedLocationCode || loc || "-"}`,
         });
 
         push({
           kind: "success",
-          title: "입고 처리",
-          message: `${val} +${safeQty} @${body.locationCode}`,
+          title: "피킹 처리",
+          message: `${val} -${safeQty} @${loc}`,
         });
 
         setScanValue("");
         scanRef.current?.focus?.();
         await loadJob(selectedJobId);
         return;
-      }
+      } catch (e1) {
+        const msg = e1?.message || String(e1);
 
+        // ✅ RET-01 자동 오버픽:
+        // - 특정 로케이션 재고가 부족하면 → allowOverpick 켜고 → RET-01로 재시도
+        if (msg.includes("Insufficient stock") || msg.includes("Overpick enabled. locationCode is required")) {
+          try {
+            const retLoc = DEFAULT_RETURN_LOCATION;
 
-      // ✅ 매장출고: 기존 pick/scan 엔드포인트 유지
-      const body = {
-        value: val,
-        qty: safeQty,
-        locationCode: loc || undefined,
-        location: loc || undefined,
-      };
+            await patchJson(`${apiBase}/jobs/${selectedJobId}/allow-overpick`, { allowOverpick: true });
 
-      const paths = [
-        `${apiBase}/jobs/${selectedJobId}/scan`,
-        `${apiBase}/jobs/${selectedJobId}/pick`,
-        `${apiBase}/jobs/${selectedJobId}/items/scan`,
-      ];
+            const res2 = await postJson(`${apiBase}/jobs/${selectedJobId}/items/scan`, {
+              value: val,
+              qty: safeQty,
+              locationCode: retLoc,
+            });
 
-      await tryPostJson(paths, body);
+            setLastScan(res2);
 
-      setScanValue("");
-      scanRef.current?.focus?.();
-      await loadJob(selectedJobId);
-    } catch (e) {
-      const msg = String(e?.message || e || "");
-      // ✅ RET-01 자동 오버픽: 전산재고 부족(또는 오버픽 locationCode 요구)인 경우
-      // 1) allowOverpick ON
-      // 2) locationCode=RET-01로 /items/scan 재시도
-      if (msg.includes("Insufficient stock") || msg.includes("Overpick enabled. locationCode is required")) {
-        try {
-          const retLoc = DEFAULT_RETURN_LOCATION; // RET-01
-          if (!scanLoc) setScanLoc(retLoc);
+            push({
+              kind: "warn",
+              title: "부족분 처리(RET-01)",
+              message: "전산재고 부족 → RET-01(부족풀)로 적재했어.",
+            });
 
-          await patchJson(`${apiBase}/jobs/${selectedJobId}/allow-overpick`, { allowOverpick: true });
-
-          await postJson(`${apiBase}/jobs/${selectedJobId}/items/scan`, {
-            value: val,
-            qty: safeQty,
-            locationCode: retLoc,
-          });
-
-          push({
-            kind: "success",
-            title: "RET-01 처리",
-            message: "전산재고 부족 → RET-01(부족 모음)으로 처리했어.",
-          });
-
-          setScanValue("");
-          scanRef.current?.focus?.();
-          await loadJob(selectedJobId);
-          return;
-        } catch (e2) {
-          push({ kind: "error", title: "RET-01 자동 처리 실패", message: e2?.message || String(e2) });
-          return;
+            setScanValue("");
+            scanRef.current?.focus?.();
+            await loadJob(selectedJobId);
+            return;
+          } catch (e2) {
+            push({ kind: "error", title: "RET-01 자동 처리 실패", message: e2?.message || String(e2) });
+            return;
+          }
         }
-      }
 
-      push({ kind: "error", title: "처리 실패", message: msg });
+        push({ kind: "error", title: "처리 실패", message: msg });
+        return;
+      }
     } finally {
       setLoading(false);
     }
@@ -379,7 +419,12 @@ export default function JobsExcelWorkbench({ pageTitle, defaultStoreCode = "", p
             {" "}
             / 반품입고 기본 로케이션: <b>{(scanLoc || DEFAULT_RETURN_LOCATION).trim()}</b>
           </>
-        ) : null}
+        ) : (
+          <>
+            {" "}
+            / 매장출고: <b>locationCode 선택</b> (미입력 시 작지 기본 로케이션 사용)
+          </>
+        )}
       </div>
 
       {preview ? (
@@ -539,11 +584,42 @@ export default function JobsExcelWorkbench({ pageTitle, defaultStoreCode = "", p
             value={scanLoc}
             onChange={(e) => setScanLoc(e.target.value)}
             style={{ ...inputStyle, width: 140 }}
-            placeholder={pageKey === "whInbound" ? `loc(필수) 예:${DEFAULT_RETURN_LOCATION}` : "loc(옵션)"}
+            placeholder={pageKey === "whInbound" ? `loc(필수) 예:${DEFAULT_RETURN_LOCATION}` : "loc(선택) 예:A-11"}
           />
           <button type="button" style={primaryBtn} onClick={doScan} disabled={loading}>
             적용
           </button>
+        {lastScan ? (
+          <div style={{ marginTop: 10, display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
+            <span
+              style={{
+                padding: "3px 10px",
+                borderRadius: 999,
+                fontSize: 12,
+                fontWeight: 900,
+                background: lastScan?.status === "SHORTAGE" ? "#fff7ed" : "#ecfeff",
+                color: lastScan?.status === "SHORTAGE" ? "#9a3412" : "#155e75",
+                border: "1px solid #e5e7eb",
+              }}
+              title={lastScan?.pickResult || lastScan?.status || ""}
+            >
+              {lastScan?.status === "SHORTAGE" ? "⚠️ 부족처리" : "✅ 정상"}
+            </span>
+
+            <span style={{ fontSize: 12, color: "#64748b" }}>
+              loc: <b>{lastScan?.usedLocationCode || "-"}</b>
+            </span>
+
+            <span style={{ fontSize: 12, color: "#64748b" }}>
+              sku: <b style={{ fontFamily: "Consolas, monospace" }}>{lastScan?.sku?.sku || lastScan?.sku?.code || "-"}</b>
+            </span>
+
+            <span style={{ fontSize: 12, color: "#64748b" }}>
+              picked: <b>{lastScan?.picked?.qtyPicked ?? "-"}</b>/<b>{lastScan?.picked?.qtyPlanned ?? "-"}</b>
+            </span>
+          </div>
+        ) : null}
+
         </div>
       </div>
 
@@ -578,9 +654,10 @@ export default function JobsExcelWorkbench({ pageTitle, defaultStoreCode = "", p
                   const done = picked >= planned && planned > 0;
                   return (
                     <tr key={it.id} style={{ background: done ? "#f0fdf4" : "transparent" }}>
-                      <Td style={{ fontFamily: "Consolas, monospace" }}>{it.sku?.code || "-"}</Td>
+                      {/* ✅ prisma field가 sku(문자열)인 케이스 대응 */}
+                      <Td style={{ fontFamily: "Consolas, monospace" }}>{it.sku?.sku || it.sku?.code || "-"}</Td>
                       <Td style={{ fontFamily: "Consolas, monospace" }}>{it.makerCodeSnapshot || it.sku?.makerCode || "-"}</Td>
-                      <Td>{it.sku?.name || "-"}</Td>
+                      <Td>{it.nameSnapshot || it.sku?.name || "-"}</Td>
                       <Td>{planned}</Td>
                       <Td style={{ fontWeight: 900, color: done ? "#16a34a" : "#0f172a" }}>{picked}</Td>
                     </tr>
@@ -707,7 +784,6 @@ async function tryJsonFetch(url) {
   return data;
 }
 
-
 async function patchJson(url, body) {
   const r = await fetch(url, {
     method: "PATCH",
@@ -750,19 +826,6 @@ async function postJson(url, body) {
     throw new Error(`[${r.status}] ${msg}`);
   }
   return data;
-}
-
-async function tryPostJson(urls, body) {
-  let lastErr = null;
-  for (const url of urls) {
-    try {
-      await postJson(url, body);
-      return;
-    } catch (e) {
-      lastErr = e;
-    }
-  }
-  throw lastErr || new Error("요청 실패");
 }
 
 function wait(ms) {

@@ -126,6 +126,11 @@ model JobItem {
   makerCodeSnapshot String?
   nameSnapshot      String?
 
+  // ✅ 추가피킹(Planned 초과) 승인/사용
+  extraApprovedQty Int @default(0)
+  extraPickedQty   Int @default(0)
+
+
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 

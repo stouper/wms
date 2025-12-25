@@ -10,15 +10,16 @@ export class JobsController {
 
   @Post()
   create(@Body() dto: CreateJobDto) {
-    return this.jobs.createJob(dto);
+    return this.jobs.createJob(dto as any);
   }
 
+  // ✅ 목록 (date 쿼리는 지금은 무시: 필요하면 service 쪽에 필터 다시 붙이면 됨)
   @Get()
-  list(@Query('date') date?: string) {
-    // 너희 서비스가 date로 목록 필터하는 형태라 그대로 맞춤
-    return this.jobs.listJobs({ date } as any);
+  list(@Query('date') _date?: string) {
+    return this.jobs.listJobs();
   }
 
+  // ✅ 디테일: 반드시 items(+sku) 포함해서 내려줘야 desktop에서 보임
   @Get(':id')
   get(@Param('id') id: string) {
     return this.jobs.getJob(id);
@@ -26,20 +27,38 @@ export class JobsController {
 
   @Post(':id/items')
   addItems(@Param('id') id: string, @Body() dto: AddItemsDto) {
-    // ✅ addItems는 배열을 받음
-    return this.jobs.addItems(id, dto.items as any);
+    return this.jobs.addItems(id, dto as any);
+  }
+  // ✅ Planned 초과(추가피킹) 승인 — 버튼으로만 허용
+  @Patch(':id/items/:itemId/approve-extra')
+  approveExtra(
+    @Param('id') id: string,
+    @Param('itemId') itemId: string,
+    @Body() body: { qty: number },
+  ) {
+    return this.jobs.approveExtra(id, itemId, Number(body?.qty || 0));
   }
 
-  // ✅ 데스크탑이 호출하는 스캔 엔드포인트
+
+
+  // ✅ SKU 스캔(피킹) — Desktop이 쓰는 엔드포인트
   @Post(':id/items/scan')
   scanItem(@Param('id') id: string, @Body() dto: any) {
-    return this.jobs.scan(id, dto);
+    return this.jobs.scan(id, dto as any);
   }
 
-  // (혹시 예전 클라이언트가 이 경로를 쓰면 같이 지원)
+  // ✅ 반품 입고(잡 귀속) — Desktop 반품 탭에서 사용
+  @Post(':id/receive')
+  receive(@Param('id') id: string, @Body() dto: any) {
+    return this.jobs.receive(id, dto as any);
+  }
+
+
+  // ✅ (호환) 과거 클라이언트가 /scan 으로 치는 경우 대응
+  // 지금은 Desktop을 items/scan으로 통일했지만, 남겨두면 안전함
   @Post(':id/scan')
-  scanAlias(@Param('id') id: string, @Body() dto: any) {
-    return this.jobs.scan(id, dto);
+  scan(@Param('id') id: string, @Body() dto: any) {
+    return this.jobs.scan(id, dto as any);
   }
 
   @Post(':id/parcel')
@@ -57,9 +76,7 @@ export class JobsController {
     return this.jobs.deleteJob(id);
   }
 
-  // =========================
-  // ✅ C안: 실재고 우선 토글 (추가된 부분)
-  // =========================
+  // ✅ C안: 실재고 우선 토글
   @Patch(':id/allow-overpick')
   setAllowOverpick(@Param('id') id: string, @Body() body: { allowOverpick: boolean }) {
     return this.jobs.setAllowOverpick(id, Boolean(body?.allowOverpick));
