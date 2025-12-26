@@ -13,6 +13,12 @@ class JobItemInput {
   @IsInt()
   @Min(1)
   qty!: number;
+
+  // ✅ 추가: 코드명(상품명)
+  @IsOptional()
+  @IsString()
+  name?: string;
+
 }
 
 export class AddItemsDto {

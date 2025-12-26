@@ -1,12 +1,12 @@
 // apps/wms-desktop/renderer/src/pages/WarehouseInboundPage.jsx
 import React, { useEffect, useMemo, useRef, useState } from "react";
 import { useToasts } from "../lib/toasts.jsx";
-import { getApiBase } from "../lib/api";
+import { getApiBase } from "../workflows/_common/api";
 import { safeReadJson, safeReadLocal, safeWriteJson, safeWriteLocal } from "../lib/storage";
-import { parseJobFileToRows } from "../lib/parseJobFile";
+import { runWarehouseInbound } from "../workflows/warehouseInbound/warehouseInbound.workflow";
 import { inputStyle, primaryBtn } from "../ui/styles";
 import { Th, Td } from "../components/TableParts";
-import { whInboundMode } from "../workflows/jobsExcel";
+import { whInboundMode } from "../workflows/warehouseInbound/warehouseInbound.workflow";
 
 const PAGE_KEY = "whInbound";
 const DEFAULT_RETURN_LOCATION = "RET-01";
@@ -234,16 +234,11 @@ export default function WarehouseInboundPage({ pageTitle = "창고 입고(반품
     pickingRef.current = true;
     try {
       setLoading(true);
-
-      const buf = await file.arrayBuffer();
-      if (!buf || buf.byteLength === 0) throw new Error("파일을 읽지 못했어(0 bytes).");
-
-      let parsed;
-      try {
-        parsed = parseJobFileToRows(buf, file.name);
-      } catch {
-        throw new Error("파일 파싱에 실패했어. 엑셀/CSV 형식을 확인해줘.");
-      }
+      const res = await runWarehouseInbound({ file });
+      if (!res.ok) throw new Error(res.error);
+      const parsed = res.data;
+      console.log("DEBUG inbound parsed.rows[0] =", parsed?.rows?.[0]);
+      console.log("DEBUG inbound parsed.sample[0] =", parsed?.sample?.[0]);
 
       const { jobKind: rawKind, mixedKinds } = parsed || {};
 
@@ -333,7 +328,7 @@ export default function WarehouseInboundPage({ pageTitle = "창고 입고(반품
     setLoading(true);
     try {
       if (typeof mode?.scan !== "function") {
-        throw new Error("mode.scan이 없습니다. workflows/jobsExcel/*.mode.js 확인해줘.");
+        throw new Error("mode.scan이 없습니다. workflows/warehouseInbound/warehouseInbound.workflow.js 확인해줘.");
       }
 
       const result = await mode.scan({
@@ -388,6 +383,8 @@ export default function WarehouseInboundPage({ pageTitle = "창고 입고(반품
                 <Th>#</Th>
                 <Th>storeCode</Th>
                 <Th>skuCode</Th>
+                <Th>makerCode</Th>
+                <Th>name</Th>
                 <Th align="right">qty</Th>
               </tr>
             </thead>
@@ -397,6 +394,8 @@ export default function WarehouseInboundPage({ pageTitle = "창고 입고(반품
                   <Td>{idx + 1}</Td>
                   <Td>{r.storeCode}</Td>
                   <Td>{r.skuCode}</Td>
+                  <Td>{r.makerCode || r.maker || ""}</Td>
+                  <Td>{r.name || r.itemName || ""}</Td>
                   <Td align="right">{r.qty}</Td>
                 </tr>
               ))}

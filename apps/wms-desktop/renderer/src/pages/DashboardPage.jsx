@@ -1,7 +1,7 @@
 import React, { useEffect, useMemo, useState } from "react";
 import { useToasts } from "../lib/toasts.jsx";
 import { ymdKST } from "../lib/dates";
-import { getApiBase } from "../lib/api";
+import { getApiBase } from "../workflows/_common/api";
 import { primaryBtn, inputStyle } from "../ui/styles";
 import { holidays as fetchHolidays } from "@kyungseopk1m/holidays-kr";
 
@@ -80,13 +80,14 @@ export default function DashboardPage() {
     }
 
     // 비교 검증만 (타임존 문제 방지용으로 단순 문자열 비교도 가능하지만, 기존 유지)
-    const fromDate = new Date(from + "T00:00:00");
-    const toDate = new Date(to + "T00:00:00");
-    if (Number.isNaN(fromDate.getTime()) || Number.isNaN(toDate.getTime())) {
+    const fromTs = new Date(from + "T00:00:00+09:00").getTime();
+    const toTs = new Date(to + "T23:59:59.999+09:00").getTime();
+
+    if (!Number.isFinite(fromTs) || !Number.isFinite(toTs)) {
       push({ kind: "error", title: "날짜", message: "From/To 날짜가 유효하지 않아" });
       return;
     }
-    if (fromDate > toDate) {
+    if (fromTs > toTs) {
       push({ kind: "warn", title: "기간", message: "From이 To보다 클 수는 없어" });
       return;
     }
@@ -101,17 +102,22 @@ export default function DashboardPage() {
       const url = `${apiBase}/jobs?status=done`;
       const data = await tryJsonFetch(url);
 
-      const all = Array.isArray(data) ? data : data?.jobs || data?.data || [];
+      const all = Array.isArray(data)
+      ? data
+      : data?.rows || data?.jobs || data?.data || []
+
       const filtered = (all || [])
         .filter((j) => {
-          // status가 혹시 문자열/대문자 등으로 올 수 있어도 방어
+          // ✅ 중요: status가 API에서 빠져도(빈값) 필터로 날려버리면 안 됨
+          // (어차피 endpoint가 status=done 이라서, 값이 있으면 검증하고 없으면 통과)
           const st = String(j?.status || "").toLowerCase().trim();
           if (st && st !== "done") return false;
 
           const t = getDoneTs(j);
           if (!t) return false;
 
-          const ymd = ymdKST(new Date(t)); // ✅ KST 기준
+          // ✅ KST 날짜 문자열로 비교 (UTC/KST 날짜 밀림 방지)
+          const ymd = ymdKST(new Date(t));
           return ymd >= from && ymd <= to;
         })
         .map((j) => {
@@ -120,6 +126,7 @@ export default function DashboardPage() {
           return { ...j, _exportDate: ymd };
         });
 
+      // ✅ 0건이면 사용자에게 알려주고 종료 (원래 파일에 있던 UX)
       if (filtered.length === 0) {
         push({ kind: "warn", title: "조회 결과 없음", message: `${from} ~ ${to} 완료된 작지가 없어` });
         return;
@@ -781,9 +788,7 @@ function buildEpmsOutCsvWithHeader({ jobs, type = 1, workDateYmd }) {
     const items = job?.items || job?.jobItems || job?.job_items || [];
 
     // ✅ 행별 날짜: job._exportDate 우선
-    const jobDateStr = job?._exportDate
-      ? String(job._exportDate).replaceAll("-", "")
-      : fallbackDateStr;
+    const jobDateStr = job?._exportDate ? String(job._exportDate).replaceAll("-", "") : fallbackDateStr;
 
     for (const it of items) {
       const maker = String(

@@ -106,24 +106,36 @@ export class JobsService {
   ) {
     where.status = params.status;
   }
-
-  const rows = await this.prisma.job.findMany({
-    where,
-    orderBy: { createdAt: 'desc' },
-    select: {
-      id: true,
-      storeCode: true,
-      title: true,
-      memo: true,
-      status: true,
-      allowOverpick: true,
-      createdAt: true,
-      updatedAt: true,
-      doneAt: true,
+const rows = await this.prisma.job.findMany({
+  where,
+  orderBy: { createdAt: "desc" },
+  select: {
+    id: true,
+    storeCode: true,
+    title: true,
+    memo: true,
+    status: true,
+    allowOverpick: true,
+    createdAt: true,
+    updatedAt: true,
+    doneAt: true,
+    items: {
+      select: {
+        id: true,
+        qtyPlanned: true,
+        qtyPicked: true,
+        makerCodeSnapshot: true,
+        nameSnapshot: true,
+        sku: {
+          select: { makerCode: true, name: true },
+        },
+      },
     },
-  });
+  },
+});
 
-  return { ok: true, rows };
+
+ return { ok: true, rows };
 } 
 
   async getJob(jobId: string) {
@@ -135,102 +147,131 @@ export class JobsService {
     return { ok: true, job };
   }
 
-  // 엑셀/목록으로 jobItem 추가
-  async addItems(jobId: string, dto: any) {
-    const job = await this.prisma.job.findUnique({ where: { id: jobId } as any } as any);
-    if (!job) throw new NotFoundException(`Job not found: ${jobId}`);
+// 엑셀/목록으로 jobItem 추가
+async addItems(jobId: string, dto: any) {
+  console.log("DEBUG addItems dto.items[0] =", dto?.items?.[0]);
 
-    const rawItems: any[] = Array.isArray(dto?.items) ? dto.items : [];
-    if (rawItems.length <= 0) throw new BadRequestException('items is required');
+  const job = await this.prisma.job.findUnique({
+    where: { id: jobId } as any,
+  } as any);
+  if (!job) throw new NotFoundException(`Job not found: ${jobId}`);
 
-    const resolved: any[] = [];
+  const rawItems: any[] = Array.isArray(dto?.items) ? dto.items : [];
+  if (rawItems.length <= 0) throw new BadRequestException("items is required");
 
-    for (const it of rawItems) {
-      const qtyPlanned = Number(it.qty ?? it.qtyPlanned ?? 0);
-      if (!Number.isFinite(qtyPlanned) || qtyPlanned <= 0) continue;
+  const resolved: Array<{
+    skuId: string;
+    qtyPlanned: number;
+    makerCodeSnapshot: string;
+    nameSnapshot: string;
+  }> = [];
 
-      let sku: any = null;
+  for (const row of rawItems) {
+    const qtyPlanned = Number(row?.qty ?? row?.qtyPlanned ?? 0);
+    if (!Number.isFinite(qtyPlanned) || qtyPlanned <= 0) continue;
 
-      if (!sku && it.makerCode) {
-        sku = await this.prisma.sku.findFirst({ where: { makerCode: String(it.makerCode) } as any } as any);
-      }
+    // ✅ 프론트에서 보내는 키 우선 (makerCode/name)
+    const maker = String(
+      row?.makerCode ??
+        row?.maker ??
+        row?.makerCodeSnapshot ??
+        row?.["Maker코드"] ??
+        row?.["메이커코드"] ??
+        row?.["단품코드"] ??
+        ""
+    ).trim();
 
-      if (!sku) {
-        const code = (it.skuCode || `AUTO-${Date.now()}-${Math.random().toString(16).slice(2, 8)}`)
-          .toUpperCase()
-          .trim();
+    const name = String(
+      row?.name ??
+        row?.itemName ??
+        row?.nameSnapshot ??
+        row?.["코드명"] ??
+        row?.["상품명"] ??
+        row?.["품명"] ??
+        ""
+    ).trim();
 
-        // ✅ unique(sku) 충돌 방지: 있으면 가져오고 없으면 생성
-        sku = await (this.prisma as any).sku.upsert({
-          where: { sku: code } as any,
-          update: {
-            ...(it.makerCode ? { makerCode: String(it.makerCode) } : {}),
-            ...(it.name ? { name: String(it.name) } : {}),
-          } as any,
-          create: {
-            sku: code, // ✅ 필수 (unique)
-            makerCode: it.makerCode ? String(it.makerCode) : null,
-            name: it.name ? String(it.name) : null,
-          } as any,
+    // 🔥 maker/name 필수 (빈 줄 방지)
+    if (!maker || !name) {
+      const keys = Object.keys(row || {}).join(" | ");
+      throw new BadRequestException(
+        `작지 아이템 정보 누락: makerCode/name 필수 (jobId=${jobId}) keys=[${keys}] maker="${maker}" name="${name}"`
+      );
+    }
+
+    // ✅ makerCode 기준 SKU 찾기
+    let sku: any = await this.prisma.sku.findFirst({
+      where: { makerCode: maker } as any,
+    } as any);
+
+    // ✅ sku unique는 sku 필드이므로 skuCode 없으면 maker 기반으로 만들어줌
+    const skuCode = String(row?.skuCode ?? "").trim() ||
+      `UNASSIGNED-${maker}-${Date.now()}-${Math.random().toString(16).slice(2, 8)}`;
+
+    if (!sku) {
+      const code = skuCode.toUpperCase().trim();
+      sku = await (this.prisma as any).sku.upsert({
+        where: { sku: code } as any,
+        update: { makerCode: maker, name } as any,
+        create: { sku: code, makerCode: maker, name } as any,
+      } as any);
+    } else {
+      // 기존 sku에 maker/name 없을 때만 보강
+      const patch: any = {};
+      if (!sku.makerCode) patch.makerCode = maker;
+      if (!sku.name) patch.name = name;
+
+      if (Object.keys(patch).length) {
+        sku = await (this.prisma as any).sku.update({
+          where: { id: sku.id } as any,
+          data: patch as any,
         } as any);
-      } else {
-        // 기존 sku에 makerCode/name 보강(없을 때만)
-        const patch: any = {};
-        if (it.makerCode && !sku.makerCode) patch.makerCode = String(it.makerCode);
-        if (it.name && !sku.name) patch.name = String(it.name);
-
-        if (Object.keys(patch).length) {
-          sku = await (this.prisma as any).sku.update({
-            where: { id: sku.id } as any,
-            data: patch as any,
-          } as any);
-        }
-      }
-
-      resolved.push({
-        skuId: sku.id,
-        qtyPlanned,
-        makerCodeSnapshot: sku.makerCode ?? it.makerCode ?? null,
-        nameSnapshot: sku.name ?? it.name ?? null,
-      });
-    }
-
-    if (resolved.length <= 0) throw new BadRequestException('No valid items');
-
-    // upsert 성격으로: 이미 있으면 planned +=
-    for (const it of resolved) {
-      const existing = await (this.prisma as any).jobItem.findFirst({
-        where: { jobId, skuId: it.skuId } as any,
-      });
-
-      if (existing) {
-        await (this.prisma as any).jobItem.update({
-          where: { id: existing.id } as any,
-          data: {
-            qtyPlanned: { increment: it.qtyPlanned } as any,
-            makerCodeSnapshot: it.makerCodeSnapshot ?? existing.makerCodeSnapshot ?? null,
-            nameSnapshot: it.nameSnapshot ?? existing.nameSnapshot ?? null,
-          } as any,
-        });
-      } else {
-        await (this.prisma as any).jobItem.create({
-          data: {
-            jobId,
-            skuId: it.skuId,
-            qtyPlanned: it.qtyPlanned,
-            qtyPicked: 0,
-            makerCodeSnapshot: it.makerCodeSnapshot ?? null,
-            nameSnapshot: it.nameSnapshot ?? null,
-            extraApprovedQty: 0,
-            extraPickedQty: 0,
-          } as any,
-        });
       }
     }
 
-    return { ok: true };
+    resolved.push({
+      skuId: sku.id,
+      qtyPlanned,
+      makerCodeSnapshot: maker,
+      nameSnapshot: name,
+    });
   }
 
+  if (resolved.length <= 0) throw new BadRequestException("No valid items");
+
+  // ✅ upsert 성격: 이미 있으면 planned +=
+  for (const it of resolved) {
+    const existing = await (this.prisma as any).jobItem.findFirst({
+      where: { jobId, skuId: it.skuId } as any,
+    });
+
+    if (existing) {
+      await (this.prisma as any).jobItem.update({
+        where: { id: existing.id } as any,
+        data: {
+          qtyPlanned: { increment: it.qtyPlanned } as any,
+          makerCodeSnapshot: it.makerCodeSnapshot,
+          nameSnapshot: it.nameSnapshot,
+        } as any,
+      });
+    } else {
+      await (this.prisma as any).jobItem.create({
+        data: {
+          jobId,
+          skuId: it.skuId,
+          qtyPlanned: it.qtyPlanned,
+          qtyPicked: 0,
+          makerCodeSnapshot: it.makerCodeSnapshot,
+          nameSnapshot: it.nameSnapshot,
+          extraApprovedQty: 0,
+          extraPickedQty: 0,
+        } as any,
+      });
+    }
+  }
+
+  return { ok: true };
+}
   /**
    * 출고 스캔(피킹)
    */

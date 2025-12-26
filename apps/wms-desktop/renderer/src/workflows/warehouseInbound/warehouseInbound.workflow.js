@@ -1,3 +1,21 @@
+import { parseJobFileToRows } from "../_common/excel/parseStoreOutbound";
+
+export async function runWarehouseInbound({ file }) {
+  try {
+    if (!file) return { ok: false, error: "파일이 필요합니다", level: "warn" };
+    const parsed = await parseWarehouseInboundFromFile(file);
+    return { ok: true, data: parsed };
+  } catch (e) {
+    return { ok: false, error: e?.message || "처리 실패", level: "error" };
+  }
+}
+
+export async function parseWarehouseInboundFromFile(file) {
+  if (!file) throw new Error("file is required");
+  const buf = await file.arrayBuffer();
+  return parseJobFileToRows(buf, file.name || "");
+}
+
 const DEFAULT_RETURN_LOCATION = "RET-01";
 
 export const whInboundMode = {
@@ -17,15 +35,8 @@ export const whInboundMode = {
     return { ok: true };
   },
 
-  // ✅ Job 생성: 입고 전용
-  async createJobsFromPreview({
-    apiBase,
-    previewRows,
-    defaultStoreCode,
-    title,
-    postJson,
-    fetchJson,
-  }) {
+  // ✅ Job 생성: 입고 전용 (출고와 동일하게 makerCode/name까지 같이 보낸다)
+  async createJobsFromPreview({ apiBase, previewRows, defaultStoreCode, title, postJson, fetchJson }) {
     const groups = new Map();
     for (const row of previewRows || []) {
       const store = String(row.storeCode || defaultStoreCode || "").trim();
@@ -33,6 +44,7 @@ export const whInboundMode = {
       if (!groups.has(store)) groups.set(store, []);
       groups.get(store).push(row);
     }
+
     const entries = [...groups.entries()];
     if (!entries.length) throw new Error("storeCode 그룹이 없어. 엑셀(storeCode) 확인해줘.");
 
@@ -42,10 +54,15 @@ export const whInboundMode = {
       const jobId = job?.id;
       if (!jobId) throw new Error("jobId가 없어. /jobs 응답을 확인해줘.");
 
+      // ✅ 출고와 동일: makerCode/name 포함 + 문자열 강제
       await postJson(`${apiBase}/jobs/${jobId}/items`, {
         items: rows.map((r) => ({
-          skuCode: r.skuCode,
-          qty: Number(r.qty),
+          skuCode: String(r?.skuCode ?? "").trim(),
+          qty: Number(r?.qty ?? 0),
+
+          // 헤더 흔들림 대비 (parse가 maker / itemName으로 줄 수도 있음)
+          makerCode: String(r?.makerCode ?? r?.maker ?? "").trim(),
+          name: String(r?.name ?? r?.itemName ?? "").trim(),
         })),
       });
 
@@ -54,19 +71,9 @@ export const whInboundMode = {
     }
 
     return createdJobs;
-
   },
 
-  async scan({
-    apiBase,
-    jobId,
-    value,
-    qty = 1,
-    locationCode,
-    postJson,
-    fetchJson,
-    confirm,
-  }) {
+  async scan({ apiBase, jobId, value, qty = 1, locationCode, postJson, fetchJson, confirm }) {
     // ✅ 반품입고: locationCode는 필수(대부분 RET-01 고정)
     const loc = String(locationCode || "").trim();
     if (!loc) {
@@ -76,8 +83,7 @@ export const whInboundMode = {
     const nQty = Number(qty ?? 1);
     const safeQty = Number.isFinite(nQty) && nQty > 0 ? nQty : 1;
 
-    // ✅ planned 초과 입고(프런트 가드): 초과하면 confirm 받고 진행
-    // - payload/endpoint는 그대로, "진행 전 확인"만 추가
+    // ✅ 경고 가드: (1) 작지 없음 (2) planned 초과 — 둘 다 "경고만" 띄우고 OK면 진행
     try {
       const _fetchJson =
         fetchJson ||
@@ -97,7 +103,8 @@ export const whInboundMode = {
           return data;
         });
 
-      const job = await _fetchJson(`${apiBase}/jobs/${jobId}`);
+      const full = await _fetchJson(`${apiBase}/jobs/${jobId}`);
+      const job = full?.job || full;
       const items = Array.isArray(job?.items) ? job.items : [];
 
       const norm = (s) => String(s || "").trim().toLowerCase();
@@ -111,6 +118,23 @@ export const whInboundMode = {
         items.find((it) => norm(it?.sku?.makerCode) === scanned) ||
         null;
 
+      // (1) 작지에 없는 항목 경고 (한 번)
+      if (!hit) {
+        const ask = typeof confirm === "function" ? confirm : (m) => window.confirm(m);
+        const ok = ask(
+          `⚠️ 작지에 없는 항목입니다.\n\nvalue: ${value}\nqty: +${safeQty}\n\n그래도 입고 처리할까요?`
+        );
+        if (!ok) {
+          return {
+            ok: true,
+            cancelled: true,
+            toast: { kind: "warn", title: "취소됨", message: "작지 외 입고를 취소했어" },
+            resetScan: true,
+          };
+        }
+      }
+
+      // (2) planned 초과 경고 (한 번)
       if (hit) {
         const planned = Number(hit.qtyPlanned || 0);
         const picked = Number(hit.qtyPicked || 0);
@@ -121,7 +145,6 @@ export const whInboundMode = {
           const skuLabel = hit?.sku?.sku || hit?.skuCode || hit?.makerCodeSnapshot || value;
 
           const ask = typeof confirm === "function" ? confirm : (msg) => window.confirm(msg);
-
           const ok = ask(
             `⚠️ 계획 수량 초과 입고입니다.\n\n` +
               `SKU: ${skuLabel}\n` +
@@ -133,7 +156,6 @@ export const whInboundMode = {
           );
 
           if (!ok) {
-            // ✅ 취소 시: 백엔드 호출 안 함 (프런트에서만 종료)
             return {
               ok: true,
               cancelled: true,
@@ -144,8 +166,8 @@ export const whInboundMode = {
         }
       }
     } catch (e) {
-      // 조회/가드에서 실패해도 입고 자체를 막지는 않음(현장 업무 중단 방지)
-      // 필요하면 여기서 warn toast로 바꿔도 됨.
+      // 조회/가드 실패해도 업무 중단 방지 (경고 못 띄워도 receive는 진행)
+      // console.warn("Inbound guard failed:", e?.message || e);
     }
 
     // ✅ 기존 백엔드 호출은 그대로

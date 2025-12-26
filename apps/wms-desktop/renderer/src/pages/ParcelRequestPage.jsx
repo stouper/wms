@@ -1,8 +1,8 @@
 // apps/wms-desktop/renderer/src/pages/ParcelRequestPage.jsx
 
 import React, { useMemo, useRef, useState } from "react";
-import { parseParcelRequestFileToRows } from "../lib/parseParcelRequestFile";
-import { getApiBase } from "../lib/api"; // 이미 쓰고 있으면 경로 맞춰줘
+import { runParcelRequest } from "../workflows/parcelRequest/parcelRequest.workflow";
+import { getApiBase } from "../workflows/_common/api";
 
 export default function ParcelRequestPage() {
   const apiBase = getApiBase();
@@ -15,20 +15,21 @@ export default function ParcelRequestPage() {
   const sample = useMemo(() => rows.slice(0, 50), [rows]);
 
   async function onPickFile(e) {
-    setError("");
-    const f = e.target.files?.[0];
-    if (!f) return;
-    setFileName(f.name);
+  setError("");
+  const f = e.target.files?.[0];
+  if (!f) return;
+  setFileName(f.name);
 
-    try {
-      const buf = await f.arrayBuffer();
-      const res = parseParcelRequestFileToRows(buf, f.name);
-      setRows(res.rows || []);
-    } catch (err) {
-      setRows([]);
-      setError(String(err?.message || err));
-    }
+  const res = await runParcelRequest({ file: f });
+
+  if (!res.ok) {
+    setRows([]);
+    setError(res.error);
+    return;
   }
+
+  setRows(res.data.rows || []);
+}
 
   return (
     <div style={{ padding: 16 }}>

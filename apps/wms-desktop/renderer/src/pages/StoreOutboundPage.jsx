@@ -1,16 +1,16 @@
-// apps/wms-desktop/renderer/src/pages/StoreOutboundPage.jsx
+﻿// apps/wms-desktop/renderer/src/pages/StoreOutboundPage.jsx
 import React, { useEffect, useMemo, useRef, useState } from "react";
 import { useToasts } from "../lib/toasts.jsx";
-import { getApiBase } from "../lib/api";
+import { getApiBase } from "../workflows/_common/api";
 import { safeReadJson, safeReadLocal, safeWriteJson, safeWriteLocal } from "../lib/storage";
-import { parseJobFileToRows } from "../lib/parseJobFile";
+import { runStoreOutbound } from "../workflows/storeOutbound/storeOutbound.workflow";
 import { inputStyle, primaryBtn } from "../ui/styles";
 import { Th, Td } from "../components/TableParts";
-import { storeShipMode } from "../workflows/jobsExcel";
+import { storeShipMode } from "../workflows/storeOutbound/storeOutbound.workflow";
 
 const PAGE_KEY = "storeShip";
 
-export default function JobsExcelWorkbenchStoreShip({ pageTitle = "매장 출고", defaultStoreCode = "" }) {
+export default function StoreOutboundPage({ pageTitle = "매장 출고", defaultStoreCode = "" }) {
   const apiBase = getApiBase();
   const mode = storeShipMode;
 
@@ -226,16 +226,9 @@ export default function JobsExcelWorkbenchStoreShip({ pageTitle = "매장 출고
     pickingRef.current = true;
     try {
       setLoading(true);
-
-      const buf = await file.arrayBuffer();
-      if (!buf || buf.byteLength === 0) throw new Error("파일을 읽지 못했어(0 bytes).");
-
-      let parsed;
-      try {
-        parsed = parseJobFileToRows(buf, file.name);
-      } catch {
-        throw new Error("파일 파싱에 실패했어. 엑셀/CSV 형식을 확인해줘.");
-      }
+      const res = await runStoreOutbound({ file });
+      if (!res.ok) throw new Error(res.error);
+      const parsed = res.data;
 
       const { mixedKinds } = parsed || {};
       if (mixedKinds) throw new Error("출고/반품이 섞인 파일입니다. EPMS 파일을 확인해주세요.");
@@ -336,7 +329,7 @@ export default function JobsExcelWorkbenchStoreShip({ pageTitle = "매장 출고
     setLoading(true);
     try {
       if (typeof mode?.scan !== "function") {
-        throw new Error("mode.scan이 없습니다. workflows/jobsExcel/*.mode.js 확인해줘.");
+        throw new Error("mode.scan이 없습니다. workflows/storeOutbound/storeOutbound.workflow.js 확인해줘.");
       }
 
       const result = await mode.scan({
