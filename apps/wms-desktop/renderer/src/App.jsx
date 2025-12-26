@@ -72,7 +72,7 @@ export default function App() {
       </aside>
 
       <main style={mainStyle}>
-        <ActiveComp />
+        <ActiveComp key={activeKey} />
       </main>
     </div>
   );

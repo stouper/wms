@@ -82,29 +82,49 @@ export class JobsService {
     return { ok: true, ...job };
   }
 
-  async listJobs(storeCode?: string) {
-    const where: any = {};
-    const sc = String(storeCode ?? '').trim()
-    if (sc) where.storeCode = sc;
+  async listJobs(params?: {
+  storeCode?: string;
+  status?: string;
+}) {
+  const where: any = {};
 
-    const rows = await this.prisma.job.findMany({
-      where: where as any,
-      orderBy: { createdAt: 'desc' } as any,
-      select: {
-        id: true,
-        storeCode: true,
-        title: true,
-        memo: true,
-        status: true,
-        allowOverpick: true,
-        createdAt: true,
-        updatedAt: true,
-        doneAt: true,
-      } as any,
-    } as any);
-
-    return { ok: true, rows };
+  // storeCode 필터 (옵션)
+  if (
+    params?.storeCode &&
+    params.storeCode !== 'undefined' &&
+    params.storeCode !== 'null' &&
+    params.storeCode.trim() !== ''
+  ) {
+    where.storeCode = params.storeCode.trim();
   }
+
+  // status 필터 (옵션)
+  if (
+    params?.status &&
+    params.status !== 'undefined' &&
+    params.status !== 'null'
+  ) {
+    where.status = params.status;
+  }
+
+  const rows = await this.prisma.job.findMany({
+    where,
+    orderBy: { createdAt: 'desc' },
+    select: {
+      id: true,
+      storeCode: true,
+      title: true,
+      memo: true,
+      status: true,
+      allowOverpick: true,
+      createdAt: true,
+      updatedAt: true,
+      doneAt: true,
+    },
+  });
+
+  return { ok: true, rows };
+} 
 
   async getJob(jobId: string) {
     const job = await this.prisma.job.findUnique({

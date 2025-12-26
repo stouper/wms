@@ -3,14 +3,18 @@ export const storeShipMode = {
   title: "매장 출고",
   sheetName: "WORK",
 
+  // ❗️반품 업로드 차단 (출고 전용)
   validateUpload({ jobKind }) {
-    if (jobKind === "반품") {
+    const raw = String(jobKind ?? "").trim();
+    const norm = raw.replace(/<</g, "").trim(); // "반품<<", "출고<<" 정리
+
+    if (norm === "반품") {
       return { ok: false, error: "반품작지는 [창고 입고] 메뉴에서 업로드하세요." };
     }
     return { ok: true };
   },
 
-  // ✅ Job 생성: 출고 전용(=title/검증 정책이 다름)
+  // ✅ Job 생성: 출고 전용
   async createJobsFromPreview({
     apiBase,
     previewRows,
@@ -19,7 +23,6 @@ export const storeShipMode = {
     postJson,
     fetchJson,
   }) {
-    // storeCode로 그룹핑
     const groups = new Map();
     for (const row of previewRows || []) {
       const store = String(row.storeCode || defaultStoreCode || "").trim();
@@ -50,6 +53,7 @@ export const storeShipMode = {
     return createdJobs;
   },
 
+  
   // ===== helpers =====
   _norm(v) {
     return String(v ?? "").trim();

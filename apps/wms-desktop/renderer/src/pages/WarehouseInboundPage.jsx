@@ -1,3 +1,4 @@
+// apps/wms-desktop/renderer/src/pages/WarehouseInboundPage.jsx
 import React, { useEffect, useMemo, useRef, useState } from "react";
 import { useToasts } from "../lib/toasts.jsx";
 import { getApiBase } from "../lib/api";
@@ -20,12 +21,13 @@ export default function WarehouseInboundPage({ pageTitle = "창고 입고(반품
   const createdKey = `wms.jobs.created.${PAGE_KEY}`;
   const selectedKey = `wms.jobs.selected.${PAGE_KEY}`;
 
+  // ✅ created = "서버(Job DB)에 존재하는 목록"을 담는 state로 사용
   const [created, setCreated] = useState(() => safeReadJson(createdKey, []));
   const [selectedJobId, setSelectedJobId] = useState(() => safeReadLocal(selectedKey, "") || "");
   const [preview, setPreview] = useState(null);
 
-  // 흐름: idle → preview → jobs
-  const [stage, setStage] = useState("idle"); // "idle" | "preview" | "jobs"
+  // 흐름: jobs(기본) → preview → jobs
+  const [stage, setStage] = useState("jobs"); // "jobs" | "preview"
 
   const [scanValue, setScanValue] = useState("");
   const [scanQty, setScanQty] = useState(1);
@@ -42,40 +44,19 @@ export default function WarehouseInboundPage({ pageTitle = "창고 입고(반품
   useEffect(() => safeWriteJson(createdKey, created), [createdKey, created]);
   useEffect(() => safeWriteLocal(selectedKey, selectedJobId || ""), [selectedKey, selectedJobId]);
 
-  // ✅ 페이지 진입 시 세션 클린(작지 생성 전엔 아무것도 안 보이게)
-  useEffect(() => {
-    setCreated([]);
-    setSelectedJobId("");
-    setPreview(null);
-    setStage("idle");
-    setLastScan(null);
-    setShowScanDebug(false);
-    setScanLoc(mode.defaultLocationCode || DEFAULT_RETURN_LOCATION);
-    safeWriteJson(createdKey, []);
-    safeWriteLocal(selectedKey, "");
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
-
-  async function loadJobs() {
-    try {
-      const r = await fetch(`${apiBase}/jobs`);
-      const list = await r.json();
-      if (!Array.isArray(list)) return;
-      setCreated((prev) => prev.map((x) => list.find((y) => y.id === x.id) || x));
-    } catch {}
-  }
-
   // ✅ API 응답이 {ok:true, job:{...}} 또는 {...job} 형태로 섞여 있어도 안전하게 처리
   function unwrapJob(x) {
-    return x?.job ?? x;
+    if (!x) return null;
+    if (x?.job && typeof x.job === "object") return x.job;
+    if (x?.id) return x;
+    return null;
   }
 
-  async function loadJob(jobId) {
-    if (!jobId) return;
-    const r = await fetch(`${apiBase}/jobs/${jobId}`);
-    const raw = await r.json();
-    const job = unwrapJob(raw);
-    setCreated((prev) => prev.map((x) => (x.id === jobId ? job : x)));
+  function unwrapJobsList(resp) {
+    if (Array.isArray(resp)) return resp;
+    if (Array.isArray(resp?.rows)) return resp.rows;
+    if (Array.isArray(resp?.jobs)) return resp.jobs;
+    return [];
   }
 
   async function fetchJson(url) {
@@ -141,6 +122,95 @@ export default function WarehouseInboundPage({ pageTitle = "창고 입고(반품
     return true;
   }
 
+  async function loadJob(jobId) {
+    if (!jobId) return;
+    const r = await fetch(`${apiBase}/jobs/${jobId}`);
+    const raw = await r.json();
+    const job = unwrapJob(raw);
+    if (!job) return;
+
+    setCreated((prev) =>
+      (Array.isArray(prev) ? prev : []).map((x) => {
+        const cur = unwrapJob(x) || x;
+        return cur?.id === jobId ? job : cur;
+      }),
+    );
+  }
+
+  // ✅ [중요] 페이지 진입 시: DB에 있는 jobs를 그대로 불러와서 목록 표시
+    async function loadJobsFromServer() {
+  try {
+    const r = await fetch(`${apiBase}/jobs`);
+    const data = await r.json();
+
+    const listAll = unwrapJobsList(data)
+      .map((x) => unwrapJob(x) || x)
+      .filter(Boolean);
+
+    // ✅ 창고입고(반품): "입고" 또는 "반품"만
+    const list = listAll.filter((j) => {
+      const t = j.title || "";
+      return t.includes("입고") || t.includes("반품");
+    });
+
+    setCreated(list);
+    setStage("jobs");
+
+    if (list.length) {
+      const keep = selectedJobId && list.some((j) => j.id === selectedJobId);
+      const nextId = keep ? selectedJobId : list[0].id;
+      setSelectedJobId(nextId);
+      await loadJob(nextId);
+      setTimeout(() => scanRef.current?.focus?.(), 80);
+    }
+  } catch (e) {
+    push({ kind: "error", title: "Job 목록 로드 실패", message: e?.message || String(e) });
+  }
+}
+
+  // ✅ 마운트 시 항상 서버 목록을 불러온다 (탭 갔다와도 유지)
+  useEffect(() => {
+    setScanLoc(mode.defaultLocationCode || DEFAULT_RETURN_LOCATION);
+    loadJobsFromServer();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  const normalizedCreated = useMemo(() => {
+    const arr = Array.isArray(created) ? created : [];
+    return arr.map((x) => unwrapJob(x) || x).filter(Boolean);
+  }, [created]);
+
+  const selectedJob = useMemo(
+    () => normalizedCreated.find((x) => x.id === selectedJobId) || null,
+    [normalizedCreated, selectedJobId],
+  );
+
+  const grouped = useMemo(() => {
+    const rows = preview?.rows || [];
+    const map = new Map();
+    for (const r of rows) {
+      const storeCode = (r.storeCode || defaultStoreCode || "").trim();
+      if (!storeCode) continue;
+      if (!map.has(storeCode)) map.set(storeCode, []);
+      map.get(storeCode).push(r);
+    }
+    return Array.from(map.entries()).map(([storeCode, lines]) => ({ storeCode, lines }));
+  }, [preview, defaultStoreCode]);
+
+  // ✅ Totals(우측 큰 카드)
+  const totals = useMemo(() => {
+    const items = Array.isArray(selectedJob?.items) ? selectedJob.items : [];
+    let planned = 0;
+    let picked = 0;
+    for (const it of items) {
+      planned += Number(it?.qtyPlanned || 0);
+      picked += Number(it?.qtyPicked || 0);
+    }
+    const remaining = Math.max(0, planned - picked);
+    const pct = planned > 0 ? Math.min(100, Math.round((picked / planned) * 100)) : 0;
+    return { planned, picked, remaining, pct };
+  }, [selectedJob]);
+
   // ✅ 반품입고에서도 extra는 +1만(입력칸 제거)
   async function approveExtra(jobItemId, qty = 1) {
     if (!selectedJobId) throw new Error("jobId is required");
@@ -175,7 +245,10 @@ export default function WarehouseInboundPage({ pageTitle = "창고 입고(반품
         throw new Error("파일 파싱에 실패했어. 엑셀/CSV 형식을 확인해줘.");
       }
 
-      const { jobKind, mixedKinds } = parsed || {};
+      const { jobKind: rawKind, mixedKinds } = parsed || {};
+
+      // ✅ jobKind(D열) 정규화 (예: "반품<<" → "반품")
+      const jobKind = String(rawKind ?? "").trim().replace(/<</g, "").trim();
       if (mixedKinds) throw new Error("출고/반품이 섞인 파일입니다. EPMS 파일을 확인해주세요.");
 
       if (!jobKind) {
@@ -193,41 +266,13 @@ export default function WarehouseInboundPage({ pageTitle = "창고 입고(반품
     } catch (e) {
       push({ kind: "error", title: "파일 파싱 실패", message: e?.message || String(e) });
       setPreview(null);
-      setStage("idle");
+      setStage("jobs");
     } finally {
       setLoading(false);
       pickingRef.current = false;
       if (fileRef.current) fileRef.current.value = "";
     }
   }
-
-  const grouped = useMemo(() => {
-    const rows = preview?.rows || [];
-    const map = new Map();
-    for (const r of rows) {
-      const storeCode = (r.storeCode || defaultStoreCode || "").trim();
-      if (!storeCode) continue;
-      if (!map.has(storeCode)) map.set(storeCode, []);
-      map.get(storeCode).push(r);
-    }
-    return Array.from(map.entries()).map(([storeCode, lines]) => ({ storeCode, lines }));
-  }, [preview, defaultStoreCode]);
-
-  const selectedJob = useMemo(() => created.find((x) => x.id === selectedJobId) || null, [created, selectedJobId]);
-
-  // ✅ Totals(우측 큰 카드)
-  const totals = useMemo(() => {
-    const items = Array.isArray(selectedJob?.items) ? selectedJob.items : [];
-    let planned = 0;
-    let picked = 0;
-    for (const it of items) {
-      planned += Number(it?.qtyPlanned || 0);
-      picked += Number(it?.qtyPicked || 0);
-    }
-    const remaining = Math.max(0, planned - picked);
-    const pct = planned > 0 ? Math.min(100, Math.round((picked / planned) * 100)) : 0;
-    return { planned, picked, remaining, pct };
-  }, [selectedJob]);
 
   async function createJobs() {
     try {
@@ -242,7 +287,7 @@ export default function WarehouseInboundPage({ pageTitle = "창고 입고(반품
 
       setLoading(true);
 
-      const createdJobs = await mode.createJobsFromPreview({
+      const createdJobsRaw = await mode.createJobsFromPreview({
         apiBase,
         previewRows: preview.rows,
         defaultStoreCode,
@@ -251,28 +296,15 @@ export default function WarehouseInboundPage({ pageTitle = "창고 입고(반품
         fetchJson,
       });
 
-      const normalized = (createdJobs || []).map(unwrapJob);
-
-      setCreated((prev) => {
-        const merged = [...normalized, ...prev].reduce((acc, cur) => {
-          if (!acc.find((x) => x.id === cur.id)) acc.push(cur);
-          return acc;
-        }, []);
-        return merged;
-      });
+      const normalized = (Array.isArray(createdJobsRaw) ? createdJobsRaw : []).map((x) => unwrapJob(x) || x).filter(Boolean);
 
       setPreview(null);
       setStage("jobs");
 
-      if (normalized?.[0]?.id) {
-        const firstId = normalized[0].id;
-        setSelectedJobId(firstId);
-        await loadJob(firstId);
-        setTimeout(() => scanRef.current?.focus?.(), 80);
-      }
-
       push({ kind: "success", title: "작지 생성 완료", message: `${normalized.length}건 생성됨` });
-      await loadJobs();
+
+      // ✅ 생성 직후엔 서버 기준으로 다시 목록 로드해서 "사라짐" 방지
+      await loadJobsFromServer();
     } catch (e) {
       push({ kind: "error", title: "작지 생성 실패", message: e?.message || String(e) });
     } finally {
@@ -337,19 +369,6 @@ export default function WarehouseInboundPage({ pageTitle = "창고 입고(반품
     }
   }
 
-  function getApprovedQty(it) {
-    const v =
-      it?.extraApproved ??
-      it?.approvedQty ??
-      it?.qtyApproved ??
-      it?.extraApprovedQty ??
-      it?.extra?.approved ??
-      it?.approved ??
-      0;
-    const n = Number(v);
-    return Number.isFinite(n) ? n : 0;
-  }
-
   function PreviewBlock() {
     if (stage !== "preview" || !preview) return null;
 
@@ -392,19 +411,19 @@ export default function WarehouseInboundPage({ pageTitle = "창고 입고(반품
 
   function JobsRow() {
     if (stage !== "jobs") return null;
-    if (!created.length) return null;
+    if (!normalizedCreated.length) return null;
 
     return (
       <div style={{ marginTop: 12, border: "1px solid #e5e7eb", borderRadius: 12, padding: 12, background: "#fff" }}>
         <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 10, flexWrap: "wrap" }}>
-          <div style={{ fontWeight: 900 }}>생성된 Job(이번 세션)</div>
+          <div style={{ fontWeight: 900 }}>Job 목록(DB)</div>
           <div style={{ fontSize: 12, color: "#64748b" }}>
-            count: <b>{created.length}</b>
+            count: <b>{normalizedCreated.length}</b>
           </div>
         </div>
 
         <div style={{ marginTop: 10, display: "flex", gap: 8, flexWrap: "nowrap", overflowX: "auto", paddingBottom: 6 }}>
-          {created.map((j) => {
+          {normalizedCreated.map((j) => {
             const isSel = j.id === selectedJobId;
 
             return (
@@ -448,8 +467,7 @@ export default function WarehouseInboundPage({ pageTitle = "창고 입고(반품
                     try {
                       setLoading(true);
                       await deleteJob(j.id);
-                      setCreated((prev) => prev.filter((x) => x.id !== j.id));
-                      if (selectedJobId === j.id) setSelectedJobId("");
+                      await loadJobsFromServer();
                       push({ kind: "success", title: "삭제", message: "작지를 삭제했어" });
                     } catch (err) {
                       push({ kind: "error", title: "삭제 실패", message: err?.message || String(err) });
@@ -517,6 +535,19 @@ export default function WarehouseInboundPage({ pageTitle = "창고 입고(반품
     );
   }
 
+  function getApprovedQty(it) {
+    const v =
+      it?.extraApproved ??
+      it?.approvedQty ??
+      it?.qtyApproved ??
+      it?.extraApprovedQty ??
+      it?.extra?.approved ??
+      it?.approved ??
+      0;
+    const n = Number(v);
+    return Number.isFinite(n) ? n : 0;
+  }
+
   function JobDetail() {
     if (!selectedJob) return null;
     const items = Array.isArray(selectedJob.items) ? selectedJob.items : [];
@@ -552,17 +583,10 @@ export default function WarehouseInboundPage({ pageTitle = "창고 입고(반품
                       <Td>{it?.sku?.sku || it.skuCode || it.makerCodeSnapshot || it.id}</Td>
                       <Td align="right">{it.qtyPlanned}</Td>
                       <Td align="right">{it.qtyPicked}</Td>
+
                       <Td align="right">
                         {canExtra ? (
-                          <div
-                            style={{
-                              display: "flex",
-                              alignItems: "center",
-                              justifyContent: "space-between",
-                              gap: 10,
-                              minWidth: 160,
-                            }}
-                          >
+                          <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 10, minWidth: 160 }}>
                             <div style={{ fontSize: 12, color: "#64748b", textAlign: "left" }}>
                               승인됨: <b>{approved}</b>
                             </div>
@@ -636,19 +660,20 @@ export default function WarehouseInboundPage({ pageTitle = "창고 입고(반품
       </div>
 
       <div style={{ fontSize: 12, color: "#64748b", marginTop: 6 }}>
-        업로드 파일: <b>{preview?.fileName || "-"}</b> / 반품입고 로케이션: <b>{(scanLoc || DEFAULT_RETURN_LOCATION).trim()}</b>{" "}
-        (필수)
+        업로드 파일: <b>{preview?.fileName || "-"}</b> / 반품입고 로케이션: <b>{(scanLoc || DEFAULT_RETURN_LOCATION).trim()}</b> (필수)
       </div>
 
-      {/* 1) 미리보기 */}
       <PreviewBlock />
-
-      {/* 2) 생성된 Job 가로 리스트 */}
       <JobsRow />
 
-      {/* 3) 스캔 + 우측 Totals */}
+      {/* 스캔 + 우측 Totals */}
       <div style={{ marginTop: 12, border: "1px solid #e5e7eb", borderRadius: 12, padding: 12, background: "#fff" }}>
-        <div style={{ fontWeight: 900, marginBottom: 8 }}>스캔</div>
+        <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 10, flexWrap: "wrap" }}>
+          <div style={{ fontWeight: 900, marginBottom: 8 }}>스캔</div>
+          <button type="button" style={{ ...primaryBtn, padding: "8px 10px" }} onClick={loadJobsFromServer} disabled={loading}>
+            Job 새로고침
+          </button>
+        </div>
 
         <div style={{ display: "flex", gap: 12, alignItems: "stretch" }}>
           <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap", minWidth: 520 }}>
@@ -663,13 +688,7 @@ export default function WarehouseInboundPage({ pageTitle = "창고 입고(반품
               style={{ ...inputStyle, width: 320 }}
             />
 
-            <input
-              value={scanQty}
-              onChange={(e) => setScanQty(e.target.value)}
-              placeholder="qty"
-              style={{ ...inputStyle, width: 90 }}
-              inputMode="numeric"
-            />
+            <input value={scanQty} onChange={(e) => setScanQty(e.target.value)} placeholder="qty" style={{ ...inputStyle, width: 90 }} inputMode="numeric" />
 
             <input
               value={scanLoc}
@@ -740,7 +759,6 @@ export default function WarehouseInboundPage({ pageTitle = "창고 입고(반품
         </div>
       </div>
 
-      {/* 4) 상세 */}
       <JobDetail />
     </div>
   );

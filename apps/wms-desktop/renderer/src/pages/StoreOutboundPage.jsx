@@ -1,3 +1,4 @@
+// apps/wms-desktop/renderer/src/pages/StoreOutboundPage.jsx
 import React, { useEffect, useMemo, useRef, useState } from "react";
 import { useToasts } from "../lib/toasts.jsx";
 import { getApiBase } from "../lib/api";
@@ -19,11 +20,12 @@ export default function JobsExcelWorkbenchStoreShip({ pageTitle = "매장 출고
   const createdKey = `wms.jobs.created.${PAGE_KEY}`;
   const selectedKey = `wms.jobs.selected.${PAGE_KEY}`;
 
+  // ✅ created = "서버(Job DB)에 존재하는 목록"을 담는 state로 사용
   const [created, setCreated] = useState(() => safeReadJson(createdKey, []));
   const [selectedJobId, setSelectedJobId] = useState(() => safeReadLocal(selectedKey, "") || "");
   const [preview, setPreview] = useState(null);
 
-  const [stage, setStage] = useState("idle"); // "idle" | "preview" | "jobs"
+  const [stage, setStage] = useState("jobs"); // ✅ 기본은 jobs 화면 (DB 목록 먼저 보여주자)
 
   const [scanValue, setScanValue] = useState("");
   const [scanQty, setScanQty] = useState(1);
@@ -45,25 +47,11 @@ export default function JobsExcelWorkbenchStoreShip({ pageTitle = "매장 출고
     setScanLoc((prev) => prev || "");
   }, []);
 
-  useEffect(() => {
-    setCreated([]);
-    setSelectedJobId("");
-    setPreview(null);
-    setStage("idle");
-    setLastScan(null);
-    setShowScanDebug(false);
-    safeWriteJson(createdKey, []);
-    safeWriteLocal(selectedKey, "");
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
-
   // ✅ 백엔드 응답 형태를 통일해서 "job 객체"만 뽑아내기
   function unwrapJob(resp) {
     if (!resp) return null;
-    // { ok:true, job:{...} }
-    if (resp?.job && typeof resp.job === "object") return resp.job;
-    // 이미 job object라면 그대로
-    if (resp?.id) return resp;
+    if (resp?.job && typeof resp.job === "object") return resp.job; // { ok:true, job:{...} }
+    if (resp?.id) return resp; // already job
     return null;
   }
 
@@ -73,39 +61,6 @@ export default function JobsExcelWorkbenchStoreShip({ pageTitle = "매장 출고
     if (Array.isArray(resp?.rows)) return resp.rows;
     if (Array.isArray(resp?.jobs)) return resp.jobs;
     return [];
-  }
-
-  async function loadJobs() {
-    try {
-      const r = await fetch(`${apiBase}/jobs`);
-      const data = await r.json();
-      const list = unwrapJobsList(data);
-      if (!Array.isArray(list) || !list.length) return;
-
-      // created에 있는 id 기준으로 최신 정보 덮어쓰기
-      setCreated((prev) =>
-        prev.map((x) => {
-          const id = x?.id || x?.job?.id;
-          const found = list.find((y) => y.id === id);
-          return found || unwrapJob(x) || x;
-        }),
-      );
-    } catch {}
-  }
-
-  async function loadJob(jobId) {
-    if (!jobId) return;
-    const r = await fetch(`${apiBase}/jobs/${jobId}`);
-    const data = await r.json();
-    const jobObj = unwrapJob(data);
-    if (!jobObj) return;
-
-    setCreated((prev) =>
-      prev.map((x) => {
-        const cur = unwrapJob(x) || x;
-        return cur?.id === jobId ? jobObj : cur;
-      }),
-    );
   }
 
   async function fetchJson(url) {
@@ -171,6 +126,84 @@ export default function JobsExcelWorkbenchStoreShip({ pageTitle = "매장 출고
     return true;
   }
 
+  async function loadJob(jobId) {
+    if (!jobId) return;
+    const r = await fetch(`${apiBase}/jobs/${jobId}`);
+    const data = await r.json();
+    const jobObj = unwrapJob(data);
+    if (!jobObj) return;
+
+    setCreated((prev) =>
+      (Array.isArray(prev) ? prev : []).map((x) => {
+        const cur = unwrapJob(x) || x;
+        return cur?.id === jobId ? jobObj : cur;
+      }),
+    );
+  }
+
+      // ✅ [중요] 페이지 진입 시: DB에 있는 jobs를 불러와서 "출고"만 표시
+   async function loadJobsFromServer() {
+    try {
+    const r = await fetch(`${apiBase}/jobs`);
+    const data = await r.json();
+
+    const listAll = unwrapJobsList(data)
+      .map((x) => unwrapJob(x) || x)
+      .filter(Boolean);
+
+    const list = listAll.filter((j) => {
+      const t = j.title || "";
+      return t.includes("출고") && !t.includes("입고");
+    });
+
+    setCreated(list);
+    setStage("jobs");
+ 
+      // ✅ 선택된 Job이 없거나, 선택된 Job이 목록에서 사라졌으면 첫번째로 자동 선택
+      if (list.length) {
+        const keep = selectedJobId && list.some((j) => j.id === selectedJobId);
+        const nextId = keep ? selectedJobId : list[0].id;
+        setSelectedJobId(nextId);
+        // ✅ 아이템 포함 상세로 갱신
+        await loadJob(nextId);
+        setTimeout(() => scanRef.current?.focus?.(), 80);
+      }
+    } catch (e) {
+      // 실패해도 화면은 살아있게
+      push({ kind: "error", title: "Job 목록 로드 실패", message: e?.message || String(e) });
+    }
+  }
+
+  // ✅ 마운트 시 항상 서버 목록을 불러온다 (탭 갔다오면 다시 보이게)
+  useEffect(() => {
+    loadJobsFromServer();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  // ✅ created 안에 혹시 응답 통째로 들어가 있어도 job 객체로 정규화
+  const normalizedCreated = useMemo(() => {
+    const arr = Array.isArray(created) ? created : [];
+    return arr.map((x) => unwrapJob(x) || x).filter(Boolean);
+  }, [created]);
+
+  const selectedJob = useMemo(
+    () => normalizedCreated.find((x) => x.id === selectedJobId) || null,
+    [normalizedCreated, selectedJobId],
+  );
+
+  const totals = useMemo(() => {
+    const items = Array.isArray(selectedJob?.items) ? selectedJob.items : [];
+    let planned = 0;
+    let picked = 0;
+    for (const it of items) {
+      planned += Number(it?.qtyPlanned || 0);
+      picked += Number(it?.qtyPicked || 0);
+    }
+    const remaining = Math.max(0, planned - picked);
+    const pct = planned > 0 ? Math.min(100, Math.round((picked / planned) * 100)) : 0;
+    return { planned, picked, remaining, pct };
+  }, [selectedJob]);
+
   async function approveExtra(jobItemId, qty = 1) {
     if (!selectedJobId) throw new Error("jobId is required");
     const n = Number(qty);
@@ -208,7 +241,17 @@ export default function JobsExcelWorkbenchStoreShip({ pageTitle = "매장 출고
       if (mixedKinds) throw new Error("출고/반품이 섞인 파일입니다. EPMS 파일을 확인해주세요.");
 
       if (typeof mode?.validateUpload === "function") {
-        const v = mode.validateUpload({ pageKey: PAGE_KEY, parsed });
+        // ✅ jobKind(D열): "출고<<" / "반품<<" 같은 표기를 정규화해서 넘겨준다
+        const rawKind =
+          parsed?.jobKind ??
+          parsed?.kind ??
+          parsed?.jobType ??
+          parsed?.meta?.jobKind ??
+          parsed?.meta?.kind ??
+          "";
+        const jobKind = String(rawKind ?? "").trim().replace(/<</g, "").trim();
+
+        const v = mode.validateUpload({ pageKey: PAGE_KEY, parsed, jobKind });
         if (v?.ok === false) throw new Error(v.error);
       }
 
@@ -218,7 +261,7 @@ export default function JobsExcelWorkbenchStoreShip({ pageTitle = "매장 출고
     } catch (e) {
       push({ kind: "error", title: "파일 파싱 실패", message: e?.message || String(e) });
       setPreview(null);
-      setStage("idle");
+      setStage("jobs");
     } finally {
       setLoading(false);
       pickingRef.current = false;
@@ -237,30 +280,6 @@ export default function JobsExcelWorkbenchStoreShip({ pageTitle = "매장 출고
     }
     return Array.from(map.entries()).map(([storeCode, lines]) => ({ storeCode, lines }));
   }, [preview, defaultStoreCode]);
-
-  // ✅ created 안에 혹시 응답 통째로 들어가 있어도 job 객체로 정규화
-  const normalizedCreated = useMemo(() => {
-    const arr = Array.isArray(created) ? created : [];
-    return arr.map((x) => unwrapJob(x) || x).filter(Boolean);
-  }, [created]);
-
-  const selectedJob = useMemo(
-    () => normalizedCreated.find((x) => x.id === selectedJobId) || null,
-    [normalizedCreated, selectedJobId],
-  );
-
-  const totals = useMemo(() => {
-    const items = Array.isArray(selectedJob?.items) ? selectedJob.items : [];
-    let planned = 0;
-    let picked = 0;
-    for (const it of items) {
-      planned += Number(it?.qtyPlanned || 0);
-      picked += Number(it?.qtyPicked || 0);
-    }
-    const remaining = Math.max(0, planned - picked);
-    const pct = planned > 0 ? Math.min(100, Math.round((picked / planned) * 100)) : 0;
-    return { planned, picked, remaining, pct };
-  }, [selectedJob]);
 
   async function createJobs() {
     try {
@@ -284,32 +303,16 @@ export default function JobsExcelWorkbenchStoreShip({ pageTitle = "매장 출고
         fetchJson,
       });
 
-      // ✅ createdJobs도 혹시 {ok:true, job:{...}} 형태면 unwrap
       const createdJobs = (Array.isArray(createdJobsRaw) ? createdJobsRaw : [])
         .map((x) => unwrapJob(x) || x)
         .filter(Boolean);
 
-      setCreated((prev) => {
-        const prevNorm = (Array.isArray(prev) ? prev : []).map((x) => unwrapJob(x) || x).filter(Boolean);
-        const merged = [...createdJobs, ...prevNorm].reduce((acc, cur) => {
-          if (!acc.find((x) => x.id === cur.id)) acc.push(cur);
-          return acc;
-        }, []);
-        return merged;
-      });
-
       setPreview(null);
       setStage("jobs");
 
-      if (createdJobs?.[0]?.id) {
-        const firstId = createdJobs[0].id;
-        setSelectedJobId(firstId);
-        await loadJob(firstId); // ✅ 상세(아이템 포함)로 다시 덮어쓰기
-        setTimeout(() => scanRef.current?.focus?.(), 80);
-      }
-
+      // ✅ 생성 직후엔 서버 기준으로 다시 목록 로드해서 "사라짐" 방지
       push({ kind: "success", title: "작지 생성 완료", message: `${createdJobs.length}건 생성됨` });
-      await loadJobs();
+      await loadJobsFromServer();
     } catch (e) {
       push({ kind: "error", title: "작지 생성 실패", message: e?.message || String(e) });
     } finally {
@@ -328,7 +331,6 @@ export default function JobsExcelWorkbenchStoreShip({ pageTitle = "매장 출고
 
     const qty = Number(scanQty || 1);
     const safeQty = Number.isFinite(qty) && qty > 0 ? qty : 1;
-
     const loc = (scanLoc || "").trim();
 
     setLoading(true);
@@ -417,7 +419,7 @@ export default function JobsExcelWorkbenchStoreShip({ pageTitle = "매장 출고
     return (
       <div style={{ marginTop: 12, border: "1px solid #e5e7eb", borderRadius: 12, padding: 12, background: "#fff" }}>
         <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 10, flexWrap: "wrap" }}>
-          <div style={{ fontWeight: 900 }}>생성된 Job(이번 세션)</div>
+          <div style={{ fontWeight: 900 }}>Job 목록(DB)</div>
           <div style={{ fontSize: 12, color: "#64748b" }}>
             count: <b>{normalizedCreated.length}</b>
           </div>
@@ -468,8 +470,8 @@ export default function JobsExcelWorkbenchStoreShip({ pageTitle = "매장 출고
                     try {
                       setLoading(true);
                       await deleteJob(j.id);
-                      setCreated((prev) => (Array.isArray(prev) ? prev : []).filter((x) => (unwrapJob(x) || x)?.id !== j.id));
-                      if (selectedJobId === j.id) setSelectedJobId("");
+                      // ✅ 삭제 후 서버 다시 로드
+                      await loadJobsFromServer();
                       push({ kind: "success", title: "삭제", message: "작지를 삭제했어" });
                     } catch (err) {
                       push({ kind: "error", title: "삭제 실패", message: err?.message || String(err) });
@@ -538,14 +540,7 @@ export default function JobsExcelWorkbenchStoreShip({ pageTitle = "매장 출고
   }
 
   function getApprovedQty(it) {
-    const v =
-      it?.extraApproved ??
-      it?.approvedQty ??
-      it?.qtyApproved ??
-      it?.extraApprovedQty ??
-      it?.extra?.approved ??
-      it?.approved ??
-      0;
+    const v = it?.extraApproved ?? it?.approvedQty ?? it?.qtyApproved ?? it?.extraApprovedQty ?? it?.extra?.approved ?? it?.approved ?? 0;
     const n = Number(v);
     return Number.isFinite(n) ? n : 0;
   }
@@ -628,9 +623,7 @@ export default function JobsExcelWorkbenchStoreShip({ pageTitle = "매장 출고
             </table>
           </div>
         ) : (
-          <div style={{ marginTop: 10, fontSize: 12, color: "#64748b" }}>
-            items가 없어. (job 상세 조회 응답을 job 객체로 저장 못했을 때 주로 이렇게 떠)
-          </div>
+          <div style={{ marginTop: 10, fontSize: 12, color: "#64748b" }}>items가 없어. (job 상세 조회 응답을 job 객체로 저장 못했을 때 주로 이렇게 떠)</div>
         )}
       </div>
     );
@@ -671,7 +664,12 @@ export default function JobsExcelWorkbenchStoreShip({ pageTitle = "매장 출고
       <JobsRow />
 
       <div style={{ marginTop: 12, border: "1px solid #e5e7eb", borderRadius: 12, padding: 12, background: "#fff" }}>
-        <div style={{ fontWeight: 900, marginBottom: 8 }}>스캔</div>
+        <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 10, flexWrap: "wrap" }}>
+          <div style={{ fontWeight: 900 }}>스캔</div>
+          <button type="button" style={{ ...primaryBtn, padding: "8px 10px" }} onClick={loadJobsFromServer} disabled={loading}>
+            Job 새로고침
+          </button>
+        </div>
 
         <div style={{ display: "flex", gap: 12, alignItems: "stretch" }}>
           <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap", minWidth: 520 }}>

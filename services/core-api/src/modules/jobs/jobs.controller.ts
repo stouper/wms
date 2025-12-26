@@ -14,22 +14,28 @@ export class JobsController {
   }
 
   // ✅ 목록 (date 쿼리는 지금은 무시: 필요하면 service 쪽에 필터 다시 붙이면 됨)
-  @Get()
-  list(
-    @Query('date') date?: string,
-    @Query('status') status?: string,
-  ) {
-    const s = (status ?? '').toString().trim().toLowerCase();
+@Get()
+list(
+  @Query('date') date?: string,
+  @Query('status') status?: string,
+  @Query('storeCode') storeCode?: string,
+) {
+  const s = (status ?? '').toString().trim().toLowerCase();
 
-    // ✅ desktop/레거시 호환: completed -> done
-    const normalized =
-      s === 'completed' || s === 'complete' || s === 'finished' ? 'done' : s;
+  // ✅ desktop/레거시 호환: completed -> done
+  const normalized =
+    s === 'completed' || s === 'complete' || s === 'finished' ? 'done' : s;
 
-    return this.jobs.listJobs({
-      date,
-      status: (normalized || undefined) as any,
-    } as any);
-  }
+  const scRaw = (storeCode ?? '').toString().trim();
+  const sc =
+    scRaw && scRaw !== 'undefined' && scRaw !== 'null' ? scRaw : undefined;
+
+  return this.jobs.listJobs({
+    date,
+    status: (normalized || undefined) as any,
+    storeCode: sc,
+  } as any);
+}
 
 // ✅ 디테일: 반드시 items(+sku) 포함해서 내려줘야 desktop에서 보임
   @Get(':id')

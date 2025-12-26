@@ -6,14 +6,18 @@ export const whInboundMode = {
   sheetName: "WORK",
   defaultLocationCode: DEFAULT_RETURN_LOCATION,
 
+  // ❗️출고 업로드 차단 (반품/입고 전용)
   validateUpload({ jobKind }) {
-    if (jobKind === "출고") {
+    const raw = String(jobKind ?? "").trim();
+    const norm = raw.replace(/<</g, "").trim(); // "출고<<", "반품<<" 정리
+
+    if (norm === "출고") {
       return { ok: false, error: "출고작지는 [매장 출고] 메뉴에서 업로드하세요." };
     }
     return { ok: true };
   },
 
-  // ✅ Job 생성: 입고 전용 (title 정책만 다르게)
+  // ✅ Job 생성: 입고 전용
   async createJobsFromPreview({
     apiBase,
     previewRows,
@@ -50,6 +54,7 @@ export const whInboundMode = {
     }
 
     return createdJobs;
+
   },
 
   async scan({
