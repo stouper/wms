@@ -1,6 +1,9 @@
 ﻿// apps/wms-desktop/electron/main.cjs
 const path = require("path");
-const { app, BrowserWindow } = require("electron");
+const os = require("os");
+const fs = require("fs");
+const { execFile } = require("child_process");
+const { app, BrowserWindow, ipcMain } = require("electron");
 
 function createWindow() {
   const win = new BrowserWindow({
@@ -13,14 +16,38 @@ function createWindow() {
     },
   });
 
-  // 기존 로딩 방식 유지 (프로젝트에 맞춰 한쪽만 남기면 됨)
-  const devUrl = process.env.ELECTRON_RENDERER_URL;
-  if (devUrl) {
-    win.loadURL(devUrl);
-  } else {
-    win.loadFile(path.join(__dirname, "../renderer/index.html"));
-  }
+  // ✅ 최소 안전 로딩: renderer/index.html
+  win.loadFile(path.join(__dirname, "../renderer/index.html"));
 }
+
+  ipcMain.handle("print:sendRaw", async (_e, { target, raw }) => {
+  if (!target) throw new Error("print:sendRaw target is required");
+  if (typeof raw !== "string" || raw.length <= 0) throw new Error("print:sendRaw raw is required");
+
+  return await new Promise((resolve, reject) => {
+    const tmp = path.join(os.tmpdir(), `raw_${Date.now()}.txt`);
+
+    try {
+      // ✅ TSPL/ZPL은 보통 ASCII 계열이 더 안전 (UTF-8 BOM/멀티바이트 피하기)
+      fs.writeFileSync(tmp, raw, "ascii");
+    } catch (e) {
+      return reject(e);
+    }
+
+    // ✅ copy /b 대신 print /D 사용 (스풀러 경유)
+    // 예: print /D:\\localhost\XPDT108B C:\temp\raw.txt
+    execFile(
+      "cmd.exe",
+      ["/c", "print", `/D:${target}`, tmp],
+      { windowsHide: true },
+      (err, stdout, stderr) => {
+        try { fs.unlinkSync(tmp); } catch {}
+        if (err) return reject(new Error((stderr || stdout || err.message || "print failed").toString()));
+        resolve({ ok: true });
+      }
+    );
+  });
+});
 
 app.whenReady().then(() => {
   createWindow();

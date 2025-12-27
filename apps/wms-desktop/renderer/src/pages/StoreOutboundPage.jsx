@@ -7,6 +7,7 @@ import { runStoreOutbound } from "../workflows/storeOutbound/storeOutbound.workf
 import { inputStyle, primaryBtn } from "../ui/styles";
 import { Th, Td } from "../components/TableParts";
 import { storeShipMode } from "../workflows/storeOutbound/storeOutbound.workflow";
+import { addSku, pickSkuFromScan, printBoxLabel } from "../workflows/_common/print/packingBox";
 
 const PAGE_KEY = "storeShip";
 
@@ -19,6 +20,10 @@ export default function StoreOutboundPage({ pageTitle = "매장 출고", default
 
   const createdKey = `wms.jobs.created.${PAGE_KEY}`;
   const selectedKey = `wms.jobs.selected.${PAGE_KEY}`;
+
+  // 프린터 만들기//
+  const [boxNo, setBoxNo] = useState(1);
+  const [boxItems, setBoxItems] = useState(() => new Map());
 
   // ✅ created = "서버(Job DB)에 존재하는 목록"을 담는 state로 사용
   const [created, setCreated] = useState(() => safeReadJson(createdKey, []));
@@ -352,6 +357,10 @@ export default function StoreOutboundPage({ pageTitle = "매장 출고", default
 
       if (result.lastScan !== undefined) setLastScan(result.lastScan);
       if (result.toast) push(result.toast);
+      const sku = pickSkuFromScan(result.lastScan);
+      if (sku) {
+      setBoxItems(prev => addSku(prev, sku, safeQty));
+     }
 
       if (result.resetScan) {
         setScanValue("");
@@ -364,7 +373,7 @@ export default function StoreOutboundPage({ pageTitle = "매장 출고", default
       setLoading(false);
     }
   }
-
+  
   function PreviewBlock() {
     if (stage !== "preview" || !preview) return null;
 
@@ -635,6 +644,27 @@ export default function StoreOutboundPage({ pageTitle = "매장 출고", default
         <button type="button" style={primaryBtn} onClick={createJobs} disabled={loading || !preview}>
           작지 생성
         </button>
+        <button
+        type="button"
+        style={{ ...primaryBtn, background: "#22c55e" }}
+        disabled={loading || !selectedJob || boxItems.size === 0}
+       onClick={async () => {
+       const ok = await printBoxLabel({
+        job: selectedJob,
+        boxNo,
+        boxItems,
+        push,
+        sendRaw: window.wms.sendRaw,
+       });
+        if (ok) {
+        setBoxNo((n) => n + 1);
+        setBoxItems(new Map());
+        }
+        }}
+       >
+       박스 마감
+       </button>
+
 
         <input
           ref={fileRef}
