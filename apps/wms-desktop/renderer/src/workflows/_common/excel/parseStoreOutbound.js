@@ -94,6 +94,8 @@ function detectHeaderRow(grid) {
     "구분",
     "출고",
     "반품",
+    "의뢰번호",
+
   ];
 
   let best = { score: -1, idx: 0, header: [] };
@@ -145,6 +147,7 @@ function normalizeRows(objs) {
     const name = pick(o, ["name", "NAME", "코드명", "상품명", "품명"]); // ✅ 추가
     const qty = pick(o, ["qty", "Qty", "QTY", "수량", "의뢰수량", "수량(의뢰)"]);
     const kindRaw = pick(o, ["구분", "출고/반품", "작업구분", "TYPE", "type"]);
+    const reqNo = pick(o, ["의뢰번호"]);
 
     const kind = normalizeKind(kindRaw);
     if (kind) kindSet.add(kind);
@@ -153,12 +156,13 @@ function normalizeRows(objs) {
       storeCode: String(storeCode ?? "").trim(),
       skuCode: String(skuCode ?? "").trim(),
       makerCode: String(makerCode ?? "").trim(),
-      name: String(name ?? "").trim(), // ✅ 추가
+      name: String(name ?? "").trim(),
+      reqNo: String(reqNo ?? "").trim(), // ✅ 추가
       qty: Math.abs(toInt(qty)),
       jobKind: kind || null,
     };
 
-    if (!row.storeCode && !row.skuCode && !row.makerCode && !row.name && !row.qty) continue;
+    if (!row.storeCode && !row.skuCode && !row.makerCode && !row.name && !row.reqNo && !row.qty) continue;
     out.push(row);
   }
 

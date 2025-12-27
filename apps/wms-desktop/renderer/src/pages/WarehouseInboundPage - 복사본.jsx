@@ -1,18 +1,19 @@
-﻿// apps/wms-desktop/renderer/src/pages/StoreOutboundPage.jsx
+// apps/wms-desktop/renderer/src/pages/WarehouseInboundPage.jsx
 import React, { useEffect, useMemo, useRef, useState } from "react";
 import { useToasts } from "../lib/toasts.jsx";
 import { getApiBase } from "../workflows/_common/api";
 import { safeReadJson, safeReadLocal, safeWriteJson, safeWriteLocal } from "../lib/storage";
+import { runWarehouseInbound } from "../workflows/warehouseInbound/warehouseInbound.workflow";
 import { inputStyle, primaryBtn } from "../ui/styles";
 import { Th, Td } from "../components/TableParts";
-import { storeShipMode } from "../workflows/storeOutbound/storeOutbound.workflow";
-import { addSku, pickSkuFromScan, printBoxLabel } from "../workflows/_common/print/packingBox";
+import { whInboundMode } from "../workflows/warehouseInbound/warehouseInbound.workflow";
 
-const PAGE_KEY = "storeShip";
+const PAGE_KEY = "whInbound";
+const DEFAULT_RETURN_LOCATION = "RET-01";
 
-export default function StoreOutboundPage({ pageTitle = "매장 출고", defaultStoreCode = "" }) {
+export default function WarehouseInboundPage({ pageTitle = "창고 입고(반품)", defaultStoreCode = "" }) {
   const apiBase = getApiBase();
-  const mode = storeShipMode;
+  const mode = whInboundMode;
 
   const { push, ToastHost } = useToasts();
   const [loading, setLoading] = useState(false);
@@ -20,42 +21,37 @@ export default function StoreOutboundPage({ pageTitle = "매장 출고", default
   const createdKey = `wms.jobs.created.${PAGE_KEY}`;
   const selectedKey = `wms.jobs.selected.${PAGE_KEY}`;
 
-  // ✅ 박스(팩킹리스트) 출력 관련
-  const [boxNo, setBoxNo] = useState(1);
-  const [boxItems, setBoxItems] = useState(() => new Map());
-
   // ✅ created = "서버(Job DB)에 존재하는 목록"을 담는 state로 사용
   const [created, setCreated] = useState(() => safeReadJson(createdKey, []));
   const [selectedJobId, setSelectedJobId] = useState(() => safeReadLocal(selectedKey, "") || "");
+  const [preview, setPreview] = useState(null);
+
+  // 흐름: jobs(기본) → preview → jobs
+  const [stage, setStage] = useState("jobs"); // "jobs" | "preview"
 
   const [scanValue, setScanValue] = useState("");
   const [scanQty, setScanQty] = useState(1);
-  const [scanLoc, setScanLoc] = useState(() => mode.defaultLocationCode || "");
+  const [scanLoc, setScanLoc] = useState(() => mode.defaultLocationCode || DEFAULT_RETURN_LOCATION);
   const [lastScan, setLastScan] = useState(null);
-
   const [showScanDebug, setShowScanDebug] = useState(false);
 
   const scanRef = useRef(null);
-  const pickingRef = useRef(false); // (남겨둠) 혹시 추후 확장 대비
+  const fileRef = useRef(null);
+  const pickingRef = useRef(false);
 
   const [approvingExtra, setApprovingExtra] = useState(false);
 
   useEffect(() => safeWriteJson(createdKey, created), [createdKey, created]);
   useEffect(() => safeWriteLocal(selectedKey, selectedJobId || ""), [selectedKey, selectedJobId]);
 
-  useEffect(() => {
-    setScanLoc((prev) => prev || "");
-  }, []);
-
-  // ✅ 백엔드 응답 형태를 통일해서 "job 객체"만 뽑아내기
-  function unwrapJob(resp) {
-    if (!resp) return null;
-    if (resp?.job && typeof resp.job === "object") return resp.job; // { ok:true, job:{...} }
-    if (resp?.id) return resp; // already job
+  // ✅ API 응답이 {ok:true, job:{...}} 또는 {...job} 형태로 섞여 있어도 안전하게 처리
+  function unwrapJob(x) {
+    if (!x) return null;
+    if (x?.job && typeof x.job === "object") return x.job;
+    if (x?.id) return x;
     return null;
   }
 
-  // ✅ /jobs 응답 형태: 배열 or {ok:true, rows:[...]} 모두 지원
   function unwrapJobsList(resp) {
     if (Array.isArray(resp)) return resp;
     if (Array.isArray(resp?.rows)) return resp.rows;
@@ -129,56 +125,56 @@ export default function StoreOutboundPage({ pageTitle = "매장 출고", default
   async function loadJob(jobId) {
     if (!jobId) return;
     const r = await fetch(`${apiBase}/jobs/${jobId}`);
-    const data = await r.json();
-    const jobObj = unwrapJob(data);
-    if (!jobObj) return;
+    const raw = await r.json();
+    const job = unwrapJob(raw);
+    if (!job) return;
 
     setCreated((prev) =>
       (Array.isArray(prev) ? prev : []).map((x) => {
         const cur = unwrapJob(x) || x;
-        return cur?.id === jobId ? jobObj : cur;
+        return cur?.id === jobId ? job : cur;
       }),
     );
   }
 
-  // ✅ [중요] 페이지 진입 시: DB에 있는 jobs를 불러와서 "출고"만 표시
-  async function loadJobsFromServer() {
-    try {
-      const r = await fetch(`${apiBase}/jobs`);
-      const data = await r.json();
+  // ✅ [중요] 페이지 진입 시: DB에 있는 jobs를 그대로 불러와서 목록 표시
+    async function loadJobsFromServer() {
+  try {
+    const r = await fetch(`${apiBase}/jobs`);
+    const data = await r.json();
 
-      const listAll = unwrapJobsList(data)
-        .map((x) => unwrapJob(x) || x)
-        .filter(Boolean);
+    const listAll = unwrapJobsList(data)
+      .map((x) => unwrapJob(x) || x)
+      .filter(Boolean);
 
-      const list = listAll.filter((j) => {
-        const t = j.title || "";
-        return t.includes("출고") && !t.includes("입고");
-      });
+    // ✅ 창고입고(반품): "입고" 또는 "반품"만
+    const list = listAll.filter((j) => {
+      const t = j.title || "";
+      return t.includes("입고") || t.includes("반품");
+    });
 
-      setCreated(list);
+    setCreated(list);
+    setStage("jobs");
 
-      // ✅ 선택된 Job이 없거나, 선택된 Job이 목록에서 사라졌으면 첫번째로 자동 선택
-      if (list.length) {
-        const keep = selectedJobId && list.some((j) => j.id === selectedJobId);
-        const nextId = keep ? selectedJobId : list[0].id;
-        setSelectedJobId(nextId);
-        // ✅ 아이템 포함 상세로 갱신
-        await loadJob(nextId);
-        setTimeout(() => scanRef.current?.focus?.(), 80);
-      }
-    } catch (e) {
-      push({ kind: "error", title: "Job 목록 로드 실패", message: e?.message || String(e) });
+    if (list.length) {
+      const keep = selectedJobId && list.some((j) => j.id === selectedJobId);
+      const nextId = keep ? selectedJobId : list[0].id;
+      setSelectedJobId(nextId);
+      await loadJob(nextId);
+      setTimeout(() => scanRef.current?.focus?.(), 80);
     }
+  } catch (e) {
+    push({ kind: "error", title: "Job 목록 로드 실패", message: e?.message || String(e) });
   }
+}
 
-  // ✅ 마운트 시 항상 서버 목록을 불러온다 (탭 갔다오면 다시 보이게)
+  // ✅ 마운트 시 항상 서버 목록을 불러온다 (탭 갔다와도 유지)
   useEffect(() => {
+    setScanLoc(mode.defaultLocationCode || DEFAULT_RETURN_LOCATION);
     loadJobsFromServer();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  // ✅ created 안에 혹시 응답 통째로 들어가 있어도 job 객체로 정규화
   const normalizedCreated = useMemo(() => {
     const arr = Array.isArray(created) ? created : [];
     return arr.map((x) => unwrapJob(x) || x).filter(Boolean);
@@ -189,6 +185,19 @@ export default function StoreOutboundPage({ pageTitle = "매장 출고", default
     [normalizedCreated, selectedJobId],
   );
 
+  const grouped = useMemo(() => {
+    const rows = preview?.rows || [];
+    const map = new Map();
+    for (const r of rows) {
+      const storeCode = (r.storeCode || defaultStoreCode || "").trim();
+      if (!storeCode) continue;
+      if (!map.has(storeCode)) map.set(storeCode, []);
+      map.get(storeCode).push(r);
+    }
+    return Array.from(map.entries()).map(([storeCode, lines]) => ({ storeCode, lines }));
+  }, [preview, defaultStoreCode]);
+
+  // ✅ Totals(우측 큰 카드)
   const totals = useMemo(() => {
     const items = Array.isArray(selectedJob?.items) ? selectedJob.items : [];
     let planned = 0;
@@ -202,6 +211,7 @@ export default function StoreOutboundPage({ pageTitle = "매장 출고", default
     return { planned, picked, remaining, pct };
   }, [selectedJob]);
 
+  // ✅ 반품입고에서도 extra는 +1만(입력칸 제거)
   async function approveExtra(jobItemId, qty = 1) {
     if (!selectedJobId) throw new Error("jobId is required");
     const n = Number(qty);
@@ -217,6 +227,86 @@ export default function StoreOutboundPage({ pageTitle = "매장 출고", default
     }
   }
 
+  async function onPickFile(file) {
+    if (!file) return;
+    if (pickingRef.current) return;
+
+    pickingRef.current = true;
+    try {
+      setLoading(true);
+      const res = await runWarehouseInbound({ file });
+      if (!res.ok) throw new Error(res.error);
+      const parsed = res.data;
+      console.log("DEBUG inbound parsed.rows[0] =", parsed?.rows?.[0]);
+      console.log("DEBUG inbound parsed.sample[0] =", parsed?.sample?.[0]);
+
+      const { jobKind: rawKind, mixedKinds } = parsed || {};
+
+      // ✅ jobKind(D열) 정규화 (예: "반품<<" → "반품")
+      const jobKind = String(rawKind ?? "").trim().replace(/<</g, "").trim();
+      if (mixedKinds) throw new Error("출고/반품이 섞인 파일입니다. EPMS 파일을 확인해주세요.");
+
+      if (!jobKind) {
+        push({ kind: "warn", title: "구분(D열) 없음", message: "출고/반품 구분이 감지되지 않았어. (EPMS 파일 D열 확인 권장)" });
+      }
+
+      if (typeof mode?.validateUpload === "function") {
+        const v = mode.validateUpload({ jobKind, pageKey: PAGE_KEY, parsed });
+        if (v?.ok === false) throw new Error(v.error);
+      }
+
+      setPreview({ ...parsed, fileName: file.name });
+      setStage("preview");
+      push({ kind: "success", title: "파일 로드", message: `${file.name} (rows: ${parsed.rows.length})` });
+    } catch (e) {
+      push({ kind: "error", title: "파일 파싱 실패", message: e?.message || String(e) });
+      setPreview(null);
+      setStage("jobs");
+    } finally {
+      setLoading(false);
+      pickingRef.current = false;
+      if (fileRef.current) fileRef.current.value = "";
+    }
+  }
+
+  async function createJobs() {
+    try {
+      if (!preview?.rows?.length) {
+        push({ kind: "warn", title: "업로드 필요", message: "먼저 파일 업로드해줘" });
+        return;
+      }
+      if (typeof mode?.createJobsFromPreview !== "function") {
+        push({ kind: "error", title: "생성 불가", message: "mode.createJobsFromPreview가 없어" });
+        return;
+      }
+
+      setLoading(true);
+
+      const createdJobsRaw = await mode.createJobsFromPreview({
+        apiBase,
+        previewRows: preview.rows,
+        defaultStoreCode,
+        title: pageTitle || mode.title,
+        postJson,
+        fetchJson,
+      });
+
+      const normalized = (Array.isArray(createdJobsRaw) ? createdJobsRaw : []).map((x) => unwrapJob(x) || x).filter(Boolean);
+
+      setPreview(null);
+      setStage("jobs");
+
+      push({ kind: "success", title: "작지 생성 완료", message: `${normalized.length}건 생성됨` });
+
+      // ✅ 생성 직후엔 서버 기준으로 다시 목록 로드해서 "사라짐" 방지
+      await loadJobsFromServer();
+    } catch (e) {
+      push({ kind: "error", title: "작지 생성 실패", message: e?.message || String(e) });
+    } finally {
+      setLoading(false);
+    }
+  }
+
   async function doScan() {
     if (!selectedJobId) {
       push({ kind: "warn", title: "Job 선택", message: "먼저 Job을 선택해줘" });
@@ -228,12 +318,17 @@ export default function StoreOutboundPage({ pageTitle = "매장 출고", default
 
     const qty = Number(scanQty || 1);
     const safeQty = Number.isFinite(qty) && qty > 0 ? qty : 1;
+
     const loc = (scanLoc || "").trim();
+    if (!loc) {
+      push({ kind: "warn", title: "로케이션 필요", message: "반품입고는 locationCode가 필수야" });
+      return;
+    }
 
     setLoading(true);
     try {
       if (typeof mode?.scan !== "function") {
-        throw new Error("mode.scan이 없습니다. workflows/storeOutbound/storeOutbound.workflow.js 확인해줘.");
+        throw new Error("mode.scan이 없습니다. workflows/warehouseInbound/warehouseInbound.workflow.js 확인해줘.");
       }
 
       const result = await mode.scan({
@@ -257,11 +352,6 @@ export default function StoreOutboundPage({ pageTitle = "매장 출고", default
       if (result.lastScan !== undefined) setLastScan(result.lastScan);
       if (result.toast) push(result.toast);
 
-      const sku = pickSkuFromScan(result.lastScan);
-      if (sku) {
-        setBoxItems((prev) => addSku(prev, sku, safeQty));
-      }
-
       if (result.resetScan) {
         setScanValue("");
         scanRef.current?.focus?.();
@@ -274,7 +364,52 @@ export default function StoreOutboundPage({ pageTitle = "매장 출고", default
     }
   }
 
+  function PreviewBlock() {
+    if (stage !== "preview" || !preview) return null;
+
+    return (
+      <div style={{ border: "1px solid #e5e7eb", borderRadius: 12, padding: 12, background: "#fff", marginTop: 12 }}>
+        <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 12, flexWrap: "wrap" }}>
+          <div style={{ fontWeight: 900 }}>미리보기</div>
+          <div style={{ fontSize: 12, color: "#94a3b8" }}>
+            rows: <b>{preview.rows.length}</b> / storeCode groups: <b>{grouped.length}</b>
+          </div>
+        </div>
+
+        <div style={{ marginTop: 10, overflowX: "auto" }}>
+          <table style={{ width: "100%", borderCollapse: "collapse" }}>
+            <thead>
+              <tr>
+                <Th>#</Th>
+                <Th>storeCode</Th>
+                <Th>skuCode</Th>
+                <Th>makerCode</Th>
+                <Th>name</Th>
+                <Th align="right">qty</Th>
+              </tr>
+            </thead>
+            <tbody>
+              {(preview.sample || preview.rows.slice(0, 30)).map((r, idx) => (
+                <tr key={idx}>
+                  <Td>{idx + 1}</Td>
+                  <Td>{r.storeCode}</Td>
+                  <Td>{r.skuCode}</Td>
+                  <Td>{r.makerCode || r.maker || ""}</Td>
+                  <Td>{r.name || r.itemName || ""}</Td>
+                  <Td align="right">{r.qty}</Td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+
+        <div style={{ marginTop: 8, fontSize: 12, color: "#64748b" }}>※ 미리보기는 최대 30행 표시</div>
+      </div>
+    );
+  }
+
   function JobsRow() {
+    if (stage !== "jobs") return null;
     if (!normalizedCreated.length) return null;
 
     return (
@@ -440,7 +575,6 @@ export default function StoreOutboundPage({ pageTitle = "매장 출고", default
                 {items.map((it) => {
                   const remaining = Math.max(0, (it.qtyPlanned || 0) - (it.qtyPicked || 0));
                   const canExtra = remaining === 0;
-
                   const approved = getApprovedQty(it);
 
                   return (
@@ -490,9 +624,7 @@ export default function StoreOutboundPage({ pageTitle = "매장 출고", default
             </table>
           </div>
         ) : (
-          <div style={{ marginTop: 10, fontSize: 12, color: "#64748b" }}>
-            items가 없어. (job 상세 조회 응답을 job 객체로 저장 못했을 때 주로 이렇게 떠)
-          </div>
+          <div style={{ marginTop: 10, fontSize: 12, color: "#64748b" }}>items가 없어. (job 상세 조회가 안 됐을 수 있어)</div>
         )}
       </div>
     );
@@ -502,41 +634,41 @@ export default function StoreOutboundPage({ pageTitle = "매장 출고", default
     <div style={{ padding: 16 }}>
       <ToastHost />
 
-      {/* ✅ 상단: 파일선택/작지생성 제거 + 박스마감 유지 */}
+      {/* 헤더 */}
       <div style={{ display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
         <h1 style={{ margin: 0 }}>{pageTitle || mode.title}</h1>
 
-        <button
-          type="button"
-          style={{ ...primaryBtn, background: "#22c55e" }}
-          disabled={loading || !selectedJob || boxItems.size === 0}
-          onClick={async () => {
-            const ok = await printBoxLabel({
-              job: selectedJob,
-              boxNo,
-              boxItems,
-              push,
-              sendRaw: window.wms.sendRaw,
-            });
-            if (ok) {
-              setBoxNo((n) => n + 1);
-              setBoxItems(new Map());
-            }
-          }}
-        >
-          박스 마감
+        <button type="button" style={primaryBtn} onClick={() => fileRef.current?.click?.()} disabled={loading}>
+          파일 선택
         </button>
+        <button type="button" style={primaryBtn} onClick={createJobs} disabled={loading || !preview}>
+          작지 생성
+        </button>
+
+        <input
+          ref={fileRef}
+          type="file"
+          accept=".xlsx,.xls,.csv"
+          style={{ display: "none" }}
+          onChange={(e) => {
+            const f = e.target.files?.[0];
+            if (!f) return;
+            setTimeout(() => onPickFile(f), 0);
+          }}
+        />
       </div>
 
       <div style={{ fontSize: 12, color: "#64748b", marginTop: 6 }}>
-        매장출고: <b>locationCode 선택</b> / 업로드·작지생성은 대시보드에서 진행
+        업로드 파일: <b>{preview?.fileName || "-"}</b> / 반품입고 로케이션: <b>{(scanLoc || DEFAULT_RETURN_LOCATION).trim()}</b> (필수)
       </div>
 
+      <PreviewBlock />
       <JobsRow />
 
+      {/* 스캔 + 우측 Totals */}
       <div style={{ marginTop: 12, border: "1px solid #e5e7eb", borderRadius: 12, padding: 12, background: "#fff" }}>
         <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 10, flexWrap: "wrap" }}>
-          <div style={{ fontWeight: 900 }}>스캔</div>
+          <div style={{ fontWeight: 900, marginBottom: 8 }}>스캔</div>
           <button type="button" style={{ ...primaryBtn, padding: "8px 10px" }} onClick={loadJobsFromServer} disabled={loading}>
             Job 새로고침
           </button>
@@ -555,18 +687,12 @@ export default function StoreOutboundPage({ pageTitle = "매장 출고", default
               style={{ ...inputStyle, width: 320 }}
             />
 
-            <input
-              value={scanQty}
-              onChange={(e) => setScanQty(e.target.value)}
-              placeholder="qty"
-              style={{ ...inputStyle, width: 90 }}
-              inputMode="numeric"
-            />
+            <input value={scanQty} onChange={(e) => setScanQty(e.target.value)} placeholder="qty" style={{ ...inputStyle, width: 90 }} inputMode="numeric" />
 
             <input
               value={scanLoc}
               onChange={(e) => setScanLoc(e.target.value)}
-              placeholder="locationCode (선택)"
+              placeholder="locationCode (필수)"
               style={{ ...inputStyle, width: 180 }}
             />
 
@@ -580,6 +706,7 @@ export default function StoreOutboundPage({ pageTitle = "매장 출고", default
           </div>
         </div>
 
+        {/* lastScan 요약 + 토글 */}
         <div style={{ marginTop: 10, fontSize: 13 }}>
           {!lastScan ? (
             <div style={{ fontSize: 12, color: "#64748b" }}>스캔 결과가 여기에 표시돼.</div>

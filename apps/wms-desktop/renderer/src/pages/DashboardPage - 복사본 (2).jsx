@@ -5,7 +5,6 @@ import { ymdKST } from "../lib/dates";
 import { getApiBase } from "../workflows/_common/api";
 import { primaryBtn, inputStyle } from "../ui/styles";
 import { holidays as fetchHolidays } from "@kyungseopk1m/holidays-kr";
-import { storeLabel } from "../workflows/_common/storeMap";
 
 // ✅ 정답지 파서(출고/반품 공용)
 import { parseJobFileToRows } from "../workflows/_common/excel/parseStoreOutbound";
@@ -140,9 +139,7 @@ export default function DashboardPage() {
         const ad = String(a?._exportDate || "").localeCompare(String(b?._exportDate || ""));
         if (ad !== 0) return ad;
 
-        const as = String(a?.storeCode || a?.store_code || "").localeCompare(
-          String(b?.storeCode || b?.store_code || "")
-        );
+        const as = String(a?.storeCode || a?.store_code || "").localeCompare(String(b?.storeCode || b?.store_code || ""));
         if (as !== 0) return as;
 
         const at = getDoneTs(a);
@@ -270,8 +267,8 @@ export default function DashboardPage() {
     }
   }
 
-  // ✅ 그룹화 + 의뢰번호(reqNo) 수집 (그룹당 1개로 확정될 때만)
   function toPlanGroupsFromParsedRows(rows) {
+    // group key: storeCode + jobKind
     const map = new Map();
 
     for (const r of rows || []) {
@@ -286,22 +283,12 @@ export default function DashboardPage() {
       const makerCode = String(r?.makerCode || r?.maker || "").trim();
       const name = String(r?.name || r?.itemName || r?.productName || "").trim();
 
-      // ✅ B열 의뢰번호 (파서가 어떤 키로 주든 최대한 수용)
-      const reqNo = String(r?.reqNo ?? r?.requestNo ?? r?.orderNo ?? r?.requestNoB ?? "").trim();
-
       const key = `${jobKind}__${storeCode}`;
-      if (!map.has(key)) map.set(key, { jobKind, storeCode, items: [], reqNoSet: new Set() });
-
-      const g = map.get(key);
-      g.items.push({ skuCode, qty, makerCode, name });
-      if (reqNo) g.reqNoSet.add(reqNo);
+      if (!map.has(key)) map.set(key, { jobKind, storeCode, items: [] });
+      map.get(key).items.push({ skuCode, qty, makerCode, name });
     }
 
-    return [...map.values()].map((g) => {
-      const reqNos = [...(g.reqNoSet || [])];
-      const reqNoOne = reqNos.length === 1 ? reqNos[0] : ""; // 여러 개면 안전하게 비움
-      return { jobKind: g.jobKind, storeCode: g.storeCode, items: g.items, reqNo: reqNoOne };
-    });
+    return [...map.values()];
   }
 
   function jobKindToApiKind(jobKind) {
@@ -347,15 +334,11 @@ export default function DashboardPage() {
 
         const title = apiKind === "outbound" ? "[OUT] 매장 출고" : "[IN] 반품 입고";
 
-        // ✅ memo에 reqNo(의뢰번호)까지 저장
-        const memoParts = [`excel=${jobFileName}`, `kind=${apiKind}`];
-        if (plan.reqNo) memoParts.push(`reqNo=${plan.reqNo}`);
-
         // 1) Job 생성
         const jobResp = await tryJsonFetchWithBody(`${apiBase}/jobs`, "POST", {
           storeCode: plan.storeCode,
           title,
-          memo: memoParts.join("; "),
+          memo: `excel=${jobFileName}; kind=${apiKind}`,
         });
 
         const jobId = jobResp?.id || jobResp?.job?.id;
@@ -817,7 +800,7 @@ export default function DashboardPage() {
                             />
                             <div style={{ display: "grid", gap: 2 }}>
                               <div style={{ fontWeight: 900, fontSize: 14 }}>
-                                {storeLabel(storeCode)}{" "}
+                                {storeCode}{" "}
                                 <span style={{ fontSize: 12, color: "#94a3b8", fontWeight: 700 }}>({shortId(id)})</span>
                               </div>
                               <div style={{ fontSize: 12, color: "#64748b" }}>
@@ -841,7 +824,7 @@ export default function DashboardPage() {
                   ) : (
                     <div style={{ padding: 12 }}>
                       <div style={{ fontWeight: 900, marginBottom: 6, fontSize: 14 }}>
-                        {storeLabel(activeJob?.storeCode || activeJob?.store_code || "-")} ({shortId(activeJob?.id)})
+                        {String(activeJob?.storeCode || activeJob?.store_code || "-")} ({shortId(activeJob?.id)})
                       </div>
 
                       <div style={{ fontSize: 12, color: "#64748b", marginBottom: 10 }}>
@@ -1039,10 +1022,9 @@ export default function DashboardPage() {
  * ✅ 헤더 포함 EPMS_OUT CSV 생성
  * - qtyPicked(실제 출고)만 사용 (0이면 제외)
  * - 기간 조회 시: 각 job의 _exportDate를 출고일자(B)로 사용 (fallback: workDateYmd)
- * - ✅ I열: reqNo(의뢰번호) memo에서 추출 (없으면 빈칸)
  */
 function buildEpmsOutCsvWithHeader({ jobs, workDateYmd }) {
-  const fallbackDateStr = String(workDateYmd || "").replaceAll("-", ""); // YYYYMMDD
+  const fallbackDateStr = String(workDateYmd || "").replaceAll("-", "");
 
   const header = [
     "출고구분(1:출고,2:반품)", // A
@@ -1057,37 +1039,29 @@ function buildEpmsOutCsvWithHeader({ jobs, workDateYmd }) {
     "가격", // J
   ];
 
-  // ✅ memo에서 reqNo 추출
-  function jobToReqNo(job) {
-    const memo = String(job?.memo || "");
-    const m = memo.match(/(?:^|;\s*)reqNo=([^;]+)/i);
-    return m ? String(m[1] || "").trim() : "";
-  }
+  const rows = [header];
 
-  // ✅ 출고(1)/반품(2) 판별
   function jobToEpmsType(job) {
     const title = String(job?.title || "").toLowerCase(); // [out] / [in] 포함
     const memo = String(job?.memo || "").toLowerCase(); // excel=...; kind=inbound/outbound
 
-    // 1순위: memo의 kind
+    // ✅ 1순위: memo의 kind
     if (memo.includes("kind=inbound")) return 2;
     if (memo.includes("kind=outbound")) return 1;
 
-    // 2순위: title prefix([IN]) / 키워드
+    // ✅ 2순위: title prefix([IN]) / 키워드
     if (title.includes("[in]") || title.includes("반품") || title.includes("입고")) return 2;
 
     return 1;
   }
-
-  const rows = [header];
 
   for (const job of jobs || []) {
     const storeCode = String(job?.storeCode || job?.store_code || "").trim();
     const items = job?.items || job?.jobItems || job?.job_items || [];
 
     const jobDateStr = job?._exportDate ? String(job._exportDate).replaceAll("-", "") : fallbackDateStr;
+
     const epmsType = jobToEpmsType(job);
-    const reqNo = jobToReqNo(job); // ✅ I열 값(없으면 "")
 
     for (const it of items) {
       const maker = String(
@@ -1111,7 +1085,7 @@ function buildEpmsOutCsvWithHeader({ jobs, workDateYmd }) {
         maker, // F
         String(qtyPicked), // G
         "", // H
-        reqNo, // I
+        "", // I
         "", // J
       ]);
     }
