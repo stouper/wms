@@ -277,6 +277,7 @@ export default function DashboardPage() {
     for (const r of rows || []) {
       const jobKind = String(r?.jobKind || "").trim(); // "출고"|"반품"
       const storeCode = String(r?.storeCode || "").trim();
+      const storeName = String(r?.storeName || "").trim();
       const skuCode = String(r?.skuCode || "").trim();
       const qty = Number(r?.qty ?? 0);
 
@@ -290,7 +291,7 @@ export default function DashboardPage() {
       const reqNo = String(r?.reqNo ?? r?.requestNo ?? r?.orderNo ?? r?.requestNoB ?? "").trim();
 
       const key = `${jobKind}__${storeCode}`;
-      if (!map.has(key)) map.set(key, { jobKind, storeCode, items: [], reqNoSet: new Set() });
+      if (!map.has(key)) map.set(key, { jobKind, storeCode, storeName, items: [], reqNoSet: new Set() });
 
       const g = map.get(key);
       g.items.push({ skuCode, qty, makerCode, name });
@@ -300,7 +301,7 @@ export default function DashboardPage() {
     return [...map.values()].map((g) => {
       const reqNos = [...(g.reqNoSet || [])];
       const reqNoOne = reqNos.length === 1 ? reqNos[0] : ""; // 여러 개면 안전하게 비움
-      return { jobKind: g.jobKind, storeCode: g.storeCode, items: g.items, reqNo: reqNoOne };
+      return { jobKind: g.jobKind, storeCode: g.storeCode, storeName: g.storeName, items: g.items, reqNo: reqNoOne };
     });
   }
 
@@ -345,11 +346,16 @@ export default function DashboardPage() {
         const apiKind = jobKindToApiKind(plan.jobKind);
         if (!apiKind) continue;
 
-        const title = apiKind === "outbound" ? "[OUT] 매장 출고" : "[IN] 반품 입고";
+        const who = String(plan.storeName || plan.storeCode || "").trim();
+        const title =
+        apiKind === "outbound"
+        ? `[OUT] ${who} 출고`
+        : `[IN] ${who} 반품 입고`;
 
         // ✅ memo에 reqNo(의뢰번호)까지 저장
         const memoParts = [`excel=${jobFileName}`, `kind=${apiKind}`];
         if (plan.reqNo) memoParts.push(`reqNo=${plan.reqNo}`);
+        if (plan.storeName) memoParts.push(`storeName=${plan.storeName}`);
 
         // 1) Job 생성
         const jobResp = await tryJsonFetchWithBody(`${apiBase}/jobs`, "POST", {

@@ -6,6 +6,7 @@ import { safeReadJson, safeReadLocal, safeWriteJson, safeWriteLocal } from "../l
 import { inputStyle, primaryBtn } from "../ui/styles";
 import { Th, Td } from "../components/TableParts";
 import { whInboundMode } from "../workflows/warehouseInbound/warehouseInbound.workflow";
+import { storeLabel } from "../workflows/_common/storeMap";
 
 const PAGE_KEY = "whInbound";
 const DEFAULT_RETURN_LOCATION = "RET-01";
@@ -36,6 +37,58 @@ export default function WarehouseInboundPage({ pageTitle = "창고 입고(반품
 
   useEffect(() => safeWriteJson(createdKey, created), [createdKey, created]);
   useEffect(() => safeWriteLocal(selectedKey, selectedJobId || ""), [selectedKey, selectedJobId]);
+
+  // ✅ UX: 스캔 피드백 (소리/번쩍)
+  const [flashTotals, setFlashTotals] = useState(false);
+  const flashTimerRef = useRef(null);
+
+  function triggerTotalsFlash() {
+    if (flashTimerRef.current) clearTimeout(flashTimerRef.current);
+    setFlashTotals(true);
+    flashTimerRef.current = setTimeout(() => setFlashTotals(false), 120);
+  }
+
+  useEffect(() => {
+    return () => {
+      if (flashTimerRef.current) clearTimeout(flashTimerRef.current);
+    };
+  }, []);
+
+  function playScanSuccessBeep() {
+    const ctx = new (window.AudioContext || window.webkitAudioContext)();
+    const o = ctx.createOscillator();
+
+    o.type = "square";
+    o.connect(ctx.destination);
+
+    o.frequency.setValueAtTime(900, ctx.currentTime);
+    o.frequency.setValueAtTime(1300, ctx.currentTime + 0.05);
+
+    o.start();
+    setTimeout(() => {
+      o.stop();
+      ctx.close();
+    }, 120);
+  }
+
+  function playScanWarnBeep() {
+  const ctx = new (window.AudioContext || window.webkitAudioContext)();
+  const o = ctx.createOscillator();
+  const g = ctx.createGain();
+
+  o.type = "square";
+  o.frequency.value = 800; // ⚠️ 승인/경고용 중간 톤
+  g.gain.value = 0.1;
+
+  o.connect(g);
+  g.connect(ctx.destination);
+
+  o.start();
+  setTimeout(() => {
+    o.stop();
+    ctx.close();
+  }, 140);
+}
 
   // ✅ API 응답이 {ok:true, job:{...}} 또는 {...job} 형태로 섞여 있어도 안전하게 처리
   function unwrapJob(x) {
@@ -241,13 +294,20 @@ export default function WarehouseInboundPage({ pageTitle = "창고 입고(반품
         postJson,
         patchJson,
         fetchJson,
-        confirm: (msg) => window.confirm(msg),
+        confirm: (msg) => {
+        playScanWarnBeep();      // ✅ confirm 뜨는 순간 1회 경고음
+        return window.confirm(msg);
+        },
       });
 
       if (!result?.ok) {
+        playScanErrorBeep();
         push({ kind: "error", title: "처리 실패", message: result?.error || "unknown error" });
         return;
       }
+
+      playScanSuccessBeep();
+      triggerTotalsFlash();
 
       if (result.lastScan !== undefined) setLastScan(result.lastScan);
       if (result.toast) push(result.toast);
@@ -297,7 +357,7 @@ export default function WarehouseInboundPage({ pageTitle = "창고 입고(반품
               >
                 <button
                   type="button"
-                  onClick={async () => {
+                  onClick={async () => {                  
                     setSelectedJobId(j.id);
                     await loadJob(j.id);
                     setTimeout(() => scanRef.current?.focus?.(), 50);
@@ -309,7 +369,7 @@ export default function WarehouseInboundPage({ pageTitle = "창고 입고(반품
                     {j.title || "Job"}
                   </div>
                   <div style={{ fontSize: 12, color: "#64748b", whiteSpace: "nowrap" }}>
-                    store <b>{j.storeCode}</b> · <b>{j.status}</b>
+                    store <b>{storeLabel(j.storeCode)}</b> · <b>{j.status}</b>
                   </div>
                 </button>
 
@@ -353,10 +413,13 @@ export default function WarehouseInboundPage({ pageTitle = "창고 입고(반품
     const boxBase = {
       border: "1px solid #e5e7eb",
       borderRadius: 14,
-      background: "#fff",
+      background: flashTotals ? "#eff6ff" : "#fff",
       padding: 14,
       minWidth: 200,
       flex: 1,
+      boxShadow: flashTotals ? "0 0 14px rgba(59,130,246,0.9)" : "none",
+      transform: flashTotals ? "translateY(-1px)" : "translateY(0px)",
+      transition: "all 120ms ease",
     };
 
     const bigNum = {
@@ -411,7 +474,7 @@ export default function WarehouseInboundPage({ pageTitle = "창고 입고(반품
         <div style={{ display: "flex", alignItems: "baseline", justifyContent: "space-between", gap: 10, flexWrap: "wrap" }}>
           <div style={{ fontWeight: 900 }}>선택된 Job 상세</div>
           <div style={{ fontSize: 12, color: "#64748b" }}>
-            store: <b>{selectedJob.storeCode}</b> · status: <b>{selectedJob.status}</b> · id: {selectedJob.id}
+            store: <b>{storeLabel(selectedJob.storeCode)}</b> · status: <b>{selectedJob.status}</b> · id: {selectedJob.id}
           </div>
         </div>
 
@@ -449,6 +512,7 @@ export default function WarehouseInboundPage({ pageTitle = "창고 입고(반품
                               type="button"
                               disabled={approvingExtra}
                               onClick={async () => {
+                                playScanWarnBeep();
                                 try {
                                   await approveExtra(it.id, 1);
                                 } catch (err) {

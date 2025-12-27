@@ -297,17 +297,67 @@ export function renderJobSheetA4Html({
   return html;
 }
 
-/**
- * Electron renderer에서 호출:
- * openJobSheetA4PrintWindow({ jobTitle, jobId, storeName, items })
- */
 export function openJobSheetA4PrintWindow(payload) {
-  const html = renderJobSheetA4Html(payload || {});
-  const w = window.open("", "_blank", "noopener,noreferrer,width=980,height=720");
-  if (!w) throw new Error("팝업이 차단됐어. (window.open 실패)");
-  w.document.open();
-  w.document.write(html);
-  w.document.close();
-  w.focus();
-  return true;
+  const html = renderJobSheetA4Html(payload);
+
+  // 1) 먼저 새 창 시도
+  const w = window.open("", "_blank"); // 기존처럼
+  if (w) {
+    try {
+      w.document.open();
+      w.document.write(html);
+      w.document.close();
+      // 새 창 로드 후 프린트
+      w.onload = () => {
+        try {
+          w.focus();
+          w.print();
+        } catch (e) {
+          // ignore
+        }
+      };
+      return;
+    } catch (e) {
+      // 새 창이 열렸는데 접근 실패하면 아래 iframe 폴백으로
+      try {
+        w.close();
+      } catch {}
+    }
+  }
+
+  // 2) ✅ 폴백: 현재 창에 숨김 iframe 만들어서 그 안에서 프린트
+  const iframe = document.createElement("iframe");
+  iframe.style.position = "fixed";
+  iframe.style.right = "0";
+  iframe.style.bottom = "0";
+  iframe.style.width = "0";
+  iframe.style.height = "0";
+  iframe.style.border = "0";
+  iframe.style.visibility = "hidden";
+  document.body.appendChild(iframe);
+
+  const doc = iframe.contentWindow?.document;
+  if (!doc) {
+    document.body.removeChild(iframe);
+    alert("프린트 환경을 만들 수 없습니다. (iframe 접근 실패)");
+    return;
+  }
+
+  doc.open();
+  doc.write(html);
+  doc.close();
+
+  iframe.onload = () => {
+    try {
+      iframe.contentWindow?.focus();
+      iframe.contentWindow?.print();
+    } finally {
+      // 프린트 다이얼로그 뜬 다음 정리
+      setTimeout(() => {
+        try {
+          document.body.removeChild(iframe);
+        } catch {}
+      }, 1000);
+    }
+  };
 }

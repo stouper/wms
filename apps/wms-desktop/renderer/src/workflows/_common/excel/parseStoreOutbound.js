@@ -141,7 +141,8 @@ function normalizeRows(objs) {
   const kindSet = new Set(); // 출고 / 반품
 
   for (const o of objs || []) {
-    const storeCode = pick(o, ["storeCode", "STORECODE", "거래처코드", "거래처", "매장코드", "매장"]);
+    const storeCode = pick(o, ["storeCode", "STORECODE", "거래처코드", "매장코드", "매장"]);
+    const storeName = pick(o, ["storeName", "STORENAME", "거래처"]);
     const skuCode = pick(o, ["skuCode", "SKU", "단품코드", "단품", "품번"]);
     const makerCode = pick(o, ["makerCode", "MAKER", "Maker코드", "메이커코드", "바코드", "barcode"]);
     const name = pick(o, ["name", "NAME", "코드명", "상품명", "품명"]); // ✅ 추가
@@ -154,6 +155,7 @@ function normalizeRows(objs) {
 
     const row = {
       storeCode: String(storeCode ?? "").trim(),
+      storeName: String(storeName ?? "").trim(),
       skuCode: String(skuCode ?? "").trim(),
       makerCode: String(makerCode ?? "").trim(),
       name: String(name ?? "").trim(),

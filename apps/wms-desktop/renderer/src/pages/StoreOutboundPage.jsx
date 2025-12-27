@@ -7,6 +7,8 @@ import { inputStyle, primaryBtn } from "../ui/styles";
 import { Th, Td } from "../components/TableParts";
 import { storeShipMode } from "../workflows/storeOutbound/storeOutbound.workflow";
 import { addSku, pickSkuFromScan, printBoxLabel } from "../workflows/_common/print/packingBox";
+import { openJobSheetA4PrintWindow } from "../workflows/_common/print";
+import { storeLabel } from "../workflows/_common/storeMap";
 
 const PAGE_KEY = "storeShip";
 
@@ -19,6 +21,101 @@ export default function StoreOutboundPage({ pageTitle = "매장 출고", default
 
   const createdKey = `wms.jobs.created.${PAGE_KEY}`;
   const selectedKey = `wms.jobs.selected.${PAGE_KEY}`;
+
+    
+  // ✅ UX: 스캔 피드백 (소리/번쩍)
+const [flashTotals, setFlashTotals] = useState(false);
+const flashTimerRef = useRef(null);
+
+useEffect(() => {
+  return () => {
+    if (flashTimerRef.current) clearTimeout(flashTimerRef.current);
+  };
+}, []);
+
+function triggerTotalsFlash() {
+  if (flashTimerRef.current) clearTimeout(flashTimerRef.current);
+  setFlashTotals(true);
+  flashTimerRef.current = setTimeout(() => setFlashTotals(false), 120);
+}
+
+// ✅ 성공음: "띠↗삑" (900→1300)
+function playScanSuccessBeep() {
+  const ctx = new (window.AudioContext || window.webkitAudioContext)();
+  const o = ctx.createOscillator();
+
+  o.type = "square";
+  o.connect(ctx.destination);
+
+  o.frequency.setValueAtTime(900, ctx.currentTime);
+  o.frequency.setValueAtTime(1300, ctx.currentTime + 0.05);
+
+  o.start();
+  setTimeout(() => {
+    o.stop();
+    ctx.close();
+  }, 120);
+}
+
+// ❌ 실패음: 저음 단발
+function playScanErrorBeep() {
+  const ctx = new (window.AudioContext || window.webkitAudioContext)();
+  const o = ctx.createOscillator();
+  const g = ctx.createGain();
+
+  o.type = "square";
+  o.frequency.value = 500;
+  g.gain.value = 0.12;
+
+  o.connect(g);
+  g.connect(ctx.destination);
+
+  o.start();
+  setTimeout(() => {
+    o.stop();
+    ctx.close();
+  }, 160);
+}
+
+// ⚠️ 경고음: 승인/오버픽/컨펌 뜰 때
+function playScanWarnBeep() {
+  const ctx = new (window.AudioContext || window.webkitAudioContext)();
+  const o = ctx.createOscillator();
+  const g = ctx.createGain();
+
+  o.type = "square";
+  o.frequency.value = 800;
+  g.gain.value = 0.1;
+
+  o.connect(g);
+  g.connect(ctx.destination);
+
+  o.start();
+  setTimeout(() => {
+    o.stop();
+    ctx.close();
+  }, 140);
+}
+
+  function playScanErrorBeep() {
+  const ctx = new (window.AudioContext || window.webkitAudioContext)();
+  const o = ctx.createOscillator();
+  const g = ctx.createGain();
+
+  o.type = "square";
+  o.frequency.value = 500;
+  g.gain.value = 0.12;
+
+  o.connect(g);
+  g.connect(ctx.destination);
+
+  o.start();
+  setTimeout(() => {
+    o.stop();
+    ctx.close();
+  }, 160);
+}
+
 
   // ✅ 박스(팩킹리스트) 출력 관련
   const [boxNo, setBoxNo] = useState(1);
@@ -246,13 +343,22 @@ export default function StoreOutboundPage({ pageTitle = "매장 출고", default
         postJson,
         patchJson,
         fetchJson,
-        confirm: (msg) => window.confirm(msg),
+        confirm: (msg) => {
+        playScanWarnBeep();      // ✅ 이제 에러 안 남
+        return window.confirm(msg);
+       },
       });
 
-      if (!result?.ok) {
+       if (!result?.ok) {
+        // ❌ 실패: 저음 1회
+        playScanErrorBeep();
         push({ kind: "error", title: "처리 실패", message: result?.error || "unknown error" });
         return;
       }
+
+      // ✅ 성공: 소리 1회 + 번쩍 1회
+      playScanSuccessBeep();
+      triggerTotalsFlash();
 
       if (result.lastScan !== undefined) setLastScan(result.lastScan);
       if (result.toast) push(result.toast);
@@ -319,7 +425,7 @@ export default function StoreOutboundPage({ pageTitle = "매장 출고", default
                     {j.title || "Job"}
                   </div>
                   <div style={{ fontSize: 12, color: "#64748b", whiteSpace: "nowrap" }}>
-                    store <b>{j.storeCode}</b> · <b>{j.status}</b>
+                    store <b>{storeLabel(j.storeCode)}</b> · <b>{j.status}</b>
                   </div>
                 </button>
 
@@ -363,10 +469,13 @@ export default function StoreOutboundPage({ pageTitle = "매장 출고", default
     const boxBase = {
       border: "1px solid #e5e7eb",
       borderRadius: 14,
-      background: "#fff",
+      background: flashTotals ? "#eff6ff" : "#fff",
       padding: 14,
       minWidth: 200,
       flex: 1,
+      boxShadow: flashTotals ? "0 0 14px rgba(59,130,246,0.9)" : "none",
+      transform: flashTotals ? "translateY(-1px)" : "translateY(0px)",
+      transition: "all 120ms ease",
     };
 
     const bigNum = {
@@ -421,7 +530,7 @@ export default function StoreOutboundPage({ pageTitle = "매장 출고", default
         <div style={{ display: "flex", alignItems: "baseline", justifyContent: "space-between", gap: 10, flexWrap: "wrap" }}>
           <div style={{ fontWeight: 900 }}>선택된 Job 상세</div>
           <div style={{ fontSize: 12, color: "#64748b" }}>
-            store: <b>{selectedJob.storeCode}</b> · status: <b>{selectedJob.status}</b> · id: {selectedJob.id}
+            store: <b>{storeLabel(selectedJob.storeCode)}</b> · status: <b>{selectedJob.status}</b> · id: {selectedJob.id}
           </div>
         </div>
 
@@ -460,6 +569,7 @@ export default function StoreOutboundPage({ pageTitle = "매장 출고", default
                               type="button"
                               disabled={approvingExtra}
                               onClick={async () => {
+                                playScanWarnBeep();
                                 try {
                                   await approveExtra(it.id, 1);
                                 } catch (err) {
@@ -500,33 +610,75 @@ export default function StoreOutboundPage({ pageTitle = "매장 출고", default
 
   return (
     <div style={{ padding: 16 }}>
+                     
       <ToastHost />
+      
 
       {/* ✅ 상단: 파일선택/작지생성 제거 + 박스마감 유지 */}
       <div style={{ display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
-        <h1 style={{ margin: 0 }}>{pageTitle || mode.title}</h1>
+  <h1 style={{ margin: 0 }}>{pageTitle || mode.title}</h1>
 
-        <button
-          type="button"
-          style={{ ...primaryBtn, background: "#22c55e" }}
-          disabled={loading || !selectedJob || boxItems.size === 0}
-          onClick={async () => {
-            const ok = await printBoxLabel({
-              job: selectedJob,
-              boxNo,
-              boxItems,
-              push,
-              sendRaw: window.wms.sendRaw,
-            });
-            if (ok) {
-              setBoxNo((n) => n + 1);
-              setBoxItems(new Map());
-            }
-          }}
-        >
-          박스 마감
-        </button>
-      </div>
+  {/* ✅ A4 작업지시서 출력 (박스마감 옆) */}
+  <button
+    type="button"
+    style={{
+      ...primaryBtn,
+      background: "#fbfcf8ff", // ✅ 세련된 다크톤 (촌스러운 초록 제거)
+    }}
+    disabled={loading || !selectedJob || !(Array.isArray(selectedJob?.items) && selectedJob.items.length)}
+    onClick={() => {
+      const job = selectedJob;
+      const items = Array.isArray(job?.items) ? job.items : [];
+
+      const payload = {
+        jobTitle: job?.title || "HQ 출고 작업지시서",
+        jobId: job?.id || "",
+        storeCode: job?.storeCode || "",
+        storeName: "", // 지금 없어도 OK
+        memo: job?.memo || "",
+        createdAt: job?.createdAt || new Date().toISOString(),
+        doneAt: job?.doneAt || "",
+
+        items: items.map((it) => ({
+          skuCode: it?.sku?.sku || it?.skuCode || "",
+          makerCode: it?.sku?.makerCode || it?.makerCodeSnapshot || "",
+          name: it?.sku?.name || it?.nameSnapshot || "",
+          qtyPlanned: Number(it?.qtyPlanned ?? 0),
+          qtyPicked: Number(it?.qtyPicked ?? 0),
+          locationCode: "", // 매장출고는 location이 job item에 없을 수 있어서 빈칸 유지
+        })),
+      };
+      
+
+      openJobSheetA4PrintWindow(payload);
+    }}
+  >
+    A4 작업지시서
+  </button>
+
+  {/* ✅ 박스 마감 (색만 세련되게 변경) */}
+  <button
+    type="button"
+    style={{ ...primaryBtn, background: "#fbfcf8ff" }} // ✅ slate 톤으로 변경
+    disabled={loading || !selectedJob || boxItems.size === 0}
+    onClick={async () => {
+      const ok = await printBoxLabel({
+        job: selectedJob,
+        boxNo,
+        boxItems,
+        push,
+        sendRaw: window.wms.sendRaw,
+      });
+      if (ok) {
+        setBoxNo((n) => n + 1);
+        setBoxItems(new Map());
+      }
+    }}
+  >
+    박스 마감
+  </button>
+</div>
+
 
       <div style={{ fontSize: 12, color: "#64748b", marginTop: 6 }}>
         매장출고: <b>locationCode 선택</b> / 업로드·작지생성은 대시보드에서 진행

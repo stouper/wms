@@ -221,7 +221,7 @@ export class InventoryService {
    */
   async summary(params: { q?: string; limit?: number; excludeForced?: boolean }) {
     const q = this.norm(params.q ?? '');
-    const take = this.clampLimit(params.limit ?? 200, 1, 2000);
+    const take = this.clampLimit(params.limit ?? 200, 1, 50000);
     const excludeForced = Boolean((params as any).excludeForced);
 
     const where: any = {};
@@ -265,8 +265,11 @@ export class InventoryService {
         const l = locMap.get(String(r.locationId));
         const onHand = Number(r?._sum?.qty ?? 0);
         return {
+          skuId: r.skuId ?? null,
+          locationId: r.locationId ?? null,
           skuCode: s?.sku ?? null,
           makerCode: s?.makerCode ?? null,
+          skuName: s?.name ?? null,
           name: s?.name ?? null,
           locationCode: l?.code ?? null,
           onHand,
