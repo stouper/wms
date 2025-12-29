@@ -7,6 +7,9 @@ datasource db {
   url      = env("DATABASE_URL")
 }
 
+
+
+
 model Store {
   id        String     @id @default(cuid())
   code      String     @unique
@@ -35,6 +38,8 @@ model Sku {
   sku       String  @unique          // ✅ “SKU 코드”는 이 필드
   makerCode String?
   name      String?
+  productType String @default("SHOES")
+
 
   inventories  Inventory[]
   inventoryTxs InventoryTx[]

@@ -22,6 +22,10 @@ export const HEADER_SYNONYMS = {
     // 복합
     '로케이션코드', '창고코드', 'bin code',
   ],
+  productType: [
+  'productType', 'type', 'item', 'category',
+  '상품구분', '카테고리', '아이템', '품목'
+],
 } as const;
 
 export type CanonicalHeader = keyof typeof HEADER_SYNONYMS;

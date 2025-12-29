@@ -222,64 +222,48 @@ export class InventoryService {
   async summary(params: { q?: string; limit?: number; excludeForced?: boolean }) {
     const q = this.norm(params.q ?? '');
     const take = this.clampLimit(params.limit ?? 200, 1, 50000);
-    const excludeForced = Boolean((params as any).excludeForced);
+    // excludeForced는 InventoryTx 기반 집계에서 쓰던 옵션. Inventory 스냅샷 기반에서는 무시.
+    // const excludeForced = Boolean((params as any).excludeForced);
 
     const where: any = {};
-    if (excludeForced) where.isForced = false;
-
     if (q) {
       where.OR = [
         { sku: { sku: { contains: q, mode: 'insensitive' } } as any },
         { sku: { makerCode: { contains: q, mode: 'insensitive' } } as any },
+        { sku: { name: { contains: q, mode: 'insensitive' } } as any },
         { location: { code: { contains: q, mode: 'insensitive' } } as any },
       ];
     }
 
-    // ✅ DB에서 직접 집계 (JS에서 tx를 더하지 않음)
-    const grouped = await (this.prisma.inventoryTx as any).groupBy({
-      by: ['skuId', 'locationId'],
+    // ✅ Inventory 스냅샷(qty) 기준으로 현재고 반환
+    const invRows = await this.prisma.inventory.findMany({
       where,
-      _sum: { qty: true },
-    });
+      take: 50000, // take는 정렬 후 slice
+      select: {
+        id: true,
+        skuId: true,
+        locationId: true,
+        qty: true,
+        sku: { select: { sku: true, makerCode: true, name: true, productType: true } } as any,
+        location: { select: { code: true } } as any,
+      },
+    } as any);
 
-    const skuIds = Array.from(new Set(grouped.map((r: any) => r.skuId).filter(Boolean)));
-    const locationIds = Array.from(new Set(grouped.map((r: any) => r.locationId).filter(Boolean)));
-
-    const [skus, locations] = await Promise.all([
-      this.prisma.sku.findMany({
-        where: { id: { in: skuIds } as any } as any,
-        select: { id: true, sku: true, makerCode: true, name: true } as any,
-      } as any),
-      this.prisma.location.findMany({
-        where: { id: { in: locationIds } as any } as any,
-        select: { id: true, code: true } as any,
-      } as any),
-    ]);
-
-    const skuMap = new Map<string, any>(skus.map((s: any) => [String(s.id), s]));
-    const locMap = new Map<string, any>(locations.map((l: any) => [String(l.id), l]));
-
-    const rows = grouped
-      .map((r: any) => {
-        const s = skuMap.get(String(r.skuId));
-        const l = locMap.get(String(r.locationId));
-        const onHand = Number(r?._sum?.qty ?? 0);
-        return {
-          skuId: r.skuId ?? null,
-          locationId: r.locationId ?? null,
-          skuCode: s?.sku ?? null,
-          makerCode: s?.makerCode ?? null,
-          skuName: s?.name ?? null,
-          name: s?.name ?? null,
-          locationCode: l?.code ?? null,
-          onHand,
-        };
-      })
-      // sku/location이 깨진 레코드 방어
+    const rows = invRows
+      .map((r: any) => ({
+        skuId: r.skuId ?? null,
+        locationId: r.locationId ?? null,
+        skuCode: r?.sku?.sku ?? null,
+        makerCode: r?.sku?.makerCode ?? null,
+        skuName: r?.sku?.name ?? null,
+        name: r?.sku?.name ?? null,
+        productType: r?.sku?.productType ?? null,
+        locationCode: r?.location?.code ?? null,
+        onHand: Number(r?.qty ?? 0),
+      }))
       .filter((x: any) => x.skuCode && x.locationCode);
 
     rows.sort((a: any, b: any) => {
-      // 기존과 동일하게 skuCode 기준 정렬 유지 (+ locationCode)
       const c = String(a.skuCode).localeCompare(String(b.skuCode));
       if (c !== 0) return c;
       return String(a.locationCode).localeCompare(String(b.locationCode));
