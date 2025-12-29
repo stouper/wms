@@ -1,244 +1,556 @@
-'use client';
+"use client";
 
-import Link from 'next/link';
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useState } from "react";
 
-type Product = { id: string; name: string; price: number; desc?: string; imageUrl?: string };
+type Product = {
+  id: string;
+  name?: string;
+  title?: string;
+  price?: number;
+  sku?: string;
+  makerCode?: string;
+  onHand?: number;
+  thumbnail?: string;
+  imageUrl?: string;
+  description?: string;
+  desc?: string;
+};
 
-export default function AdminProductsPage() {
-  // 목록 상태
-  const [items, setItems] = useState<Product[]>([]);
+function pickName(p: Product) {
+  return p.name || p.title || "";
+}
+
+export default function MallAdminProductsPage() {
   const [loading, setLoading] = useState(true);
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState("");
+  const [msg, setMsg] = useState("");
+  const [q, setQ] = useState("");
+  const [items, setItems] = useState<Product[]>([]);
 
-  // 등록 폼 상태
-  const [name, setName] = useState('');
-  const [price, setPrice] = useState<string>('');
-  const [desc, setDesc] = useState('');
-  const [imageUrl, setImageUrl] = useState<string | undefined>(undefined);
-  const [uploading, setUploading] = useState(false);
-  const [creating, setCreating] = useState(false);
+  // edit drawer
+  const [open, setOpen] = useState(false);
+  const [draft, setDraft] = useState<Product | null>(null);
 
-  const canCreate = useMemo(
-    () => name.trim().length > 0 && /^\d+$/.test(price) && !uploading,
-    [name, price, uploading],
-  );
-
-  async function load() {
+  const load = async () => {
     setLoading(true);
-    const res = await fetch('/api/products', { cache: 'no-store', credentials: 'same-origin' });
-    const data = await res.json();
-    setItems(data.items || []);
-    setLoading(false);
-  }
+    setErr("");
+    try {
+      const res = await fetch("/api/products", { credentials: "include" });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data?.message || `HTTP ${res.status}`);
+
+      const rows: Product[] = Array.isArray(data) ? data : data?.items ?? data?.products ?? [];
+      setItems(rows);
+    } catch (e: any) {
+      setErr(e?.message || "상품 목록을 불러오지 못했습니다.");
+    } finally {
+      setLoading(false);
+    }
+  };
 
   useEffect(() => {
     load();
   }, []);
 
-  async function onUploadFile(file: File) {
-    setUploading(true);
-    try {
-      const fd = new FormData();
-      fd.append('file', file);
-      const res = await fetch('/api/uploads', {
-        method: 'POST',
-        credentials: 'same-origin',
-        body: fd,
-      });
-      const data = await res.json();
-      if (!res.ok || !data.ok) {
-        alert(`이미지 업로드 실패: ${data.error || res.status}`);
-        return;
-      }
-      setImageUrl(data.url as string);
-    } finally {
-      setUploading(false);
-    }
-  }
+  const filtered = useMemo(() => {
+    const kw = q.trim().toLowerCase();
+    if (!kw) return items;
+    return items.filter((p) => {
+      const name = pickName(p).toLowerCase();
+      const sku = (p.sku || "").toLowerCase();
+      const bar = (p.makerCode || "").toLowerCase();
+      return name.includes(kw) || sku.includes(kw) || bar.includes(kw);
+    });
+  }, [items, q]);
 
-  async function onCreate() {
-    if (!canCreate) {
-      alert('이름/가격/업로드 상태를 확인하세요.');
-      return;
-    }
+  const openNew = () => {
+    setDraft({
+      id: "",
+      name: "",
+      sku: "",
+      makerCode: "",
+      price: 0,
+      onHand: 0,
+      thumbnail: "",
+      description: "",
+    });
+    setOpen(true);
+    setMsg("");
+  };
+
+  const openEdit = (p: Product) => {
+    setDraft({
+      ...p,
+      name: p.name ?? p.title ?? "",
+      description: p.description ?? p.desc ?? "",
+    });
+    setOpen(true);
+    setMsg("");
+  };
+
+  const close = () => {
+    setOpen(false);
+    setDraft(null);
+  };
+
+  const toast = (text: string) => {
+    setMsg(text);
+    setTimeout(() => setMsg(""), 2200);
+  };
+
+  const save = async () => {
+    if (!draft) return;
+
+    setBusy(true);
     try {
-      setCreating(true);
-      const res = await fetch('/api/products', {
-        method: 'POST',
-        headers: { 'content-type': 'application/json' },
-        credentials: 'same-origin',
-        body: JSON.stringify({
-          name,
-          price: Number(price),
-          desc,
-          imageUrl,
-        }),
+      const isNew = !draft.id;
+
+      const payload: any = {
+        name: (draft.name || "").trim(),
+        sku: (draft.sku || "").trim(),
+        makerCode: (draft.makerCode || "").trim(),
+        price: Number(draft.price ?? 0),
+        onHand: Number(draft.onHand ?? 0),
+        thumbnail: (draft.thumbnail || "").trim(),
+        description: (draft.description || "").trim(),
+      };
+
+      const url = isNew ? "/api/products" : `/api/products/${encodeURIComponent(draft.id)}`;
+      const method = isNew ? "POST" : "PUT";
+
+      const res = await fetch(url, {
+        method,
+        headers: { "Content-Type": "application/json", Accept: "application/json" },
+        body: JSON.stringify(payload),
+        credentials: "include",
       });
-      const data = await res.json().catch(() => ({}));
-      if (!res.ok || !data.ok) {
-        alert(`등록 실패: ${data.error || res.status}`);
-        return;
+
+      let data: any = null;
+      try {
+        data = await res.json();
+      } catch {}
+
+      if (!res.ok) {
+        throw new Error(data?.message || `${method} 실패`);
       }
-      // 폼 리셋
-      setName('');
-      setPrice('');
-      setDesc('');
-      setImageUrl(undefined);
+
+      toast("저장 완료");
+      close();
       await load();
+    } catch (e: any) {
+      toast(e?.message || "저장 실패");
     } finally {
-      setCreating(false);
+      setBusy(false);
     }
-  }
+  };
 
-  async function onDelete(id: string) {
-    if (!confirm('정말 삭제할까요?')) return;
-    const res = await fetch(`/api/products/${id}`, {
-      method: 'DELETE',
-      credentials: 'same-origin',
-    });
-    const data = await res.json().catch(() => ({}));
-    if (!res.ok || !data.ok) {
-      alert(`삭제 실패: ${data.error || res.status}`);
-      return;
-    }
-    await load();
-  }
+  const remove = async (p: Product) => {
+    if (!p?.id) return;
 
-  async function onEdit(p: Product) {
-    const newName = prompt('상품명', p.name);
-    if (newName === null) return;
-    const newPriceStr = prompt('가격(숫자)', String(p.price));
-    if (newPriceStr === null || !/^\d+$/.test(newPriceStr)) {
-      alert('가격이 올바르지 않습니다.');
-      return;
-    }
-    const newDesc = prompt('설명', p.desc || '') ?? p.desc;
+    const name = pickName(p) || "(이름없음)";
+    const ok = confirm(`정말 삭제할까?\n\n- ${name}\n- SKU: ${p.sku || "-"}\n- BAR: ${p.makerCode || "-"}`);
+    if (!ok) return;
 
-    const res = await fetch(`/api/products/${p.id}`, {
-      method: 'PATCH',
-      headers: { 'content-type': 'application/json' },
-      credentials: 'same-origin',
-      body: JSON.stringify({
-        name: newName,
-        price: Number(newPriceStr),
-        desc: newDesc,
-      }),
-    });
-    const data = await res.json().catch(() => ({}));
-    if (!res.ok || !data.ok) {
-      alert(`수정 실패: ${data.error || res.status}`);
-      return;
+    setBusy(true);
+    try {
+      const res = await fetch(`/api/products/${encodeURIComponent(p.id)}`, {
+        method: "DELETE",
+        credentials: "include",
+      });
+
+      let data: any = null;
+      try {
+        data = await res.json();
+      } catch {}
+
+      if (!res.ok) {
+        throw new Error(data?.message || `DELETE 실패 (HTTP ${res.status})`);
+      }
+
+      toast("삭제 완료");
+      // UX: 즉시 반영
+      setItems((prev) => prev.filter((x) => x.id !== p.id));
+    } catch (e: any) {
+      toast(e?.message || "삭제 실패");
+    } finally {
+      setBusy(false);
     }
-    await load();
-  }
+  };
 
   return (
-    <div className="container">
-      <h2>상품 관리</h2>
-
-      {/* 등록 폼 */}
-      <div className="card" style={{ marginTop: 12 }}>
-        <h3 style={{ marginTop: 0 }}>신규 등록</h3>
-
-        {/* 이미지 업로드 & 미리보기 */}
-        <div style={{ display: 'grid', gap: 10 }}>
-          <div style={{ display: 'flex', gap: 12, alignItems: 'center', flexWrap: 'wrap' }}>
-            <input
-              type="file"
-              accept="image/*"
-              onChange={(e) => {
-                const file = e.target.files?.[0];
-                if (file) onUploadFile(file);
-              }}
-            />
-            {uploading && <span>업로드 중...</span>}
-            {imageUrl && (
-              <img
-                src={imageUrl}
-                alt="preview"
-                style={{ width: 120, height: 120, objectFit: 'cover', borderRadius: 12, border: '1px solid var(--line)' }}
-              />
-            )}
+    <main style={wrap}>
+      <section style={top}>
+        <div style={headRow}>
+          <div>
+            <h1 style={h1}>상품관리</h1>
+            <p style={sub}>검색/추가/수정/삭제 MVP.</p>
           </div>
 
-          <input
-            placeholder="상품명"
-            value={name}
-            onChange={(e) => setName(e.target.value)}
-            style={{
-              padding: 10,
-              borderRadius: 10,
-              border: '1px solid var(--line)',
-              background: 'transparent',
-              color: 'inherit',
-            }}
-          />
-          <input
-            placeholder="가격 (숫자)"
-            inputMode="numeric"
-            value={price}
-            onChange={(e) => setPrice(e.target.value)}
-            style={{
-              padding: 10,
-              borderRadius: 10,
-              border: '1px solid var(--line)',
-              background: 'transparent',
-              color: 'inherit',
-            }}
-          />
-          <textarea
-            placeholder="설명 (선택)"
-            value={desc}
-            onChange={(e) => setDesc(e.target.value)}
-            rows={3}
-            style={{
-              padding: 10,
-              borderRadius: 10,
-              border: '1px solid var(--line)',
-              background: 'transparent',
-              color: 'inherit',
-              resize: 'vertical',
-            }}
-          />
-          <div>
-            <button className="btn btn-primary" disabled={!canCreate || creating} onClick={onCreate}>
-              {creating ? '등록 중...' : '등록'}
+          <div style={{ display: "flex", gap: 10, flexWrap: "wrap" }}>
+            <button type="button" onClick={load} style={btnGhost} disabled={loading || busy}>
+              새로고침
+            </button>
+            <button type="button" onClick={openNew} style={btnPrimary} disabled={loading || busy}>
+              + 상품 추가
             </button>
           </div>
         </div>
-      </div>
 
-      {/* 목록 */}
-      {loading ? (
-        <p style={{ marginTop: 12 }}>불러오는 중...</p>
-      ) : (
-        <div className="grid" style={{ marginTop: 12 }}>
-          {items.map((p) => (
-            <div key={p.id} className="card">
-              <div className="media" style={{ overflow: 'hidden' }}>
-                <img
-                  src={p.imageUrl || '/placeholder.png'}
-                  alt={p.name}
-                  style={{ width: '100%', height: '100%', objectFit: 'cover' }}
-                />
-              </div>
-              <h3 style={{ marginTop: 12 }}>{p.name}</h3>
-              <p style={{ margin: '6px 0 12px' }}>{p.price.toLocaleString()}원</p>
-              <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
-                <Link className="btn btn-primary" href={`/mall/product/${p.id}`}>
-                  상세
-                </Link>
-                <button className="btn" onClick={() => onEdit(p)}>
-                  수정
-                </button>
-                <button className="btn" onClick={() => onDelete(p.id)}>
-                  삭제
-                </button>
-              </div>
-            </div>
-          ))}
+        <div style={searchRow}>
+          <input
+            value={q}
+            onChange={(e) => setQ(e.target.value)}
+            placeholder="상품명 / SKU / 바코드(makerCode) 검색"
+            style={search}
+          />
+          <div style={pill}>총 {items.length}개</div>
+          <div style={pillSoft}>표시 {filtered.length}개</div>
+        </div>
+      </section>
+
+      {!!msg && <div style={toastBox}>{msg}</div>}
+
+      {loading && <div style={loadingCard}>불러오는 중…</div>}
+
+      {!loading && err && (
+        <div style={errorCard}>
+          <div style={{ fontWeight: 950 }}>에러</div>
+          <div style={{ marginTop: 6, opacity: 0.85 }}>{err}</div>
         </div>
       )}
-    </div>
+
+      {!loading && !err && (
+        <section style={panel}>
+          <div style={tableWrap}>
+            <table style={table}>
+              <thead>
+                <tr>
+                  <th style={th}>이름</th>
+                  <th style={th}>SKU</th>
+                  <th style={th}>BAR</th>
+                  <th style={{ ...th, textAlign: "right" }}>재고</th>
+                  <th style={{ ...th, textAlign: "right" }}>가격</th>
+                  <th style={{ ...th, width: 160, textAlign: "right" }}>액션</th>
+                </tr>
+              </thead>
+              <tbody>
+                {filtered.map((p) => (
+                  <tr key={p.id}>
+                    <td style={tdStrong}>{pickName(p) || "-"}</td>
+                    <td style={tdMono}>{p.sku || "-"}</td>
+                    <td style={tdMono}>{p.makerCode || "-"}</td>
+                    <td style={{ ...td, textAlign: "right" }}>
+                      {typeof p.onHand === "number" ? p.onHand.toLocaleString() : "-"}
+                    </td>
+                    <td style={{ ...td, textAlign: "right" }}>
+                      {typeof p.price === "number" ? `${p.price.toLocaleString()}원` : "-"}
+                    </td>
+                    <td style={{ ...td, textAlign: "right" }}>
+                      <div style={{ display: "inline-flex", gap: 8 }}>
+                        <button type="button" onClick={() => openEdit(p)} style={btnSmall} disabled={busy}>
+                          수정
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => remove(p)}
+                          style={btnDangerSmall}
+                          disabled={busy}
+                        >
+                          삭제
+                        </button>
+                      </div>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </section>
+      )}
+
+      {/* Drawer */}
+      {open && (
+        <div style={overlay} onMouseDown={close}>
+          <div style={drawer} onMouseDown={(e) => e.stopPropagation()}>
+            <div style={drawerHead}>
+              <div style={{ fontWeight: 950 }}>{draft?.id ? "상품 수정" : "상품 추가"}</div>
+              <button type="button" onClick={close} style={btnGhost}>
+                닫기
+              </button>
+            </div>
+
+            <div style={form}>
+              <label style={label}>
+                상품명
+                <input
+                  value={draft?.name || ""}
+                  onChange={(e) => setDraft((d) => (d ? { ...d, name: e.target.value } : d))}
+                  style={input}
+                />
+              </label>
+
+              <div style={row2}>
+                <label style={label}>
+                  SKU
+                  <input
+                    value={draft?.sku || ""}
+                    onChange={(e) => setDraft((d) => (d ? { ...d, sku: e.target.value } : d))}
+                    style={input}
+                  />
+                </label>
+                <label style={label}>
+                  BAR(makerCode)
+                  <input
+                    value={draft?.makerCode || ""}
+                    onChange={(e) => setDraft((d) => (d ? { ...d, makerCode: e.target.value } : d))}
+                    style={input}
+                  />
+                </label>
+              </div>
+
+              <div style={row2}>
+                <label style={label}>
+                  가격
+                  <input
+                    type="number"
+                    value={Number(draft?.price || 0)}
+                    onChange={(e) => setDraft((d) => (d ? { ...d, price: Number(e.target.value) } : d))}
+                    style={input}
+                  />
+                </label>
+                <label style={label}>
+                  재고(onHand)
+                  <input
+                    type="number"
+                    value={Number(draft?.onHand || 0)}
+                    onChange={(e) => setDraft((d) => (d ? { ...d, onHand: Number(e.target.value) } : d))}
+                    style={input}
+                  />
+                </label>
+              </div>
+
+              <label style={label}>
+                썸네일 URL
+                <input
+                  value={draft?.thumbnail || ""}
+                  onChange={(e) => setDraft((d) => (d ? { ...d, thumbnail: e.target.value } : d))}
+                  style={input}
+                />
+              </label>
+
+              <label style={label}>
+                설명
+                <textarea
+                  value={draft?.description || ""}
+                  onChange={(e) => setDraft((d) => (d ? { ...d, description: e.target.value } : d))}
+                  style={textarea}
+                />
+              </label>
+            </div>
+
+            <div style={drawerFoot}>
+              <button type="button" onClick={save} style={btnPrimary} disabled={busy}>
+                {busy ? "저장 중…" : "저장"}
+              </button>
+              <button type="button" onClick={close} style={btnGhost} disabled={busy}>
+                취소
+              </button>
+            </div>
+
+            <div style={hint}>
+              * 삭제는 테이블의 “삭제” 버튼을 사용해줘. (PUT/POST/DELETE는 admin만 가능)
+            </div>
+          </div>
+        </div>
+      )}
+    </main>
   );
 }
+
+/* ---------- styles ---------- */
+
+const wrap: React.CSSProperties = { maxWidth: 1120, margin: "0 auto", padding: "18px 14px 40px" };
+
+const top: React.CSSProperties = { padding: "10px 4px 16px" };
+
+const headRow: React.CSSProperties = {
+  display: "flex",
+  justifyContent: "space-between",
+  alignItems: "flex-end",
+  gap: 12,
+  flexWrap: "wrap",
+};
+
+const h1: React.CSSProperties = { margin: 0, fontSize: 26, fontWeight: 950, letterSpacing: -0.7 };
+
+const sub: React.CSSProperties = { margin: "8px 0 0", fontSize: 13, opacity: 0.68, lineHeight: 1.6 };
+
+const searchRow: React.CSSProperties = {
+  marginTop: 14,
+  display: "flex",
+  gap: 10,
+  alignItems: "center",
+  flexWrap: "wrap",
+};
+
+const search: React.CSSProperties = {
+  flex: "1 1 360px",
+  minWidth: 280,
+  height: 42,
+  padding: "0 12px",
+  borderRadius: 12,
+  border: "1px solid rgba(0,0,0,0.12)",
+  background: "rgba(255,255,255,0.9)",
+  fontSize: 14,
+  outline: "none",
+};
+
+const pill: React.CSSProperties = {
+  padding: "6px 10px",
+  borderRadius: 999,
+  fontSize: 12,
+  fontWeight: 900,
+  border: "1px solid rgba(0,0,0,0.10)",
+  background: "rgba(255,255,255,0.80)",
+  color: "rgba(2,6,23,0.78)",
+};
+
+const pillSoft: React.CSSProperties = { ...pill, background: "rgba(2,6,23,0.04)" };
+
+const panel: React.CSSProperties = {
+  borderRadius: 18,
+  border: "1px solid rgba(0,0,0,0.08)",
+  background: "rgba(255,255,255,0.90)",
+  boxShadow: "0 10px 30px rgba(0,0,0,0.06)",
+  overflow: "hidden",
+};
+
+const tableWrap: React.CSSProperties = { overflowX: "auto" };
+const table: React.CSSProperties = { width: "100%", borderCollapse: "collapse" };
+const th: React.CSSProperties = { textAlign: "left", fontSize: 12, fontWeight: 950, padding: "10px 12px", opacity: 0.7 };
+const td: React.CSSProperties = { padding: "10px 12px", borderTop: "1px solid rgba(0,0,0,0.06)", fontSize: 13 };
+const tdStrong: React.CSSProperties = { ...td, fontWeight: 950 };
+const tdMono: React.CSSProperties = {
+  ...td,
+  fontFamily: "ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, 'Liberation Mono', 'Courier New', monospace",
+  fontSize: 12,
+  opacity: 0.85,
+};
+
+const btnBase: React.CSSProperties = {
+  height: 42,
+  padding: "0 12px",
+  borderRadius: 12,
+  border: "1px solid rgba(0,0,0,0.10)",
+  background: "rgba(2,6,23,0.04)",
+  fontWeight: 950,
+  cursor: "pointer",
+};
+
+const btnGhost: React.CSSProperties = { ...btnBase };
+
+const btnPrimary: React.CSSProperties = {
+  ...btnBase,
+  border: "none",
+  color: "white",
+  background: "linear-gradient(90deg, #6366f1, #10b981)",
+};
+
+const btnSmall: React.CSSProperties = {
+  height: 34,
+  padding: "0 10px",
+  borderRadius: 10,
+  border: "1px solid rgba(0,0,0,0.10)",
+  background: "rgba(2,6,23,0.04)",
+  fontWeight: 950,
+  cursor: "pointer",
+};
+
+const btnDangerSmall: React.CSSProperties = {
+  height: 34,
+  padding: "0 10px",
+  borderRadius: 10,
+  border: "1px solid rgba(239,68,68,0.35)",
+  background: "rgba(239,68,68,0.10)",
+  fontWeight: 950,
+  cursor: "pointer",
+};
+
+const loadingCard: React.CSSProperties = {
+  padding: "16px 14px",
+  borderRadius: 16,
+  border: "1px solid rgba(0,0,0,0.08)",
+  background: "rgba(255,255,255,0.85)",
+  boxShadow: "0 10px 30px rgba(0,0,0,0.06)",
+  fontWeight: 900,
+  opacity: 0.8,
+};
+
+const errorCard: React.CSSProperties = {
+  padding: "16px 14px",
+  borderRadius: 16,
+  border: "1px solid rgba(239,68,68,0.25)",
+  background: "rgba(239,68,68,0.06)",
+};
+
+const toastBox: React.CSSProperties = {
+  position: "fixed",
+  right: 16,
+  bottom: 16,
+  zIndex: 1000,
+  padding: "10px 12px",
+  borderRadius: 12,
+  border: "1px solid rgba(0,0,0,0.10)",
+  background: "rgba(255,255,255,0.92)",
+  boxShadow: "0 10px 30px rgba(0,0,0,0.10)",
+  fontWeight: 950,
+};
+
+const overlay: React.CSSProperties = {
+  position: "fixed",
+  inset: 0,
+  background: "rgba(2,6,23,0.45)",
+  zIndex: 999,
+  display: "flex",
+  justifyContent: "flex-end",
+};
+
+const drawer: React.CSSProperties = {
+  width: "min(560px, 92vw)",
+  height: "100%",
+  background: "rgba(255,255,255,0.98)",
+  borderLeft: "1px solid rgba(0,0,0,0.10)",
+  padding: 14,
+  display: "flex",
+  flexDirection: "column",
+};
+
+const drawerHead: React.CSSProperties = { display: "flex", justifyContent: "space-between", alignItems: "center", gap: 10 };
+
+const form: React.CSSProperties = { marginTop: 12, display: "grid", gap: 10, overflow: "auto", paddingBottom: 10 };
+
+const row2: React.CSSProperties = { display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 };
+
+const label: React.CSSProperties = { display: "grid", gap: 6, fontSize: 12, fontWeight: 950, opacity: 0.75 };
+
+const input: React.CSSProperties = {
+  height: 40,
+  borderRadius: 12,
+  border: "1px solid rgba(0,0,0,0.12)",
+  padding: "0 10px",
+  fontSize: 13,
+};
+
+const textarea: React.CSSProperties = {
+  minHeight: 120,
+  borderRadius: 12,
+  border: "1px solid rgba(0,0,0,0.12)",
+  padding: "10px 10px",
+  fontSize: 13,
+  resize: "vertical",
+};
+
+const drawerFoot: React.CSSProperties = { display: "flex", gap: 10, paddingTop: 10 };
+
+const hint: React.CSSProperties = { marginTop: 10, fontSize: 12, opacity: 0.6, lineHeight: 1.5 };

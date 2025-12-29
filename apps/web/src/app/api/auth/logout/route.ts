@@ -1,11 +1,11 @@
-import { NextResponse } from 'next/server';
+import { NextResponse } from "next/server";
 
 export async function POST() {
   const res = NextResponse.json({ ok: true });
-  res.cookies.set('session', '', {
-    httpOnly: true,
-    path: '/',
-    maxAge: 0
-  });
+
+  res.cookies.set("wms_session", "", { httpOnly: true, sameSite: "lax", path: "/", maxAge: 0 });
+  res.cookies.set("wms_role", "", { httpOnly: true, sameSite: "lax", path: "/", maxAge: 0 });
+
   return res;
 }
+

@@ -1,27 +1,50 @@
-import type { NextRequest } from 'next/server';
-import { NextResponse } from 'next/server';
+import { NextRequest, NextResponse } from "next/server";
 
-// /mall/admin/** 는 admin만 접근 가능
 export function middleware(req: NextRequest) {
   const { pathname } = req.nextUrl;
-  if (pathname.startsWith('/mall/admin')) {
-    const raw = req.cookies.get('session')?.value ?? null;
-    try {
-      const json = raw ? JSON.parse(Buffer.from(raw, 'base64').toString('utf8')) : null;
-      if (!json || json.role !== 'admin') {
-        const url = new URL('/mall/login', req.url);
-        url.searchParams.set('from', pathname);
-        return NextResponse.redirect(url);
-      }
-    } catch {
-      const url = new URL('/mall/login', req.url);
-      url.searchParams.set('from', pathname);
-      return NextResponse.redirect(url);
+
+  /** ✅ 1. API는 무조건 통과 */
+  if (pathname.startsWith("/api")) {
+    return NextResponse.next();
+  }
+
+  /** ✅ 2. Next 내부 리소스 통과 */
+  if (
+    pathname.startsWith("/_next") ||
+    pathname.startsWith("/favicon")
+  ) {
+    return NextResponse.next();
+  }
+
+  /** ✅ 3. 공개 페이지 */
+  if (
+    pathname === "/" ||
+    pathname.startsWith("/mall/login")
+  ) {
+    return NextResponse.next();
+  }
+
+  const role = req.cookies.get("wms_role")?.value || "";
+
+  /** ✅ 4. admin 보호 */
+  if (pathname.startsWith("/mall/admin")) {
+    if (role !== "admin") {
+      return NextResponse.redirect(new URL("/mall/login", req.url));
     }
   }
+
+  /** ✅ 5. mall(customer) 보호 */
+  if (pathname.startsWith("/mall")) {
+    if (!role) {
+      return NextResponse.redirect(new URL("/mall/login", req.url));
+    }
+  }
+
   return NextResponse.next();
 }
 
 export const config = {
-  matcher: ['/mall/admin/:path*'],
+  matcher: [
+    "/((?!api|_next/static|_next/image|favicon.ico).*)",
+  ],
 };

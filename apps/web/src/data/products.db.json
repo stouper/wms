@@ -1,0 +1,28 @@
+[
+  {
+    "id": "11fa9643-255c-4076-9526-ac84565389df",
+    "name": "2222",
+    "sku": "222",
+    "makerCode": "222",
+    "price": 222,
+    "onHand": 222,
+    "thumbnail": "",
+    "imageUrl": "",
+    "description": "",
+    "createdAt": "2025-12-28T10:04:03.480Z",
+    "updatedAt": "2025-12-28T10:04:03.480Z"
+  },
+  {
+    "id": "8b2f0374-0e4f-4972-87ec-63a0d5a6c98a",
+    "name": "1111",
+    "sku": "111",
+    "makerCode": "1",
+    "price": 1111,
+    "onHand": 1,
+    "thumbnail": "",
+    "imageUrl": "",
+    "description": "",
+    "createdAt": "2025-12-28T10:03:57.209Z",
+    "updatedAt": "2025-12-28T10:03:57.209Z"
+  }
+]

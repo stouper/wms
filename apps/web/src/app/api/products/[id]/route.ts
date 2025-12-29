@@ -1,70 +1,108 @@
-import { NextResponse } from 'next/server';
-import { cookies } from 'next/headers';
-import { products, Product } from '@/data/products';
-import { parseSessionCookie } from '@/lib/auth';
+import { NextRequest, NextResponse } from "next/server";
+import { promises as fs } from "fs";
+import path from "path";
 
-type Context = {
-  params: Promise<{ id: string }>;
+export const runtime = "nodejs";
+export const dynamic = "force-dynamic";
+
+type Product = {
+  id: string;
+  name: string;
+  price?: number;
+  imageUrl?: string;
+  createdAt?: string;
+  updatedAt?: string;
 };
 
-export async function GET(_: Request, context: Context) {
-  const { id } = await context.params;
+const DB_FILE = path.join(process.cwd(), "src", "data", "products.db.json");
 
-  const item = products.find(p => p.id === id);
-  if (!item) {
-    return NextResponse.json({ ok: false, error: 'not found' }, { status: 404 });
-  }
-
-  return NextResponse.json({ ok: true, item });
+function getRole(req: NextRequest) {
+  return req.cookies.get("wms_role")?.value || "";
+}
+function isAdmin(req: NextRequest) {
+  return getRole(req) === "admin";
 }
 
-export async function PATCH(req: Request, context: Context) {
-  const { id } = await context.params;
+async function ensureDbFile() {
+  try {
+    await fs.access(DB_FILE);
+  } catch {
+    await fs.mkdir(path.dirname(DB_FILE), { recursive: true });
+    await fs.writeFile(DB_FILE, "[]", "utf8");
+  }
+}
 
-  const cookieStore = await cookies();
-  const raw = cookieStore.get('session')?.value ?? null;
-  const session = parseSessionCookie(raw);
+async function readAll(): Promise<Product[]> {
+  await ensureDbFile();
+  const raw = await fs.readFile(DB_FILE, "utf8").catch(() => "[]");
+  const rows = JSON.parse(raw || "[]");
+  return Array.isArray(rows) ? rows : [];
+}
 
-  if (!session || session.role !== 'admin') {
-    return NextResponse.json({ ok: false, error: 'unauthorized' }, { status: 401 });
+async function writeAll(rows: Product[]) {
+  await fs.mkdir(path.dirname(DB_FILE), { recursive: true });
+  await fs.writeFile(DB_FILE, JSON.stringify(rows, null, 2), "utf8");
+}
+
+function norm(v: any) {
+  return String(v ?? "").trim();
+}
+function num(v: any) {
+  const n = Number(v);
+  return Number.isFinite(n) ? n : NaN;
+}
+
+export async function GET(_req: NextRequest, ctx: { params: Promise<{ id: string }> }) {
+  const { id } = await ctx.params;
+  const rows = await readAll();
+  const found = rows.find((p) => p.id === id);
+  if (!found) return NextResponse.json({ ok: false, message: "not found" }, { status: 404 });
+  return NextResponse.json({ ok: true, product: found });
+}
+
+export async function PATCH(req: NextRequest, ctx: { params: Promise<{ id: string }> }) {
+  if (!isAdmin(req)) {
+    return NextResponse.json({ ok: false, message: "admin only", role: getRole(req) }, { status: 403 });
   }
 
-  const idx = products.findIndex(p => p.id === id);
-  if (idx === -1) {
-    return NextResponse.json({ ok: false, error: 'not found' }, { status: 404 });
-  }
+  const { id } = await ctx.params;
+  const body = await req.json().catch(() => ({}));
+  const rows = await readAll();
 
-  const body = (await req.json().catch(() => null)) as Partial<Product> | null;
-  if (!body) {
-    return NextResponse.json({ ok: false, error: 'invalid body' }, { status: 400 });
-  }
+  const idx = rows.findIndex((p) => p.id === id);
+  if (idx < 0) return NextResponse.json({ ok: false, message: "not found" }, { status: 404 });
 
-  products[idx] = {
-    ...products[idx],
-    ...(typeof body.name === 'string' ? { name: body.name } : {}),
-    ...(typeof body.price === 'number' ? { price: body.price } : {}),
-    ...(typeof body.desc === 'string' ? { desc: body.desc } : {}),
+  const now = new Date().toISOString();
+  const cur = rows[idx];
+
+  const next: Product = {
+    ...cur,
+    name: norm(body.name || cur.name),
+    price: body.price != null && Number.isFinite(num(body.price)) ? num(body.price) : cur.price,
+    imageUrl: body.imageUrl != null ? norm(body.imageUrl) : cur.imageUrl,
+    updatedAt: now,
   };
 
-  return NextResponse.json({ ok: true, item: products[idx] });
+  rows[idx] = next;
+  await writeAll(rows);
+
+  return NextResponse.json({ ok: true, product: next });
 }
 
-export async function DELETE(_: Request, context: Context) {
-  const { id } = await context.params;
-
-  const cookieStore = await cookies();
-  const raw = cookieStore.get('session')?.value ?? null;
-  const session = parseSessionCookie(raw);
-
-  if (!session || session.role !== 'admin') {
-    return NextResponse.json({ ok: false, error: 'unauthorized' }, { status: 401 });
+export async function DELETE(req: NextRequest, ctx: { params: Promise<{ id: string }> }) {
+  if (!isAdmin(req)) {
+    return NextResponse.json({ ok: false, message: "admin only", role: getRole(req) }, { status: 403 });
   }
 
-  const idx = products.findIndex(p => p.id === id);
-  if (idx === -1) {
-    return NextResponse.json({ ok: false, error: 'not found' }, { status: 404 });
-  }
+  const { id } = await ctx.params;
+  const rows = await readAll();
 
-  const [removed] = products.splice(idx, 1);
-  return NextResponse.json({ ok: true, item: removed });
+  const idx = rows.findIndex((p) => p.id === id);
+  if (idx < 0) return NextResponse.json({ ok: false, message: "not found" }, { status: 404 });
+
+  const removed = rows[idx];
+  const next = rows.filter((p) => p.id !== id);
+  await writeAll(next);
+
+  return NextResponse.json({ ok: true, removed });
 }
