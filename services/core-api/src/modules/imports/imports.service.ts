@@ -19,6 +19,7 @@ export class ImportsService {
     return raw
       .replace(/\s+/g, '')
       .replace(/[\(\)\[\]\{\}]/g, '')
+      .replace(/[▲▼△▽]/g, '')
       .toLowerCase();
   }
 

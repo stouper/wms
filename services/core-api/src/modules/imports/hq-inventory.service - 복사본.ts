@@ -11,39 +11,30 @@ import { PrismaService } from '../../prisma/prisma.service';
  */
 
 export type HqRow = {
-  sku: string; // SKU 코드
-  qty: number; // 수량
-  location?: string; // 로케이션 코드
-  makerCode?: string; // 바코드/메이커코드
-  name?: string; // 상품명
-  productType?: string; // 상품구분
-};
-
-type HqSkuInfo = {
-  qty: number;
+  sku: string;           // SKU 코드
+  qty: number;           // 수량
+  location?: string;     // 로케이션 코드
   makerCode?: string;
   name?: string;
-  productType?: string;
+  productType?: string;  // "SHOES" | "ACCESSORY" 등 (없으면 기본값)
 };
 
+type AggInfo = { qty: number; makerCode?: string; name?: string; productType?: string };
+
+function normUpper(v: any) {
+  return String(v ?? '').trim().toUpperCase();
+}
 function norm(v: any) {
   const s = String(v ?? '').trim();
   return s.length ? s : '';
 }
-function normUpper(v: any) {
-  return norm(v).toUpperCase();
-}
 
-// 프로젝트 기존 normalize가 있다면 거기 로직을 그대로 쓰는게 최선인데,
-// 현재 파일 기준으로는 이 함수만 필요
-function normalizeProductType(v: any) {
-  const s = norm(v);
-  if (!s) return undefined;
-  const u = s.toUpperCase();
-  if (u === 'SHOES' || u === 'SHOE') return 'SHOES';
-  if (u === 'ACC' || u === 'ACCESSORY' || u === 'ACCESSORIES') return 'ACCESSORY';
-  if (u === 'SET') return 'SET';
-  return s; // 원본 유지
+function normalizeProductType(v: any): string | undefined {
+  const raw = normUpper(v);
+  if (!raw) return undefined;
+  if (raw === 'SHOES' || raw === 'FOOTWEAR') return 'SHOES';
+  if (raw === 'ACCESSORY' || raw === 'ACCESSORIES') return 'ACCESSORY';
+  return undefined;
 }
 
 @Injectable()
@@ -51,34 +42,27 @@ export class HqInventoryService {
   constructor(private readonly prisma: PrismaService) {}
 
   /**
-   * HQ 인벤토리 "전체 교체" 반영
-   * - location 단위 스냅샷: 엑셀에 없는 SKU는 삭제
-   * - qty=0은 row를 남기지 않음
-   *
-   * + (B안 강화) store 전체 스냅샷:
-   * - 엑셀에 없는 로케이션의 재고는 전부 삭제
-   * - 단, UNASSIGNED / RET-01 은 로케이션만 유지하고 재고는 항상 비움
+   * HQ 재고 업로드: "로케이션별로" 엑셀 기준 수량으로 완전히 맞춤 (스냅샷)
    */
   async replaceAll(rows: HqRow[]) {
-    if (!Array.isArray(rows) || rows.length <= 0) {
-      throw new BadRequestException('rows is required');
-    }
+    const cleanRows = Array.isArray(rows) ? rows : [];
+    if (cleanRows.length <= 0) throw new BadRequestException('rows is empty');
 
-    // HQ store 찾기 (프로젝트 정책 유지)
+    // ✅ HQ Store 확보 (seed 필요)
     const hqStore = await this.prisma.store.findFirst({
       where: { code: 'HQ' } as any,
       select: { id: true, code: true } as any,
     } as any);
 
     if (!hqStore) {
-      throw new BadRequestException('HQ store not found');
+      throw new BadRequestException('HQ store not found (seed required)');
     }
 
-    // location별 skuMap 구성
-    const byLoc = new Map<string, Map<string, HqSkuInfo>>();
+    // locationCode → (skuCode → agg)
+    const byLoc = new Map<string, Map<string, AggInfo>>();
     const uniqLocCodes: string[] = [];
 
-    for (const r of rows) {
+    for (const r of cleanRows) {
       const skuCode = normUpper(r?.sku);
       if (!skuCode) continue;
 
@@ -98,7 +82,6 @@ export class HqInventoryService {
       const skuMap = byLoc.get(locCode)!;
       const prev = skuMap.get(skuCode);
 
-      // 같은 (loc, sku)가 여러 줄로 오면 합산
       if (!prev) {
         skuMap.set(skuCode, { qty, makerCode, name, productType });
       } else {
@@ -113,56 +96,8 @@ export class HqInventoryService {
 
     let applied = 0;
 
-    // ✅ 예외 로케이션: 로케이션은 유지하되, 재고(Inventory)는 항상 비워둠
-    const KEEP_EMPTY_LOCATION_CODES = new Set(['UNASSIGNED', 'RET-01']);
-
     await this.prisma.$transaction(async (tx) => {
-      // ✅ (B안) HQ 전체 스냅샷 정책:
-      //  - 엑셀에 없는 로케이션의 재고는 전부 삭제
-      //  - 단, UNASSIGNED / RET-01 은 '로케이션만 유지'하고 '재고는 항상 0개(삭제)'로 유지
-      //
-      // 1) UNASSIGNED / RET-01 Location 확보(없으면 생성)
-      for (const code of Array.from(KEEP_EMPTY_LOCATION_CODES)) {
-        const existing = await tx.location.findFirst({
-          where: { storeId: hqStore.id, code } as any,
-          select: { id: true, code: true } as any,
-        } as any);
-
-        if (!existing) {
-          await tx.location.create({
-            data: { storeId: hqStore.id, code, name: code } as any,
-            select: { id: true, code: true } as any,
-          } as any);
-        }
-      }
-
-      // 2) UNASSIGNED / RET-01 내부 재고는 무조건 비움
-      await tx.inventory.deleteMany({
-        where: {
-          location: {
-            storeId: hqStore.id,
-            code: { in: Array.from(KEEP_EMPTY_LOCATION_CODES) },
-          },
-        } as any,
-      } as any);
-
-      // 3) 엑셀에 없는 로케이션의 재고는 전부 삭제 (예외 로케이션 제외)
-      await tx.inventory.deleteMany({
-        where: {
-          location: {
-            storeId: hqStore.id,
-            AND: [
-              { code: { notIn: uniqLocCodes } },
-              { code: { notIn: Array.from(KEEP_EMPTY_LOCATION_CODES) } },
-            ],
-          },
-        } as any,
-      } as any);
-
       for (const locCode of uniqLocCodes) {
-        // ✅ 예외 로케이션은 로케이션만 유지하고 재고는 항상 비우므로, 업로드로 갱신하지 않음
-        if (KEEP_EMPTY_LOCATION_CODES.has(locCode)) continue;
-
         const skuMap = byLoc.get(locCode)!;
 
         // ✅ location 확보 (storeId + code)
@@ -179,10 +114,10 @@ export class HqInventoryService {
         }
 
         /**
-         * (A) 엑셀에 없는 SKU는 삭제 (location 단위 스냅샷 정책)
+         * (A) 엑셀에 없는 SKU는 삭제 (HQ 스냅샷 정책)
          */
         const existingInv = await tx.inventory.findMany({
-          where: { locationId: (loc as any).id } as any,
+          where: { locationId: loc.id } as any,
           select: {
             id: true,
             qty: true,
@@ -196,7 +131,7 @@ export class HqInventoryService {
           if (!skuCode) continue;
           if (incomingSkuSet.has(skuCode)) continue;
 
-          console.log('[HQ_DELETE_MISSING]', (loc as any).code, inv?.sku?.sku, inv.id, inv.qty);
+          console.log('[HQ_DELETE_MISSING]', loc.code, inv?.sku?.sku, inv.id, inv.qty);
 
           await tx.inventory.delete({
             where: { id: inv.id } as any,
@@ -234,8 +169,8 @@ export class HqInventoryService {
           } else {
             // 메타 업데이트(옵션)
             const updateData: any = {};
-            if (makerCode && makerCode !== (sku as any).makerCode) updateData.makerCode = makerCode;
-            if (name && name !== (sku as any).name) updateData.name = name;
+            if (makerCode && makerCode !== sku.makerCode) updateData.makerCode = makerCode;
+            if (name && name !== sku.name) updateData.name = name;
             if (productType && productType !== (sku as any).productType) updateData.productType = productType;
 
             if (Object.keys(updateData).length > 0) {
@@ -249,14 +184,14 @@ export class HqInventoryService {
 
           // ✅ inventory upsert (location+sku)
           const inv = await tx.inventory.findFirst({
-            where: { locationId: (loc as any).id, skuId: (sku as any).id } as any,
+            where: { locationId: loc.id, skuId: (sku as any).id } as any,
             select: { id: true, qty: true } as any,
           } as any);
 
           // 🔥 qty=0이면 row를 남기지 않음
           if (targetQty === 0) {
             if (inv) {
-              console.log('[HQ_DELETE_ZERO]', (loc as any).code, skuCode, inv.id, inv.qty);
+              console.log('[HQ_DELETE_ZERO]', loc.code, skuCode, inv.id, inv.qty);
               await tx.inventory.delete({
                 where: { id: inv.id } as any,
               } as any);
@@ -268,16 +203,16 @@ export class HqInventoryService {
           if (!inv) {
             await tx.inventory.create({
               data: {
-                locationId: (loc as any).id,
+                locationId: loc.id,
                 skuId: (sku as any).id,
                 qty: targetQty,
               } as any,
             } as any);
             applied++;
           } else {
-            if (Number((inv as any).qty ?? 0) !== targetQty) {
+            if (Number(inv.qty ?? 0) !== targetQty) {
               await tx.inventory.update({
-                where: { id: (inv as any).id } as any,
+                where: { id: inv.id } as any,
                 data: { qty: targetQty } as any,
               } as any);
               applied++;
@@ -287,7 +222,7 @@ export class HqInventoryService {
 
         // ✅ 안전장치: 혹시 남아있는 qty=0 row는 정리
         await tx.inventory.deleteMany({
-          where: { locationId: (loc as any).id, qty: 0 } as any,
+          where: { locationId: loc.id, qty: 0 } as any,
         } as any);
       }
     });
