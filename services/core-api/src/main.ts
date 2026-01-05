@@ -10,6 +10,8 @@ async function bootstrap() {
   app.enableCors({
     origin: true,
     credentials: true,
+    allowedHeaders: '*', // ★ 추가
+    exposedHeaders: '*', // ★ 선택(있으면 편함)
     methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
   });
 

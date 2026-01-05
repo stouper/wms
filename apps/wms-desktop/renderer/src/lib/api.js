@@ -1,11 +1,15 @@
 import { safeReadLocal } from "./storage";
 
-export const DEFAULT_API_BASE = "http://localhost:3000";
-
-/**
- * UI에 노출하지 않고, 코드/로컬스토리지에서만 API Base를 관리한다.
- * - localStorage key: wms.apiBase
- */
 export function getApiBase() {
-  return safeReadLocal("wms.apiBase") || DEFAULT_API_BASE;
+  // 1) 로컬 스토리지 우선 (개발 편의)
+  const saved = safeReadLocal("wms.apiBase");
+  if (saved) return saved;
+
+  // 2) Electron 환경에서 dev면 로컬
+  if (process.env.NODE_ENV === "development") {
+    return "http://localhost:3000";
+  }
+
+  // 3) 기본은 운영 서버
+  return "https://api.dheska.com";
 }
