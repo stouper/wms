@@ -34,62 +34,55 @@ async function ensureDbFile() {
 
 async function readAll(): Promise<Product[]> {
   await ensureDbFile();
-  const raw = await fs.readFile(DB_FILE, "utf8").catch(() => "[]");
-  const rows = JSON.parse(raw || "[]");
+  const raw = await fs.readFile(DB_FILE, "utf8");
+  const rows = JSON.parse(raw || "[]") as Product[];
   return Array.isArray(rows) ? rows : [];
 }
 
 async function writeAll(rows: Product[]) {
-  await fs.mkdir(path.dirname(DB_FILE), { recursive: true });
+  await ensureDbFile();
   await fs.writeFile(DB_FILE, JSON.stringify(rows, null, 2), "utf8");
-}
-
-function norm(v: any) {
-  return String(v ?? "").trim();
-}
-function num(v: any) {
-  const n = Number(v);
-  return Number.isFinite(n) ? n : NaN;
 }
 
 export async function GET(_req: NextRequest, ctx: { params: Promise<{ id: string }> }) {
   const { id } = await ctx.params;
   const rows = await readAll();
-  const found = rows.find((p) => p.id === id);
-  if (!found) return NextResponse.json({ ok: false, message: "not found" }, { status: 404 });
-  return NextResponse.json({ ok: true, product: found });
+  const item = rows.find((p) => p.id === id);
+  if (!item) return NextResponse.json({ ok: false, message: "not found" }, { status: 404 });
+  return NextResponse.json({ ok: true, item });
 }
 
-export async function PATCH(req: NextRequest, ctx: { params: Promise<{ id: string }> }) {
+export async function PUT(req: NextRequest, ctx: { params: Promise<{ id: string }> }) {
+  // ✅ 수정은 admin only
   if (!isAdmin(req)) {
     return NextResponse.json({ ok: false, message: "admin only", role: getRole(req) }, { status: 403 });
   }
 
   const { id } = await ctx.params;
-  const body = await req.json().catch(() => ({}));
-  const rows = await readAll();
+  const body = (await req.json().catch(() => null)) as Partial<Product> | null;
+  if (!body) return NextResponse.json({ ok: false, message: "invalid body" }, { status: 400 });
 
+  const rows = await readAll();
   const idx = rows.findIndex((p) => p.id === id);
   if (idx < 0) return NextResponse.json({ ok: false, message: "not found" }, { status: 404 });
 
   const now = new Date().toISOString();
-  const cur = rows[idx];
-
-  const next: Product = {
-    ...cur,
-    name: norm(body.name || cur.name),
-    price: body.price != null && Number.isFinite(num(body.price)) ? num(body.price) : cur.price,
-    imageUrl: body.imageUrl != null ? norm(body.imageUrl) : cur.imageUrl,
+  const nextItem: Product = {
+    ...rows[idx],
+    ...body,
+    id,
     updatedAt: now,
   };
 
-  rows[idx] = next;
-  await writeAll(rows);
+  const next = [...rows];
+  next[idx] = nextItem;
+  await writeAll(next);
 
-  return NextResponse.json({ ok: true, product: next });
+  return NextResponse.json({ ok: true, item: nextItem });
 }
 
 export async function DELETE(req: NextRequest, ctx: { params: Promise<{ id: string }> }) {
+  // ✅ 삭제는 admin only
   if (!isAdmin(req)) {
     return NextResponse.json({ ok: false, message: "admin only", role: getRole(req) }, { status: 403 });
   }

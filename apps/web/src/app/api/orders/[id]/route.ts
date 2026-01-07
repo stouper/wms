@@ -5,6 +5,10 @@ import path from "path";
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
+// Next.js 15 타입 생성(.next/types)에서 dynamic segment params를 Promise로 취급하는 케이스가 있어
+// 빌드 타입 에러를 피하기 위해 params를 Promise<{id:string}>로 선언한다.
+type RouteCtx = { params: Promise<{ id: string }> };
+
 type OrderStatus = "requested" | "confirmed" | "shipped" | "done";
 
 type OrderItem = {
@@ -29,42 +33,48 @@ type Order = {
 
 const DB_FILE = path.join(process.cwd(), "src", "data", "orders.db.json");
 
+// --- helpers ---
 function norm(v: any) {
   return String(v ?? "").trim();
 }
 
-function getRole(req: NextRequest) {
-  return req.cookies.get("wms_role")?.value || "";
+function asStatus(v: any): OrderStatus | null {
+  const s = norm(v) as any;
+  if (s === "requested" || s === "confirmed" || s === "shipped" || s === "done") return s;
+  return null;
 }
+
+function getRole(req: NextRequest): "admin" | "customer" | "guest" {
+  const role = norm(req.headers.get("x-role"));
+  if (role === "admin") return "admin";
+  if (role === "customer") return "customer";
+  return "guest";
+}
+
 function isAdmin(req: NextRequest) {
+  // 기존 로직 유지: header 기반 admin 판단
   return getRole(req) === "admin";
 }
 
-async function ensureDbFile() {
+async function ensureDb() {
   try {
     await fs.access(DB_FILE);
   } catch {
     await fs.mkdir(path.dirname(DB_FILE), { recursive: true });
-    await fs.writeFile(DB_FILE, "[]", "utf8");
+    await fs.writeFile(DB_FILE, "[]", "utf-8");
   }
 }
 
 async function readAll(): Promise<Order[]> {
-  await ensureDbFile();
-  const raw = await fs.readFile(DB_FILE, "utf8").catch(() => "[]");
+  await ensureDb();
+  const raw = await fs.readFile(DB_FILE, "utf-8");
   const rows = JSON.parse(raw || "[]");
   return Array.isArray(rows) ? rows : [];
 }
 
 async function writeAll(rows: Order[]) {
-  await fs.mkdir(path.dirname(DB_FILE), { recursive: true });
-  await fs.writeFile(DB_FILE, JSON.stringify(rows, null, 2), "utf8");
-}
-
-function asStatus(v: any): OrderStatus | null {
-  const s = norm(v);
-  if (s === "requested" || s === "confirmed" || s === "shipped" || s === "done") return s;
-  return null;
+  await ensureDb();
+  await fs.writeFile(DB_FILE, JSON.stringify(rows, null, 2), "utf-8");
 }
 
 async function updateStatus(orderId: string, nextStatus: OrderStatus) {
@@ -79,9 +89,10 @@ async function updateStatus(orderId: string, nextStatus: OrderStatus) {
   return updated;
 }
 
-export async function GET(_req: NextRequest, ctx: { params: { id: string } }) {
+export async function GET(_req: NextRequest, ctx: RouteCtx) {
   try {
-    const orderId = norm(ctx?.params?.id);
+    const { id } = await ctx.params;
+    const orderId = norm(id);
     if (!orderId) return NextResponse.json({ ok: false, message: "id is required" }, { status: 400 });
 
     const rows = await readAll();
@@ -97,13 +108,14 @@ export async function GET(_req: NextRequest, ctx: { params: { id: string } }) {
 /**
  * ✅ 관리자 주문 상태 변경 (프론트가 PATCH를 쓰고 있으니 PATCH를 "정답"으로 둠)
  */
-export async function PATCH(req: NextRequest, ctx: { params: { id: string } }) {
+export async function PATCH(req: NextRequest, ctx: RouteCtx) {
   try {
     if (!isAdmin(req)) {
       return NextResponse.json({ ok: false, message: "admin only", role: getRole(req) }, { status: 403 });
     }
 
-    const orderId = norm(ctx?.params?.id);
+    const { id } = await ctx.params;
+    const orderId = norm(id);
     if (!orderId) return NextResponse.json({ ok: false, message: "id is required" }, { status: 400 });
 
     const body = await req.json().catch(() => ({}));
@@ -127,20 +139,21 @@ export async function PATCH(req: NextRequest, ctx: { params: { id: string } }) {
 /**
  * ✅ PUT도 같이 지원 (혹시 다른 화면/코드가 PUT을 쏠 수 있어서 안전망)
  */
-export async function PUT(req: NextRequest, ctx: { params: { id: string } }) {
+export async function PUT(req: NextRequest, ctx: RouteCtx) {
   return PATCH(req, ctx);
 }
 
 /**
  * ✅ 관리자 주문 삭제
  */
-export async function DELETE(req: NextRequest, ctx: { params: { id: string } }) {
+export async function DELETE(req: NextRequest, ctx: RouteCtx) {
   try {
     if (!isAdmin(req)) {
       return NextResponse.json({ ok: false, message: "admin only", role: getRole(req) }, { status: 403 });
     }
 
-    const orderId = norm(ctx?.params?.id);
+    const { id } = await ctx.params;
+    const orderId = norm(id);
     if (!orderId) return NextResponse.json({ ok: false, message: "id is required" }, { status: 400 });
 
     const rows = await readAll();

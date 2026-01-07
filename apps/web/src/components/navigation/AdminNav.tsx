@@ -20,38 +20,39 @@ export default function AdminNav() {
     return pathname?.startsWith(href);
   };
 
+  const tabClass = (href: string) =>
+    `wmsTab ${isActive(href) ? "wmsTab--active" : ""}`;
+
   return (
-    <header style={wrap}>
-      <div style={inner}>
-        <div style={left}>
-          <Link href="/mall/admin" style={brand}>
-            Admin <span style={brandAccent}>Console</span>
+    <header className="navbar">
+      <div className="container navbar-inner">
+        <div style={{ display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
+          <Link href="/mall/admin" className="brand" style={{ textDecoration: "none" }}>
+            <span>Admin</span>
+            <span style={{ opacity: 0.75, fontWeight: 900 }}>Console</span>
           </Link>
-          <span style={pill}>ADMIN</span>
+          <span className="wmsPill">ADMIN</span>
         </div>
 
-        <nav style={nav}>
-          <Link href="/mall/admin" style={isActive("/mall/admin") ? linkStrong : link}>
+        <nav style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
+          <Link href="/mall/admin" className={tabClass("/mall/admin")}>
             대시보드
           </Link>
-          <Link
-            href="/mall/admin/products"
-            style={isActive("/mall/admin/products") ? linkStrong : link}
-          >
+
+          <Link href="/mall/admin/products" className={tabClass("/mall/admin/products")}>
             상품관리
           </Link>
-          <Link
-            href="/mall/admin/orders"
-            style={isActive("/mall/admin/orders") ? linkStrong : link}
-          >
+
+          <Link href="/mall/admin/orders" className={tabClass("/mall/admin/orders")}>
             주문관리
           </Link>
 
-          <Link href="/mall" style={linkGhost}>
+          {/* 고객화면/로그아웃은 버튼 톤 통일 */}
+          <Link href="/mall" className="wmsBtn">
             고객화면
           </Link>
 
-          <button type="button" onClick={onLogout} style={btnGhost}>
+          <button type="button" onClick={onLogout} className="wmsBtn wmsBtn--ghost">
             로그아웃
           </button>
         </nav>
@@ -59,98 +60,3 @@ export default function AdminNav() {
     </header>
   );
 }
-
-/* ---------- styles ---------- */
-
-const wrap: React.CSSProperties = {
-  position: "sticky",
-  top: 0,
-  zIndex: 50,
-  background: "rgba(255,255,255,0.70)",
-  backdropFilter: "blur(10px)",
-  borderBottom: "1px solid rgba(0,0,0,0.08)",
-};
-
-const inner: React.CSSProperties = {
-  maxWidth: 1120,
-  margin: "0 auto",
-  padding: "10px 14px",
-  display: "flex",
-  alignItems: "center",
-  justifyContent: "space-between",
-  gap: 12,
-};
-
-const left: React.CSSProperties = {
-  display: "flex",
-  alignItems: "center",
-  gap: 10,
-  flexWrap: "wrap",
-};
-
-const brand: React.CSSProperties = {
-  textDecoration: "none",
-  fontWeight: 950,
-  letterSpacing: -0.6,
-  color: "rgba(2,6,23,0.92)",
-  fontSize: 16,
-};
-
-const brandAccent: React.CSSProperties = {
-  background: "linear-gradient(90deg, rgba(99,102,241,1), rgba(16,185,129,1))",
-  WebkitBackgroundClip: "text",
-  backgroundClip: "text",
-  color: "transparent",
-};
-
-const pill: React.CSSProperties = {
-  display: "inline-flex",
-  alignItems: "center",
-  height: 26,
-  padding: "0 10px",
-  borderRadius: 999,
-  fontSize: 12,
-  fontWeight: 900,
-  letterSpacing: 0.4,
-  color: "rgba(2,6,23,0.75)",
-  border: "1px solid rgba(0,0,0,0.10)",
-  background: "rgba(255,255,255,0.75)",
-};
-
-const nav: React.CSSProperties = {
-  display: "flex",
-  alignItems: "center",
-  gap: 8,
-  flexWrap: "wrap",
-};
-
-const linkBase: React.CSSProperties = {
-  textDecoration: "none",
-  padding: "8px 12px",
-  borderRadius: 12,
-  fontSize: 13,
-  fontWeight: 850,
-  border: "1px solid rgba(0,0,0,0.08)",
-  background: "rgba(255,255,255,0.70)",
-  color: "rgba(2,6,23,0.82)",
-};
-
-const link: React.CSSProperties = { ...linkBase };
-
-const linkStrong: React.CSSProperties = {
-  ...linkBase,
-  border: "1px solid rgba(0,0,0,0.10)",
-  background: "linear-gradient(90deg, rgba(99,102,241,0.16), rgba(16,185,129,0.14))",
-  color: "rgba(2,6,23,0.92)",
-};
-
-const linkGhost: React.CSSProperties = {
-  ...linkBase,
-  background: "rgba(2,6,23,0.04)",
-  border: "1px solid rgba(0,0,0,0.10)",
-};
-
-const btnGhost: React.CSSProperties = {
-  ...linkGhost,
-  cursor: "pointer",
-};

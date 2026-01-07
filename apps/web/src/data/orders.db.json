@@ -1,5 +1,36 @@
 [
   {
+    "id": "O-03cf8143-cfe3-490b-b590-35cf117cc4b7",
+    "createdAt": "2026-01-06T12:06:42.866Z",
+    "updatedAt": "2026-01-06T12:06:42.866Z",
+    "status": "requested",
+    "role": "customer",
+    "sessionKey": "GUEST",
+    "memo": "123",
+    "items": [
+      {
+        "productId": "8b2f0374-0e4f-4972-87ec-63a0d5a6c98a",
+        "name": "(이름없음)",
+        "qty": 1
+      }
+    ]
+  },
+  {
+    "id": "O-4163e12c-4ca6-4305-a3c8-eecee09b1dac",
+    "createdAt": "2026-01-06T11:20:08.306Z",
+    "updatedAt": "2026-01-06T11:20:08.306Z",
+    "status": "requested",
+    "role": "admin",
+    "sessionKey": "1",
+    "items": [
+      {
+        "productId": "11fa9643-255c-4076-9526-ac84565389df",
+        "name": "(이름없음)",
+        "qty": 1
+      }
+    ]
+  },
+  {
     "id": "O-eb438ebb-e5fe-4b95-9848-5994204ad099",
     "createdAt": "2025-12-28T10:04:12.415Z",
     "updatedAt": "2025-12-28T10:14:53.310Z",

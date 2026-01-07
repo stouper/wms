@@ -2,6 +2,15 @@
 export type UserRole = "admin" | "customer";
 export type Session = { role: UserRole };
 
+export const SESSION_COOKIE = "wms_session";
+export const ROLE_COOKIE = "wms_role";
+
+/** wms_session: base64(JSON) */
+export function encodeSession(session: Session): string {
+  const json = JSON.stringify(session);
+  return Buffer.from(json, "utf8").toString("base64");
+}
+
 export function parseSessionCookie(cookieValue?: string | null): Session | null {
   if (!cookieValue) return null;
   try {
@@ -12,8 +21,4 @@ export function parseSessionCookie(cookieValue?: string | null): Session | null 
   } catch {
     return null;
   }
-}
-
-export function encodeSessionCookie(session: Session) {
-  return Buffer.from(JSON.stringify(session), "utf8").toString("base64");
 }

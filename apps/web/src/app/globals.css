@@ -38,102 +38,193 @@ body {
     radial-gradient(1000px 700px at 110% 10%, rgba(86,227,159,.10), transparent 60%),
     var(--bg);
   color: var(--fg);
-  font-family: Inter, ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto, "Apple SD Gothic Neo", "Noto Sans KR", "Malgun Gothic", sans-serif;
+  font-family: Inter, system-ui, -apple-system, "Noto Sans KR", sans-serif;
   line-height: 1.6;
 }
 
-/* Fluid Typography — 폰/PC 자동 대응 */
-h1 { font-weight: 800; letter-spacing: -0.02em; font-size: clamp(30px, 5vw, 56px); margin: 0 0 12px; }
-h2 { font-weight: 700; letter-spacing: -0.01em; font-size: clamp(22px, 3.4vw, 36px); margin: 0 0 8px; }
-h3 { font-weight: 600; font-size: clamp(18px, 2.4vw, 22px); margin: 0 0 8px; }
-p  { color: var(--muted); margin: 6px 0 0; font-size: clamp(14px, 1.7vw, 16px); }
+/* Typography */
+h1 { font-weight: 800; letter-spacing: -0.02em; font-size: clamp(30px, 5vw, 52px); margin: 0 0 12px; }
+h2 { font-weight: 700; font-size: 28px; margin: 0 0 10px; }
+h3 { font-weight: 600; font-size: 18px; margin: 0 0 6px; }
+p  { color: var(--muted); margin: 6px 0 0; font-size: 15px; }
 
 /* Container */
-.container { width: min(1280px, 92%); margin: 0 auto; }
+.container { width: min(1200px, 92%); margin: 0 auto; }
 
 /* Navbar */
 .navbar {
   position: sticky; top: 0; z-index: 50;
-  backdrop-filter: saturate(160%) blur(10px);
+  backdrop-filter: blur(10px);
   background: color-mix(in srgb, var(--panel) 82%, transparent);
   border-bottom: 1px solid var(--line);
 }
 .navbar-inner {
-  height: clamp(56px, 7vw, 72px);
+  height: 64px;
   display: flex; align-items: center; justify-content: space-between;
 }
-.brand { display:flex; align-items:center; gap:12px; font-weight: 900; font-size: clamp(16px, 2.2vw, 20px); }
+.brand { display:flex; align-items:center; gap:12px; font-weight: 900; font-size: 18px; }
 .brand-badge {
-  width: clamp(26px, 3.4vw, 32px); height: clamp(26px, 3.4vw, 32px);
-  border-radius: 10px;
+  width: 28px; height: 28px;
+  border-radius: 8px;
   background: linear-gradient(135deg, var(--brand), var(--brand-2));
-  box-shadow: 0 8px 22px rgba(124,156,255,.35);
 }
-.nav-links { display:flex; gap: clamp(8px, 1.6vw, 16px); flex-wrap: wrap; }
+.nav-links { display:flex; gap: 14px; }
 .nav-links a {
-  color: var(--muted); text-decoration: none; padding: 10px 12px; border-radius: 10px;
-  font-size: clamp(13px, 1.8vw, 15px);
+  color: var(--muted);
+  padding: 8px 10px;
+  border-radius: 8px;
 }
-.nav-links a:hover { color: var(--fg); background: color-mix(in srgb, var(--line) 20%, transparent); }
+.nav-links a:hover { color: var(--fg); background: rgba(255,255,255,.06); }
 
 /* Hero */
-.hero {
-  padding: clamp(28px, 6vw, 96px) 0;
-  display: grid; gap: clamp(14px, 2.5vw, 22px);
-}
+.hero { padding: 0; }
 .hero-pane {
   background: color-mix(in srgb, var(--panel) 78%, transparent);
   border: 1px solid var(--line);
   border-radius: var(--radius);
   box-shadow: var(--shadow);
-  padding: clamp(18px, 3.6vw, 36px);
+  padding: 26px;
 }
 
 /* Buttons */
 .btn {
-  appearance: none;
   border: 1px solid var(--line);
-  background: linear-gradient(180deg, color-mix(in srgb, var(--panel) 84%, transparent), var(--panel));
+  background: var(--panel);
   color: var(--fg);
-  padding: clamp(10px, 2.4vw, 14px) clamp(12px, 3vw, 18px);
+  padding: 12px 16px;
   border-radius: 12px;
-  cursor: pointer;
-  transition: transform .05s ease, box-shadow .2s ease, background .2s ease;
-  font-size: clamp(14px, 1.9vw, 16px);
 }
-.btn:hover { transform: translateY(-1px); box-shadow: 0 10px 26px rgba(0,0,0,.20); }
 .btn-primary {
   border-color: color-mix(in srgb, var(--brand) 40%, var(--line));
-  background: linear-gradient(180deg, color-mix(in srgb, var(--brand) 26%, var(--panel)), var(--panel));
 }
 
-/* Card & Grid */
+/* Grid / Card */
+.grid {
+  display: grid;
+  gap: 14px;
+  grid-template-columns: repeat(3, 1fr);
+}
 .card {
   background: color-mix(in srgb, var(--panel) 82%, transparent);
   border: 1px solid var(--line);
   border-radius: var(--radius);
-  padding: clamp(16px, 2.6vw, 24px);
-  box-shadow: var(--shadow);
-}
-.grid {
-  display: grid; gap: clamp(12px, 2vw, 16px);
-  grid-template-columns: 1fr;
-}
-@media (min-width: 560px) { .grid { grid-template-columns: repeat(2, minmax(0,1fr)); } }
-@media (min-width: 960px) { .grid { grid-template-columns: repeat(3, minmax(0,1fr)); } }
-@media (min-width: 1280px) { .grid { grid-template-columns: repeat(4, minmax(0,1fr)); } }
-
-/* Media dummy */
-.media {
-  background: linear-gradient(135deg, color-mix(in srgb, var(--brand) 20%, var(--panel)), var(--panel));
-  border: 1px dashed color-mix(in srgb, var(--brand) 40%, var(--line));
-  border-radius: 14px;
-  aspect-ratio: 4 / 3;
+  padding: 16px;
 }
 
-/* Sections & Footer */
-.section { padding: clamp(20px, 4vw, 36px) 0; }
-.footer { border-top: 1px solid var(--line); padding: clamp(18px, 3vw, 28px) 0; color: var(--muted); font-size: clamp(12px, 1.6vw, 14px); }
+/* ===== One Screen Landing ===== */
+.oneScreen {
+  min-height: calc(100dvh - 64px);
+  display: grid;
+  align-items: center;
+}
+.oneScreenHero { padding: 0; }
+.oneScreenGrid { margin-top: 16px; }
 
-/* Links */
-a { color: inherit; text-decoration: none; }
+.cta-row {
+  display: flex;
+  gap: 12px;
+  margin-top: 18px;
+}
+
+.meta-line {
+  margin-top: 10px;
+  font-size: 12px;
+  color: var(--muted);
+}
+
+/* Bottom slim line */
+.slimLine {
+  margin-top: 14px;
+  padding-top: 10px;
+  border-top: 1px solid var(--line);
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+  font-size: 13px;
+}
+.slimTitle { font-weight: 700; }
+.slimText { color: var(--muted); }
+.slimSep { opacity: .4; }
+
+.mono {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+}
+
+/* ===== WMS Mall UI tokens ===== */
+:root {
+  --wms-primary: #4f46e5;          /* indigo-600 느낌 */
+  --wms-primary-weak: rgba(79,70,229,.12);
+  --wms-border: rgba(0,0,0,.10);
+  --wms-bg: rgba(255,255,255,.92);
+  --wms-text: rgba(0,0,0,.82);
+  --wms-muted: rgba(0,0,0,.55);
+}
+
+/* 다크 배경일 때(필요하면) */
+@media (prefers-color-scheme: dark) {
+  :root {
+    --wms-border: rgba(255,255,255,.14);
+    --wms-bg: rgba(18,18,22,.72);
+    --wms-text: rgba(255,255,255,.92);
+    --wms-muted: rgba(255,255,255,.62);
+  }
+}
+
+/* 공용 버튼 */
+.wmsBtn {
+  border: 1px solid var(--wms-border);
+  background: var(--wms-bg);
+  color: var(--wms-text);
+  padding: 10px 14px;
+  border-radius: 12px;
+  font-weight: 800;
+  text-decoration: none;
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.wmsBtn:hover {
+  filter: brightness(0.98);
+}
+
+.wmsBtn--primary {
+  border-color: color-mix(in srgb, var(--wms-primary) 45%, var(--wms-border));
+  background: var(--wms-primary);
+  color: white;
+}
+
+.wmsBtn--ghost {
+  background: transparent;
+}
+
+/* 탭(네비 버튼) 통일 */
+.wmsTab {
+  border: 1px solid var(--wms-border);
+  background: var(--wms-bg);
+  color: var(--wms-text);
+  padding: 10px 14px;
+  border-radius: 999px;
+  font-weight: 900;
+}
+
+.wmsTab:hover {
+  background: rgba(0,0,0,.03);
+}
+
+.wmsTab--active {
+  border-color: color-mix(in srgb, var(--wms-primary) 45%, var(--wms-border));
+  background: var(--wms-primary-weak);
+  color: var(--wms-primary);
+}
+
+/* “ADMIN 배지”도 톤 통일 */
+.wmsPill {
+  border: 1px solid var(--wms-border);
+  background: var(--wms-primary-weak);
+  color: var(--wms-primary);
+  padding: 6px 10px;
+  border-radius: 999px;
+  font-weight: 900;
+  font-size: 12px;
+}
