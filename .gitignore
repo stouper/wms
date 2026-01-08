@@ -19,3 +19,7 @@ apps/web/.env.local
 **/.rscinfo
 **/trace
 "@ | Set-Content -Encoding UTF8 .gitignore
+
+**/node_modules/
+**/.env
+
