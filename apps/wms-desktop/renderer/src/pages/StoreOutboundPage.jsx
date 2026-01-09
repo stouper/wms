@@ -262,6 +262,7 @@ export default function StoreOutboundPage({ pageTitle = "매장 출고", default
 
   async function loadJobsFromServer() {
     try {
+      console.log("[loadJobsFromServer] apiBase =", apiBase); // ✅ 
       const r = await fetch(`${apiBase}/jobs`);
       const data = await r.json();
 

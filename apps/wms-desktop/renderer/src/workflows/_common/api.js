@@ -1,2 +1,5 @@
-// src/workflows/_common/api.js
-export { getApiBase } from "../../lib/api";
+import { getApiBase as getLibApiBase } from "../../lib/api";
+
+export function getApiBase() {
+  return getLibApiBase();
+}

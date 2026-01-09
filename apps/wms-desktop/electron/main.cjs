@@ -13,14 +13,14 @@ const { app, BrowserWindow, ipcMain } = require("electron");
  *   "mode": "dev",
  *   "api": {
  *     "dev": "http://localhost:3000",
- *     "prod": "https://api.dheska.com"
+ *     "prod": "https://backend.dheska.com"
  *   }
  * }
  *
  * - 실행 명령은 동일 (npm run dev / npm run start)
  * - 전환은 config.json의 "mode"만 변경
  * - renderer 코드가 어디에 있든 상관없이
- *   "http://localhost:3000" 또는 "https://api.dheska.com" 으로 나가는 요청을
+ *   "http://localhost:3000" 또는 "https://backend.dheska.com" 으로 나가는 요청을
  *   config의 apiBase로 강제 치환(fetch/XHR 가로채기)
  */
 
@@ -48,7 +48,7 @@ function resolveConfig() {
     String(cfg.mode || "dev").trim().toLowerCase() === "prod" ? "prod" : "dev";
 
   const apiDev = String(cfg?.api?.dev || "http://localhost:3000").trim();
-  const apiProd = String(cfg?.api?.prod || "https://api.dheska.com").trim();
+  const apiProd = String(cfg?.api?.prod || "https://backend.dheska.com").trim();
 
   const apiBase = (mode === "prod" ? apiProd : apiDev).replace(/\/+$/, "");
 
@@ -99,7 +99,7 @@ function createWindow() {
         // 2) 기존 하드코딩 목적지들을 API로 강제 치환
         const TARGETS = [
           "http://localhost:3000",
-          "https://api.dheska.com"
+          "https://backend.dheska.com"
         ];
 
         function rewriteUrl(u) {
