@@ -1,5 +1,7 @@
+// apps/wms-desktop/renderer/src/workflows/warehouseInbound/warehouseInbound.workflow.js
 import { parseJobFileToRows } from "../_common/excel/parseStoreOutbound";
-
+import { jobsApi } from "../jobs/jobs.api";
+import { jobsFlow } from "../jobs/jobs.workflow";
 
 export async function runWarehouseInbound({ file }) {
   try {
@@ -17,27 +19,24 @@ export async function parseWarehouseInboundFromFile(file) {
   return parseJobFileToRows(buf, file.name || "");
 }
 
-const DEFAULT_RETURN_LOCATION = "RET-01";
-
+/**
+ * ✅ 창고 입고(반품) 모드
+ * - Page는 이 mode만 호출
+ * - API는 jobsFlow/jobsApi로만 접근
+ */
 export const whInboundMode = {
   key: "whInbound",
-  title: "창고 입고",
-  sheetName: "WORK",
-  defaultLocationCode: DEFAULT_RETURN_LOCATION,
+  title: "창고 입고(반품)",
+  defaultLocationCode: "RET-01",
 
-  // ❗️출고 업로드 차단 (반품/입고 전용)
   validateUpload({ jobKind }) {
-    const raw = String(jobKind ?? "").trim();
-    const norm = raw.replace(/<</g, "").trim(); // "출고<<", "반품<<" 정리
-
-    if (norm === "출고") {
-      return { ok: false, error: "출고작지는 [매장 출고] 메뉴에서 업로드하세요." };
-    }
+    // inbound는 "반품/입고" 성격이므로 널널하게 허용
+    // (필요하면 여기서 jobKind 검사 강화 가능)
     return { ok: true };
   },
 
-  // ✅ Job 생성: 입고 전용 (출고와 동일하게 makerCode/name까지 같이 보낸다)
-  async createJobsFromPreview({ apiBase, previewRows, defaultStoreCode, title, postJson, fetchJson }) {
+  async createJobsFromPreview({ previewRows, defaultStoreCode, title }) {
+    // storeCode 단위로 작지 생성
     const groups = new Map();
     for (const row of previewRows || []) {
       const store = String(row.storeCode || defaultStoreCode || "").trim();
@@ -51,140 +50,37 @@ export const whInboundMode = {
 
     const createdJobs = [];
     for (const [storeCode, rows] of entries) {
-      const job = await postJson(`${apiBase}/jobs`, { storeCode, title: title || this.title });
-      const jobId = job?.id;
+      const job = await jobsApi.create({ storeCode, title: title || this.title });
+      const jobId = job?.id || job?.job?.id;
       if (!jobId) throw new Error("jobId가 없어. /jobs 응답을 확인해줘.");
 
-      // ✅ 출고와 동일: makerCode/name 포함 + 문자열 강제
-      await postJson(`${apiBase}/jobs/${jobId}/items`, {
+      await jobsApi.addItems(jobId, {
         items: rows.map((r) => ({
           skuCode: String(r?.skuCode ?? "").trim(),
           qty: Number(r?.qty ?? 0),
-
-          // 헤더 흔들림 대비 (parse가 maker / itemName으로 줄 수도 있음)
           makerCode: String(r?.makerCode ?? r?.maker ?? "").trim(),
           name: String(r?.name ?? r?.itemName ?? "").trim(),
         })),
       });
 
-      const full = await fetchJson(`${apiBase}/jobs/${jobId}`);
-      createdJobs.push(full);
+      const full = await jobsApi.get(jobId);
+      createdJobs.push(full?.job || full);
     }
 
     return createdJobs;
   },
 
-  async scan({ apiBase, jobId, value, qty = 1, locationCode, postJson, fetchJson, confirm }) {
-    // ✅ 반품입고: locationCode는 필수(대부분 RET-01 고정)
+  /**
+   * ✅ 스캔: Page 주입 제거 버전
+   * - locationCode 없으면 막는다(입고는 위치가 중요)
+   * - 업무 처리/409/승인 흐름은 jobsFlow가 담당
+   */
+  async scan({ jobId, value, qty = 1, locationCode = "", confirm }) {
     const loc = String(locationCode || "").trim();
     if (!loc) {
-      return { ok: false, error: `반품입고는 locationCode가 필수야. (예: ${DEFAULT_RETURN_LOCATION})` };
+      return { ok: false, error: "입고는 locationCode가 필요해. (기본 RET-01)", level: "warn", resetScan: false };
     }
 
-    const nQty = Number(qty ?? 1);
-    const safeQty = Number.isFinite(nQty) && nQty > 0 ? nQty : 1;
-
-    // ✅ 경고 가드: (1) 작지 없음 (2) planned 초과 — 둘 다 "경고만" 띄우고 OK면 진행
-    try {
-      const _fetchJson =
-        fetchJson ||
-        (async (url) => {
-          const r = await fetch(url);
-          const t = await r.text();
-          let data;
-          try {
-            data = JSON.parse(t);
-          } catch {
-            data = t;
-          }
-          if (!r.ok) {
-            const msg = data?.message || data?.error || (typeof data === "string" ? data : r.statusText);
-            throw new Error(`[${r.status}] ${msg}`);
-          }
-          return data;
-        });
-
-      const full = await _fetchJson(`${apiBase}/jobs/${jobId}`);
-      const job = full?.job || full;
-      const items = Array.isArray(job?.items) ? job.items : [];
-
-      const norm = (s) => String(s || "").trim().toLowerCase();
-      const scanned = norm(value);
-
-      // ✅ 스캔값이 skuCode / makerCode / sku.sku 중 무엇이든 최대한 매칭
-      const hit =
-        items.find((it) => norm(it?.sku?.sku) === scanned) ||
-        items.find((it) => norm(it?.skuCode) === scanned) ||
-        items.find((it) => norm(it?.makerCodeSnapshot) === scanned) ||
-        items.find((it) => norm(it?.sku?.makerCode) === scanned) ||
-        null;
-
-      // (1) 작지에 없는 항목 경고 (한 번)
-      if (!hit) {
-        const ask = typeof confirm === "function" ? confirm : (m) => window.confirm(m);
-        const ok = ask(
-          `⚠️ 작지에 없는 항목입니다.\n\nvalue: ${value}\nqty: +${safeQty}\n\n그래도 입고 처리할까요?`
-        );
-        if (!ok) {
-          return {
-            ok: true,
-            cancelled: true,
-            toast: { kind: "warn", title: "취소됨", message: "작지 외 입고를 취소했어" },
-            resetScan: true,
-          };
-        }
-      }
-
-      // (2) planned 초과 경고 (한 번)
-      if (hit) {
-        const planned = Number(hit.qtyPlanned || 0);
-        const picked = Number(hit.qtyPicked || 0);
-        const nextPicked = picked + safeQty;
-
-        if (nextPicked > planned) {
-          const over = nextPicked - planned;
-          const skuLabel = hit?.sku?.sku || hit?.skuCode || hit?.makerCodeSnapshot || value;
-
-          const ask = typeof confirm === "function" ? confirm : (msg) => window.confirm(msg);
-          const ok = ask(
-            `⚠️ 계획 수량 초과 입고입니다.\n\n` +
-              `SKU: ${skuLabel}\n` +
-              `planned: ${planned}\n` +
-              `현재: ${picked}\n` +
-              `이번: +${safeQty}\n` +
-              `초과: +${over}\n\n` +
-              `그래도 계속할까요?`
-          );
-
-          if (!ok) {
-            return {
-              ok: true,
-              cancelled: true,
-              toast: { kind: "warn", title: "취소됨", message: "계획 초과 입고를 취소했어" },
-              resetScan: true,
-            };
-          }
-        }
-      }
-    } catch (e) {
-      // 조회/가드 실패해도 업무 중단 방지 (경고 못 띄워도 receive는 진행)
-      // console.warn("Inbound guard failed:", e?.message || e);
-    }
-
-    // ✅ 기존 백엔드 호출은 그대로
-    const res = await postJson(`${apiBase}/jobs/${jobId}/receive`, {
-      value,
-      qty: safeQty,
-      locationCode: loc,
-    });
-
-    return {
-      ok: true,
-      lastScan: res,
-      toast: { kind: "success", title: "반품 처리", message: `${value} +${safeQty} @${loc}` },
-      resetScan: true,
-      reloadJob: true,
-    };
+    return jobsFlow.scanInbound({ jobId, value, qty, locationCode: loc, confirm });
   },
 };
-

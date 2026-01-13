@@ -1,7 +1,7 @@
 ﻿// apps/wms-desktop/renderer/src/pages/StoreOutboundPage.jsx
 import React, { useEffect, useMemo, useRef, useState } from "react";
 import { useToasts } from "../lib/toasts.jsx";
-import { getApiBase } from "../workflows/_common/api";
+import { jobsFlow } from "../workflows/jobs/jobs.workflow";
 import { safeReadJson, safeReadLocal, safeWriteJson, safeWriteLocal } from "../lib/storage";
 import { inputStyle, primaryBtn } from "../ui/styles";
 import { Th, Td } from "../components/TableParts";
@@ -13,7 +13,6 @@ import { storeLabel } from "../workflows/_common/storeMap";
 const PAGE_KEY = "storeShip";
 
 export default function StoreOutboundPage({ pageTitle = "매장 출고", defaultStoreCode = "" }) {
-  const apiBase = getApiBase();
   const mode = storeShipMode;
 
   const { push, ToastHost } = useToasts();
@@ -22,100 +21,78 @@ export default function StoreOutboundPage({ pageTitle = "매장 출고", default
   const createdKey = `wms.jobs.created.${PAGE_KEY}`;
   const selectedKey = `wms.jobs.selected.${PAGE_KEY}`;
 
-    
   // ✅ UX: 스캔 피드백 (소리/번쩍)
-const [flashTotals, setFlashTotals] = useState(false);
-const flashTimerRef = useRef(null);
+  const [flashTotals, setFlashTotals] = useState(false);
+  const flashTimerRef = useRef(null);
 
-useEffect(() => {
-  return () => {
+  useEffect(() => {
+    return () => {
+      if (flashTimerRef.current) clearTimeout(flashTimerRef.current);
+    };
+  }, []);
+
+  function triggerTotalsFlash() {
     if (flashTimerRef.current) clearTimeout(flashTimerRef.current);
-  };
-}, []);
+    setFlashTotals(true);
+    flashTimerRef.current = setTimeout(() => setFlashTotals(false), 120);
+  }
 
-function triggerTotalsFlash() {
-  if (flashTimerRef.current) clearTimeout(flashTimerRef.current);
-  setFlashTotals(true);
-  flashTimerRef.current = setTimeout(() => setFlashTotals(false), 120);
-}
+  // ✅ 성공음: "띠↗삑" (900→1300)
+  function playScanSuccessBeep() {
+    const ctx = new (window.AudioContext || window.webkitAudioContext)();
+    const o = ctx.createOscillator();
+    o.type = "square";
+    o.connect(ctx.destination);
 
-// ✅ 성공음: "띠↗삑" (900→1300)
-function playScanSuccessBeep() {
-  const ctx = new (window.AudioContext || window.webkitAudioContext)();
-  const o = ctx.createOscillator();
+    o.frequency.setValueAtTime(900, ctx.currentTime);
+    o.frequency.setValueAtTime(1300, ctx.currentTime + 0.05);
 
-  o.type = "square";
-  o.connect(ctx.destination);
+    o.start();
+    setTimeout(() => {
+      o.stop();
+      ctx.close();
+    }, 120);
+  }
 
-  o.frequency.setValueAtTime(900, ctx.currentTime);
-  o.frequency.setValueAtTime(1300, ctx.currentTime + 0.05);
-
-  o.start();
-  setTimeout(() => {
-    o.stop();
-    ctx.close();
-  }, 120);
-}
-
-// ❌ 실패음: 저음 단발
-function playScanErrorBeep() {
-  const ctx = new (window.AudioContext || window.webkitAudioContext)();
-  const o = ctx.createOscillator();
-  const g = ctx.createGain();
-
-  o.type = "square";
-  o.frequency.value = 500;
-  g.gain.value = 0.12;
-
-  o.connect(g);
-  g.connect(ctx.destination);
-
-  o.start();
-  setTimeout(() => {
-    o.stop();
-    ctx.close();
-  }, 160);
-}
-
-// ⚠️ 경고음: 승인/오버픽/컨펌 뜰 때
-function playScanWarnBeep() {
-  const ctx = new (window.AudioContext || window.webkitAudioContext)();
-  const o = ctx.createOscillator();
-  const g = ctx.createGain();
-
-  o.type = "square";
-  o.frequency.value = 800;
-  g.gain.value = 0.1;
-
-  o.connect(g);
-  g.connect(ctx.destination);
-
-  o.start();
-  setTimeout(() => {
-    o.stop();
-    ctx.close();
-  }, 140);
-}
-
+  // ❌ 실패음: 저음 단발
   function playScanErrorBeep() {
-  const ctx = new (window.AudioContext || window.webkitAudioContext)();
-  const o = ctx.createOscillator();
-  const g = ctx.createGain();
+    const ctx = new (window.AudioContext || window.webkitAudioContext)();
+    const o = ctx.createOscillator();
+    const g = ctx.createGain();
 
-  o.type = "square";
-  o.frequency.value = 500;
-  g.gain.value = 0.12;
+    o.type = "square";
+    o.frequency.value = 500;
+    g.gain.value = 0.12;
 
-  o.connect(g);
-  g.connect(ctx.destination);
+    o.connect(g);
+    g.connect(ctx.destination);
 
-  o.start();
-  setTimeout(() => {
-    o.stop();
-    ctx.close();
-  }, 160);
-}
+    o.start();
+    setTimeout(() => {
+      o.stop();
+      ctx.close();
+    }, 160);
+  }
 
+  // ⚠️ 경고음: 승인/오버픽/컨펌 뜰 때
+  function playScanWarnBeep() {
+    const ctx = new (window.AudioContext || window.webkitAudioContext)();
+    const o = ctx.createOscillator();
+    const g = ctx.createGain();
+
+    o.type = "square";
+    o.frequency.value = 800;
+    g.gain.value = 0.1;
+
+    o.connect(g);
+    g.connect(ctx.destination);
+
+    o.start();
+    setTimeout(() => {
+      o.stop();
+      ctx.close();
+    }, 140);
+  }
 
   // ✅ 박스(팩킹리스트) 출력 관련
   const [boxNo, setBoxNo] = useState(1);
@@ -144,122 +121,36 @@ function playScanWarnBeep() {
     setScanLoc((prev) => prev || "");
   }, []);
 
-  // ✅ 백엔드 응답 형태를 통일해서 "job 객체"만 뽑아내기
+  // ✅ (보수) created에 혹시 이상한 게 들어가도 job 객체만 남기기
   function unwrapJob(resp) {
     if (!resp) return null;
-    if (resp?.job && typeof resp.job === "object") return resp.job; // { ok:true, job:{...} }
-    if (resp?.id) return resp; // already job
+    if (resp?.job && typeof resp.job === "object") return resp.job;
+    if (resp?.id) return resp;
     return null;
   }
 
-  // ✅ /jobs 응답 형태: 배열 or {ok:true, rows:[...]} 모두 지원
-  function unwrapJobsList(resp) {
-    if (Array.isArray(resp)) return resp;
-    if (Array.isArray(resp?.rows)) return resp.rows;
-    if (Array.isArray(resp?.jobs)) return resp.jobs;
-    return [];
-  }
-
-  async function fetchJson(url) {
-    const r = await fetch(url);
-    const t = await r.text();
-    let data;
-    try {
-      data = JSON.parse(t);
-    } catch {
-      data = t;
-    }
-    if (!r.ok) {
-      const msg = data?.message || data?.error || (typeof data === "string" ? data : r.statusText);
-      throw new Error(`[${r.status}] ${msg}`);
-    }
-    return data;
-  }
-
-  async function postJson(url, body) {
-    const r = await fetch(url, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(body || {}),
-    });
-    const t = await r.text();
-    let data;
-    try {
-      data = JSON.parse(t);
-    } catch {
-      data = t;
-    }
-    if (!r.ok) {
-      const msg = data?.message || data?.error || (typeof data === "string" ? data : r.statusText);
-      throw new Error(`[${r.status}] ${msg}`);
-    }
-    return data;
-  }
-
-  async function patchJson(url, body) {
-    const r = await fetch(url, {
-      method: "PATCH",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(body || {}),
-    });
-    const t = await r.text();
-    let data;
-    try {
-      data = JSON.parse(t);
-    } catch {
-      data = t;
-    }
-    if (!r.ok) {
-      const msg = data?.message || data?.error || (typeof data === "string" ? data : r.statusText);
-      throw new Error(`[${r.status}] ${msg}`);
-    }
-    return data;
-  }
-
-  async function deleteJob(jobId) {
-    const r = await fetch(`${apiBase}/jobs/${jobId}`, { method: "DELETE" });
-    const t = await r.text();
-    if (!r.ok) throw new Error(`[${r.status}] ${t || "delete failed"}`);
-    return true;
-  }
-
-  async function loadJob(jobId) {
-    if (!jobId) return;
-    const r = await fetch(`${apiBase}/jobs/${jobId}`);
-    const data = await r.json();
-    const jobObj = unwrapJob(data);
-    if (!jobObj) return;
-
-    setCreated((prev) =>
-      (Array.isArray(prev) ? prev : []).map((x) => {
-        const cur = unwrapJob(x) || x;
-        return cur?.id === jobId ? jobObj : cur;
-      }),
-    );
-  }
-
-  // ✅ [중요] 페이지 진입 시: DB에 있는 jobs를 불러와서 "출고"만 표시
+  // ✅ 페이지 진입 시: DB jobs 불러와서 "출고"만 표시
   async function loadJobsFromServer() {
     try {
-      const r = await fetch(`${apiBase}/jobs`);
-      const data = await r.json();
-
-      const listAll = unwrapJobsList(data)
+      const listAll = await jobsFlow.listJobs(); // 백엔드가 필터 파라미터 지원하면 여기서 넘겨도 됨
+      const normalized = (Array.isArray(listAll) ? listAll : [])
         .map((x) => unwrapJob(x) || x)
         .filter(Boolean);
 
-      const list = listAll.filter((j) => {
+      // 기존 로직 유지: title에 "출고" 포함, "입고" 제외
+      const list = normalized.filter((j) => {
         const t = j.title || "";
         return t.includes("출고") && !t.includes("입고");
       });
 
       setCreated(list);
 
-      // ✅ 선택된 Job이 없거나, 선택된 Job이 목록에서 사라졌으면 첫번째로 자동 선택
+      // 선택된 Job이 없거나, 선택된 Job이 목록에서 사라졌으면 첫번째로 자동 선택
       if (list.length) {
         const keep = selectedJobId && list.some((j) => j.id === selectedJobId);
         const nextId = keep ? selectedJobId : list[0].id;
         setSelectedJobId(nextId);
+
         // ✅ 아이템 포함 상세로 갱신
         await loadJob(nextId);
         setTimeout(() => scanRef.current?.focus?.(), 80);
@@ -269,11 +160,33 @@ function playScanWarnBeep() {
     }
   }
 
-  // ✅ 마운트 시 항상 서버 목록을 불러온다 (탭 갔다오면 다시 보이게)
+  // ✅ 마운트 시 항상 서버 목록을 불러온다
   useEffect(() => {
     loadJobsFromServer();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
+
+  async function loadJob(jobId) {
+    if (!jobId) return;
+    try {
+      const jobObj = await jobsFlow.getJob(jobId);
+      if (!jobObj) return;
+
+      setCreated((prev) =>
+        (Array.isArray(prev) ? prev : []).map((x) => {
+          const cur = unwrapJob(x) || x;
+          return cur?.id === jobId ? jobObj : cur;
+        }),
+      );
+    } catch (e) {
+      push({ kind: "error", title: "Job 상세 로드 실패", message: e?.message || String(e) });
+    }
+  }
+
+  async function deleteJob(jobId) {
+    await jobsFlow.deleteJob(jobId);
+    return true;
+  }
 
   // ✅ created 안에 혹시 응답 통째로 들어가 있어도 job 객체로 정규화
   const normalizedCreated = useMemo(() => {
@@ -301,12 +214,13 @@ function playScanWarnBeep() {
 
   async function approveExtra(jobItemId, qty = 1) {
     if (!selectedJobId) throw new Error("jobId is required");
+
     const n = Number(qty);
     if (!Number.isFinite(n) || n <= 0) throw new Error("qty must be > 0");
 
     setApprovingExtra(true);
     try {
-      await postJson(`${apiBase}/jobs/${selectedJobId}/approve-extra`, { jobItemId, qty: n });
+      await jobsFlow.approveExtra({ jobId: selectedJobId, jobItemId, qty: n });
       push({ kind: "success", title: "추가피킹 승인", message: `+${n} 승인 완료` });
       await loadJob(selectedJobId);
     } finally {
@@ -333,23 +247,19 @@ function playScanWarnBeep() {
         throw new Error("mode.scan이 없습니다. workflows/storeOutbound/storeOutbound.workflow.js 확인해줘.");
       }
 
+      // ✅ 정석: Page는 confirm(UX)만 넘기고, API/HTTP는 workflow/jobsFlow가 책임
       const result = await mode.scan({
-        apiBase,
-        pageKey: PAGE_KEY,
         jobId: selectedJobId,
         value: val,
         qty: safeQty,
         locationCode: loc,
-        postJson,
-        patchJson,
-        fetchJson,
         confirm: (msg) => {
-        playScanWarnBeep();      // ✅ 이제 에러 안 남
-        return window.confirm(msg);
-       },
+          playScanWarnBeep();
+          return window.confirm(msg);
+        },
       });
 
-       if (!result?.ok) {
+      if (!result?.ok) {
         // ❌ 실패: 저음 1회
         playScanErrorBeep();
         push({ kind: "error", title: "처리 실패", message: result?.error || "unknown error" });
@@ -610,75 +520,70 @@ function playScanWarnBeep() {
 
   return (
     <div style={{ padding: 16 }}>
-                     
       <ToastHost />
-      
 
-      {/* ✅ 상단: 파일선택/작지생성 제거 + 박스마감 유지 */}
+      {/* ✅ 상단: 업로드/작지생성은 대시보드에서 진행 + 박스마감 유지 */}
       <div style={{ display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
-  <h1 style={{ margin: 0 }}>{pageTitle || mode.title}</h1>
+        <h1 style={{ margin: 0 }}>{pageTitle || mode.title}</h1>
 
-  {/* ✅ A4 작업지시서 출력 (박스마감 옆) */}
-  <button
-    type="button"
-    style={{
-      ...primaryBtn,
-      background: "#fbfcf8ff", // ✅ 세련된 다크톤 (촌스러운 초록 제거)
-    }}
-    disabled={loading || !selectedJob || !(Array.isArray(selectedJob?.items) && selectedJob.items.length)}
-    onClick={() => {
-      const job = selectedJob;
-      const items = Array.isArray(job?.items) ? job.items : [];
+        {/* ✅ A4 작업지시서 출력 */}
+        <button
+          type="button"
+          style={{
+            ...primaryBtn,
+            background: "#fbfcf8ff",
+          }}
+          disabled={loading || !selectedJob || !(Array.isArray(selectedJob?.items) && selectedJob.items.length)}
+          onClick={() => {
+            const job = selectedJob;
+            const items = Array.isArray(job?.items) ? job.items : [];
 
-      const payload = {
-        jobTitle: job?.title || "HQ 출고 작업지시서",
-        jobId: job?.id || "",
-        storeCode: job?.storeCode || "",
-        storeName: "", // 지금 없어도 OK
-        memo: job?.memo || "",
-        createdAt: job?.createdAt || new Date().toISOString(),
-        doneAt: job?.doneAt || "",
+            const payload = {
+              jobTitle: job?.title || "HQ 출고 작업지시서",
+              jobId: job?.id || "",
+              storeCode: job?.storeCode || "",
+              storeName: "",
+              memo: job?.memo || "",
+              createdAt: job?.createdAt || new Date().toISOString(),
+              doneAt: job?.doneAt || "",
+              items: items.map((it) => ({
+                skuCode: it?.sku?.sku || it?.skuCode || "",
+                makerCode: it?.sku?.makerCode || it?.makerCodeSnapshot || "",
+                name: it?.sku?.name || it?.nameSnapshot || "",
+                qtyPlanned: Number(it?.qtyPlanned ?? 0),
+                qtyPicked: Number(it?.qtyPicked ?? 0),
+                locationCode: "",
+              })),
+            };
 
-        items: items.map((it) => ({
-          skuCode: it?.sku?.sku || it?.skuCode || "",
-          makerCode: it?.sku?.makerCode || it?.makerCodeSnapshot || "",
-          name: it?.sku?.name || it?.nameSnapshot || "",
-          qtyPlanned: Number(it?.qtyPlanned ?? 0),
-          qtyPicked: Number(it?.qtyPicked ?? 0),
-          locationCode: "", // 매장출고는 location이 job item에 없을 수 있어서 빈칸 유지
-        })),
-      };
-      
+            openJobSheetA4PrintWindow(payload);
+          }}
+        >
+          A4 작업지시서
+        </button>
 
-      openJobSheetA4PrintWindow(payload);
-    }}
-  >
-    A4 작업지시서
-  </button>
-
-  {/* ✅ 박스 마감 (색만 세련되게 변경) */}
-  <button
-    type="button"
-    style={{ ...primaryBtn, background: "#fbfcf8ff" }} // ✅ slate 톤으로 변경
-    disabled={loading || !selectedJob || boxItems.size === 0}
-    onClick={async () => {
-      const ok = await printBoxLabel({
-        job: selectedJob,
-        boxNo,
-        boxItems,
-        push,
-        sendRaw: window.wms.sendRaw,
-      });
-      if (ok) {
-        setBoxNo((n) => n + 1);
-        setBoxItems(new Map());
-      }
-    }}
-  >
-    박스 마감
-  </button>
-</div>
-
+        {/* ✅ 박스 마감 */}
+        <button
+          type="button"
+          style={{ ...primaryBtn, background: "#fbfcf8ff" }}
+          disabled={loading || !selectedJob || boxItems.size === 0}
+          onClick={async () => {
+            const ok = await printBoxLabel({
+              job: selectedJob,
+              boxNo,
+              boxItems,
+              push,
+              sendRaw: window.wms.sendRaw,
+            });
+            if (ok) {
+              setBoxNo((n) => n + 1);
+              setBoxItems(new Map());
+            }
+          }}
+        >
+          박스 마감
+        </button>
+      </div>
 
       <div style={{ fontSize: 12, color: "#64748b", marginTop: 6 }}>
         매장출고: <b>locationCode 선택</b> / 업로드·작지생성은 대시보드에서 진행

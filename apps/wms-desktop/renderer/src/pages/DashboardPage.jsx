@@ -1,14 +1,16 @@
-// apps/wms-desktop/renderer/src/pages/DashboardPage.jsx
+// renderer/src/pages/DashboardPage.jsx
 import React, { useEffect, useMemo, useState } from "react";
 import { useToasts } from "../lib/toasts.jsx";
 import { ymdKST } from "../lib/dates";
-import { getApiBase } from "../workflows/_common/api";
 import { primaryBtn, inputStyle } from "../ui/styles";
 import { holidays as fetchHolidays } from "@kyungseopk1m/holidays-kr";
 import { storeLabel } from "../workflows/_common/storeMap";
 
 // ✅ 정답지 파서(출고/반품 공용)
 import { parseJobFileToRows } from "../workflows/_common/excel/parseStoreOutbound";
+
+// ✅ 정석: Page는 workflow만 호출
+import { jobsFlow } from "../workflows/jobs/jobs.workflow";
 
 /**
  * Dashboard
@@ -45,57 +47,9 @@ export default function DashboardPage() {
 
   const selectedCount = selectedJobs.length;
 
-  function toTs(v) {
-    if (!v) return 0;
-    if (typeof v === "number") return Number.isFinite(v) ? v : 0;
-    if (v instanceof Date) {
-      const t = v.getTime();
-      return Number.isFinite(t) ? t : 0;
-    }
-    if (typeof v === "string") {
-      const s = v.trim();
-      if (!s) return 0;
-      if (/^\d+$/.test(s)) {
-        const n = Number(s);
-        return Number.isFinite(n) ? n : 0;
-      }
-      const t = Date.parse(s);
-      return Number.isFinite(t) ? t : 0;
-    }
-    return 0;
-  }
-
-  function getDoneTs(j) {
-    return (
-      toTs(j?.doneAt || j?.done_at) ||
-      toTs(j?.completedAt || j?.completed_at) ||
-      toTs(j?.updatedAt || j?.updated_at) ||
-      toTs(j?.createdAt || j?.created_at) ||
-      0
-    );
-  }
-
   async function fetchJobsForRange() {
-    const apiBase = getApiBase();
     const from = (fromYmd || "").trim();
     const to = (toYmd || "").trim();
-
-    if (!/^\d{4}-\d{2}-\d{2}$/.test(from) || !/^\d{4}-\d{2}-\d{2}$/.test(to)) {
-      push({ kind: "error", title: "날짜 형식", message: "From/To 모두 YYYY-MM-DD로 선택해줘" });
-      return;
-    }
-
-    const fromTs = new Date(from + "T00:00:00+09:00").getTime();
-    const toTs = new Date(to + "T23:59:59.999+09:00").getTime();
-
-    if (!Number.isFinite(fromTs) || !Number.isFinite(toTs)) {
-      push({ kind: "error", title: "날짜", message: "From/To 날짜가 유효하지 않아" });
-      return;
-    }
-    if (fromTs > toTs) {
-      push({ kind: "warn", title: "기간", message: "From이 To보다 클 수는 없어" });
-      return;
-    }
 
     try {
       setLoadingList(true);
@@ -103,54 +57,12 @@ export default function DashboardPage() {
       setSelectedIds(new Set());
       setJobs([]);
 
-      const url = `${apiBase}/jobs?status=done`;
-      const data = await tryJsonFetch(url);
+      const sorted = await jobsFlow.fetchDoneJobsForRange({ fromYmd: from, toYmd: to });
 
-      const all = Array.isArray(data) ? data : data?.rows || data?.jobs || data?.data || [];
-
-      const filtered = (all || [])
-        .filter((j) => {
-          const st = String(j?.status || "").toLowerCase().trim();
-          if (st && st !== "done") return false;
-
-          const t = getDoneTs(j);
-          if (!t) return false;
-
-          const ymd = ymdKST(new Date(t));
-          return ymd >= from && ymd <= to;
-        })
-        .map((j) => {
-          const t = getDoneTs(j);
-          const ymd = t ? ymdKST(new Date(t)) : "";
-          return { ...j, _exportDate: ymd };
-        });
-
-      if (filtered.length === 0) {
+      if (!sorted.length) {
         push({ kind: "warn", title: "조회 결과 없음", message: `${from} ~ ${to} 완료된 작지가 없어` });
         return;
       }
-
-      const uniq = new Map();
-      for (const j of filtered) {
-        if (!j?.id) continue;
-        if (!uniq.has(j.id)) uniq.set(j.id, j);
-      }
-
-      const sorted = [...uniq.values()].sort((a, b) => {
-        const ad = String(a?._exportDate || "").localeCompare(String(b?._exportDate || ""));
-        if (ad !== 0) return ad;
-
-        const as = String(a?.storeCode || a?.store_code || "").localeCompare(
-          String(b?.storeCode || b?.store_code || "")
-        );
-        if (as !== 0) return as;
-
-        const at = getDoneTs(a);
-        const bt = getDoneTs(b);
-        if (at !== bt) return bt - at;
-
-        return String(a?.id || "").localeCompare(String(b?.id || ""));
-      });
 
       setJobs(sorted);
       push({ kind: "success", title: "조회 완료", message: `${from} ~ ${to} 작업 ${sorted.length}건` });
@@ -217,13 +129,46 @@ export default function DashboardPage() {
   const [parsedInfo, setParsedInfo] = useState(null); // { ok, jobKind, mixedKinds, sheetName, rows, sample, ... }
   const [loadingCreate, setLoadingCreate] = useState(false);
 
+  // ✅ kind 정규화: "출고/반품" + "outbound/inbound" + "입고/반품입고" 등 흡수
+  function normalizeKind(v) {
+    const raw = String(v || "").trim().toLowerCase();
+
+    if (!raw) return "";
+
+    // outbound 계열
+    if (
+      raw === "출고" ||
+      raw === "out" ||
+      raw === "outbound" ||
+      raw.includes("outbound") ||
+      raw.includes("출고")
+    ) {
+      return "출고";
+    }
+
+    // inbound/returns 계열 (현재 Dashboard 분기에서는 "반품"을 inbound 쪽으로 사용)
+    if (
+      raw === "반품" ||
+      raw === "입고" ||
+      raw === "in" ||
+      raw === "inbound" ||
+      raw.includes("inbound") ||
+      raw.includes("반품") ||
+      raw.includes("입고")
+    ) {
+      return "반품";
+    }
+
+    return String(v || "").trim(); // 알 수 없는 값은 원형 보존
+  }
+
   const jobRows = useMemo(() => (parsedInfo?.rows || []).filter(Boolean), [parsedInfo]);
   const jobSample = useMemo(() => (parsedInfo?.sample || []).filter(Boolean), [parsedInfo]);
 
   const jobGroups = useMemo(() => {
     const map = new Map();
     for (const r of jobRows) {
-      const kind = String(r?.jobKind || "").trim(); // "출고" | "반품" | ""
+      const kind = normalizeKind(r?.jobKind); // ✅ 정규화
       const storeCode = String(r?.storeCode || "").trim();
       const skuCode = String(r?.skuCode || "").trim();
       const qty = Number(r?.qty ?? 0);
@@ -253,7 +198,6 @@ export default function DashboardPage() {
       const buf = await file.arrayBuffer();
       const parsed = parseJobFileToRows(buf, file.name);
 
-      // parsed = { ok, sheetName, jobKind, mixedKinds, rows, sample, ... }
       setParsedInfo(parsed || null);
 
       const rowsLen = (parsed?.rows || []).length;
@@ -270,60 +214,21 @@ export default function DashboardPage() {
     }
   }
 
-  // ✅ 그룹화 + 의뢰번호(reqNo) 수집 (그룹당 1개로 확정될 때만)
-  function toPlanGroupsFromParsedRows(rows) {
-    const map = new Map();
-
-    for (const r of rows || []) {
-      const jobKind = String(r?.jobKind || "").trim(); // "출고"|"반품"
-      const storeCode = String(r?.storeCode || "").trim();
-      const storeName = String(r?.storeName || "").trim();
-      const skuCode = String(r?.skuCode || "").trim();
-      const qty = Number(r?.qty ?? 0);
-
-      if (!storeCode || !skuCode || !Number.isFinite(qty) || qty <= 0) continue;
-      if (jobKind !== "출고" && jobKind !== "반품") continue;
-
-      const makerCode = String(r?.makerCode || r?.maker || "").trim();
-      const name = String(r?.name || r?.itemName || r?.productName || "").trim();
-
-      // ✅ B열 의뢰번호 (파서가 어떤 키로 주든 최대한 수용)
-      const reqNo = String(r?.reqNo ?? r?.requestNo ?? r?.orderNo ?? r?.requestNoB ?? "").trim();
-
-      const key = `${jobKind}__${storeCode}`;
-      if (!map.has(key)) map.set(key, { jobKind, storeCode, storeName, items: [], reqNoSet: new Set() });
-
-      const g = map.get(key);
-      g.items.push({ skuCode, qty, makerCode, name });
-      if (reqNo) g.reqNoSet.add(reqNo);
-    }
-
-    return [...map.values()].map((g) => {
-      const reqNos = [...(g.reqNoSet || [])];
-      const reqNoOne = reqNos.length === 1 ? reqNos[0] : ""; // 여러 개면 안전하게 비움
-      return { jobKind: g.jobKind, storeCode: g.storeCode, storeName: g.storeName, items: g.items, reqNo: reqNoOne };
-    });
-  }
-
-  function jobKindToApiKind(jobKind) {
-    if (jobKind === "출고") return "outbound";
-    if (jobKind === "반품") return "inbound";
-    return null;
-  }
-
   async function createJobsFromParsed() {
-    const apiBase = getApiBase();
-
     if (!jobRows.length) {
       push({ kind: "warn", title: "작지 생성", message: "먼저 엑셀을 선택해줘" });
       return;
     }
 
     if (!jobGroups.length) {
+      // ✅ 여기서 “kind 값이 달라서” 그룹이 0이 되는 케이스를 좀 더 친절하게 안내
+      const sampleKind = String(jobRows?.[0]?.jobKind || "");
       push({
         kind: "error",
         title: "작지 생성 불가",
-        message: "출고/반품 구분 또는 storeCode/sku/qty 파싱이 안 됐어. 엑셀 헤더를 확인해줘.",
+        message:
+          "출고/반품 구분 또는 storeCode/sku/qty 파싱이 안 됐어. 엑셀 헤더/값을 확인해줘.\n" +
+          `- 예시 jobKind: "${sampleKind}" (Dashboard는 출고/반품(or outbound/inbound)을 기대)`,
       });
       return;
     }
@@ -337,45 +242,18 @@ export default function DashboardPage() {
     try {
       setLoadingCreate(true);
 
-      const plans = toPlanGroupsFromParsedRows(jobRows);
-      if (!plans.length) throw new Error("생성할 아이템이 없어 (storeCode/sku/qty 파싱 실패)");
+      // ✅ workflow로 넘길 때도 kind를 정규화해서 “inbound/outbound” 섞여도 통일
+      const normalizedRows = (jobRows || []).map((r) => ({
+        ...r,
+        jobKind: normalizeKind(r?.jobKind),
+      }));
 
-      let createdCount = 0;
+      const res = await jobsFlow.createJobsFromParsedRows({
+        jobRows: normalizedRows,
+        jobFileName,
+      });
 
-      for (const plan of plans) {
-        const apiKind = jobKindToApiKind(plan.jobKind);
-        if (!apiKind) continue;
-
-        const who = String(plan.storeName || plan.storeCode || "").trim();
-        const title =
-        apiKind === "outbound"
-        ? `[OUT] ${who} 출고`
-        : `[IN] ${who} 반품 입고`;
-
-        // ✅ memo에 reqNo(의뢰번호)까지 저장
-        const memoParts = [`excel=${jobFileName}`, `kind=${apiKind}`];
-        if (plan.reqNo) memoParts.push(`reqNo=${plan.reqNo}`);
-        if (plan.storeName) memoParts.push(`storeName=${plan.storeName}`);
-
-        // 1) Job 생성
-        const jobResp = await tryJsonFetchWithBody(`${apiBase}/jobs`, "POST", {
-          storeCode: plan.storeCode,
-          title,
-          memo: memoParts.join("; "),
-        });
-
-        const jobId = jobResp?.id || jobResp?.job?.id;
-        if (!jobId) throw new Error("Job 생성 응답에서 jobId를 못 찾았어");
-
-        // 2) items 추가
-        await tryJsonFetchWithBody(`${apiBase}/jobs/${jobId}/items`, "POST", {
-          items: plan.items,
-        });
-
-        createdCount += 1;
-      }
-
-      push({ kind: "success", title: "작지 생성 완료", message: `${createdCount}개 생성됨` });
+      push({ kind: "success", title: "작지 생성 완료", message: `${res.createdCount}개 생성됨` });
 
       setJobFileName("");
       setParsedInfo(null);
@@ -815,12 +693,7 @@ export default function DashboardPage() {
                             onClick={() => setActiveJobId(id)}
                             title="클릭하면 상세"
                           >
-                            <input
-                              type="checkbox"
-                              checked={checked}
-                              onChange={() => toggleSelectJob(id)}
-                              onClick={(e) => e.stopPropagation()}
-                            />
+                            <input type="checkbox" checked={checked} onChange={() => toggleSelectJob(id)} onClick={(e) => e.stopPropagation()} />
                             <div style={{ display: "grid", gap: 2 }}>
                               <div style={{ fontWeight: 900, fontSize: 14 }}>
                                 {storeLabel(storeCode)}{" "}
@@ -838,9 +711,7 @@ export default function DashboardPage() {
                 </div>
 
                 <div style={{ border: "1px solid #e5e7eb", borderRadius: 12, overflow: "hidden" }}>
-                  <div style={{ padding: 10, borderBottom: "1px solid #e5e7eb", background: "#f8fafc", fontWeight: 900 }}>
-                    상세
-                  </div>
+                  <div style={{ padding: 10, borderBottom: "1px solid #e5e7eb", background: "#f8fafc", fontWeight: 900 }}>상세</div>
 
                   {!activeJob ? (
                     <div style={{ padding: 12, fontSize: 12, color: "#94a3b8" }}>목록에서 작업 클릭</div>
@@ -851,8 +722,7 @@ export default function DashboardPage() {
                       </div>
 
                       <div style={{ fontSize: 12, color: "#64748b", marginBottom: 10 }}>
-                        items: {(activeJob?.items || []).length} · picked {sumPicked(activeJob?.items || [])} / planned{" "}
-                        {sumPlanned(activeJob?.items || [])}
+                        items: {(activeJob?.items || []).length} · picked {sumPicked(activeJob?.items || [])} / planned {sumPlanned(activeJob?.items || [])}
                       </div>
 
                       <div style={{ maxHeight: 200, overflow: "auto", display: "grid", gap: 8 }}>
@@ -861,12 +731,7 @@ export default function DashboardPage() {
                         ) : (
                           (activeJob?.items || []).slice(0, 20).map((it, idx) => {
                             const maker =
-                              it?.makerCodeSnapshot ||
-                              it?.makerCode ||
-                              it?.maker_code ||
-                              it?.sku?.makerCode ||
-                              it?.sku?.maker_code ||
-                              "-";
+                              it?.makerCodeSnapshot || it?.makerCode || it?.maker_code || it?.sku?.makerCode || it?.sku?.maker_code || "-";
 
                             const name = it?.nameSnapshot || it?.name || it?.sku?.name || "-";
 
@@ -908,7 +773,7 @@ export default function DashboardPage() {
         </div>
       </div>
 
-      {/* ✅ 작지 생성: EPMS Export처럼 "가로로 쭉" */}
+      {/* ✅ 작지 생성 */}
       <div style={{ border: "1px solid #e5e7eb", borderRadius: 12, overflow: "hidden", background: "#fff" }}>
         {/* 상단 컨트롤 바(가로) */}
         <div style={{ padding: 10, borderBottom: "1px solid #e5e7eb", background: "#f8fafc" }}>
@@ -955,9 +820,8 @@ export default function DashboardPage() {
           </div>
 
           <div style={{ marginTop: 6, fontSize: 12, color: "#64748b", lineHeight: 1.5 }}>
-            - 분기: <b>헤더 기반</b>(출고/반품) → row.jobKind로 판별
-            <br />
-            - 파일: <b>{jobFileName || "선택 안됨"}</b>{" "}
+            - 분기: <b>헤더 기반</b>(출고/반품) → row.jobKind로 판별 (outbound/inbound도 자동 인식)
+            <br />- 파일: <b>{jobFileName || "선택 안됨"}</b>{" "}
             {parsedInfo?.mixedKinds ? <span style={{ color: "#c2410c", fontWeight: 900 }}> (출고+반품 혼합)</span> : null}
           </div>
         </div>
@@ -1014,16 +878,12 @@ export default function DashboardPage() {
                   <tbody>
                     {jobSample.map((r, i) => (
                       <tr key={i}>
-                        <td style={{ padding: 8, borderBottom: "1px solid #f1f5f9", fontWeight: 900 }}>
-                          {String(r?.jobKind || "")}
-                        </td>
+                        <td style={{ padding: 8, borderBottom: "1px solid #f1f5f9", fontWeight: 900 }}>{normalizeKind(r?.jobKind) || ""}</td>
                         <td style={{ padding: 8, borderBottom: "1px solid #f1f5f9" }}>{String(r?.storeCode || "")}</td>
                         <td style={{ padding: 8, borderBottom: "1px solid #f1f5f9", fontFamily: "Consolas, monospace" }}>
                           {String(r?.skuCode || "")}
                         </td>
-                        <td style={{ padding: 8, borderBottom: "1px solid #f1f5f9", textAlign: "right" }}>
-                          {Number(r?.qty ?? 0) || 0}
-                        </td>
+                        <td style={{ padding: 8, borderBottom: "1px solid #f1f5f9", textAlign: "right" }}>{Number(r?.qty ?? 0) || 0}</td>
                       </tr>
                     ))}
                   </tbody>
@@ -1097,12 +957,7 @@ function buildEpmsOutCsvWithHeader({ jobs, workDateYmd }) {
 
     for (const it of items) {
       const maker = String(
-        it?.makerCodeSnapshot ||
-          it?.makerCode ||
-          it?.maker_code ||
-          it?.sku?.makerCode ||
-          it?.sku?.maker_code ||
-          ""
+        it?.makerCodeSnapshot || it?.makerCode || it?.maker_code || it?.sku?.makerCode || it?.sku?.maker_code || ""
       ).trim();
 
       const qtyPicked = Number(it?.qtyPicked ?? it?.qty_picked ?? 0);
@@ -1136,42 +991,6 @@ function buildEpmsOutCsvWithHeader({ jobs, workDateYmd }) {
     .join("\n");
 
   return "\uFEFF" + csv;
-}
-
-async function tryJsonFetch(url) {
-  const r = await fetch(url);
-  const t = await r.text().catch(() => "");
-  let data = null;
-  try {
-    data = t ? JSON.parse(t) : null;
-  } catch {
-    data = t;
-  }
-  if (!r.ok) {
-    const msg = data?.message || data?.error || (typeof data === "string" ? data : r.statusText);
-    throw new Error(`[${r.status}] ${msg}`);
-  }
-  return data;
-}
-
-async function tryJsonFetchWithBody(url, method, body) {
-  const r = await fetch(url, {
-    method,
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(body ?? {}),
-  });
-  const t = await r.text().catch(() => "");
-  let data = null;
-  try {
-    data = t ? JSON.parse(t) : null;
-  } catch {
-    data = t;
-  }
-  if (!r.ok) {
-    const msg = data?.message || data?.error || (typeof data === "string" ? data : r.statusText);
-    throw new Error(`[${r.status}] ${msg}`);
-  }
-  return data;
 }
 
 function downloadTextFile(filename, text, mime) {

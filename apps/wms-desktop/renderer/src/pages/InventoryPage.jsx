@@ -1,10 +1,13 @@
+// renderer/src/pages/InventoryPage.jsx
 import React, { useEffect, useMemo, useState } from "react";
-import { getApiBase } from "../workflows/_common/api";
 import { useToasts } from "../lib/toasts.jsx";
 import { inputStyle, primaryBtn } from "../ui/styles";
 
+// ✅ 정석: Page는 workflow만 호출
+import { inventoryFlow } from "../workflows/inventory/inventory.workflow";
+import { importsFlow } from "../workflows/imports/imports.workflow";
+
 export default function InventoryPage() {
-  const apiBase = getApiBase();
   const { push, ToastHost } = useToasts();
 
   const [loading, setLoading] = useState(false);
@@ -68,19 +71,7 @@ export default function InventoryPage() {
   async function load() {
     setLoading(true);
     try {
-      // ✅ 전체 한 번에 보기(5만까지)
-      const r = await fetch(`${apiBase}/inventory/summary?limit=50000`);
-      if (!r.ok) throw new Error(`HTTP ${r.status}`);
-      const data = await r.json();
-
-      const list = Array.isArray(data)
-        ? data
-        : Array.isArray(data?.items)
-        ? data.items
-        : Array.isArray(data?.rows)
-        ? data.rows
-        : [];
-
+      const list = await inventoryFlow.loadSummary({ limit: 50000 });
       setRows(list);
     } catch (e) {
       push({ kind: "error", title: "재고 로드 실패", message: e?.message || String(e) });
@@ -98,20 +89,8 @@ export default function InventoryPage() {
 
     setUploading(true);
     try {
-      const form = new FormData();
-      form.append("file", hqFile);
+      await importsFlow.uploadHqInventory({ file: hqFile });
 
-      const r = await fetch(`${apiBase}/imports/hq-inventory`, {
-        method: "POST",
-        body: form,
-      });
-
-      if (!r.ok) {
-        const t = await r.text().catch(() => "");
-        throw new Error(`HTTP ${r.status} ${t}`);
-      }
-
-      await r.json().catch(() => null);
       push({ kind: "success", title: "업로드 완료", message: "HQ 재고 업로드 완료. 새로고침할게." });
 
       setHqFile(null);
@@ -126,7 +105,7 @@ export default function InventoryPage() {
   useEffect(() => {
     load();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [apiBase]);
+  }, []);
 
   const filtered = useMemo(() => {
     let out = rows;
@@ -283,7 +262,6 @@ export default function InventoryPage() {
             0 숨김
           </button>
 
-          {/* 셀렉트도 유지(원하면 나중에 빼자) */}
           <select
             value={sortKey}
             onChange={(e) => setSortKey(e.target.value)}
@@ -317,11 +295,6 @@ export default function InventoryPage() {
         <div style={{ fontSize: 12, color: "#64748b" }}>
           rows: <b>{filtered.length.toLocaleString()}</b>
         </div>
-      </div>
-
-      {/* API info */}
-      <div style={{ fontSize: 12, color: "#94a3b8" }}>
-        API: <b>{apiBase}</b>
       </div>
 
       {/* HQ 업로드 */}
