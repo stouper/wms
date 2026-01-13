@@ -1,56 +1,87 @@
-﻿// apps/wms-desktop/electron/main.cjs
+﻿﻿// apps/wms-desktop/electron/main.cjs
 const path = require("path");
-const os = require("os");
 const fs = require("fs");
-const { execFile } = require("child_process");
-const { app, BrowserWindow, ipcMain } = require("electron");
+const { app, BrowserWindow } = require("electron");
+
+/**
+ * ✅ config.json 기반 dev/prod API 스위치
+ * - apps/wms-desktop/config.json
+ * - renderer에 window.__APP_CONFIG__로 주입 (preload 없이도 주입 가능)
+ *
+ * ✅ 이 프로젝트는 renderer/dist가 아니라 renderer/index.html이 엔트리다.
+ * 따라서 win.loadFile("../renderer/index.html") 이 정답.
+ */
+
+function readJsonSafe(p) {
+  try {
+    if (!fs.existsSync(p)) return null;
+    return JSON.parse(fs.readFileSync(p, "utf-8"));
+  } catch (e) {
+    console.error("[config] failed to read:", p, e);
+    return null;
+  }
+}
+
+function getAppConfig() {
+  const configPath = path.join(__dirname, "..", "config.json");
+  const cfg = readJsonSafe(configPath);
+
+  const fallback = {
+    mode: "dev",
+    api: {
+      dev: "http://localhost:3000",
+      prod: "https://backend.dheska.com",
+    },
+  };
+
+  if (!cfg || typeof cfg !== "object") return fallback;
+
+  const merged = {
+    ...fallback,
+    ...cfg,
+    api: { ...fallback.api, ...(cfg.api || {}) },
+  };
+  merged.mode = merged.mode === "prod" ? "prod" : "dev";
+  return merged;
+}
 
 function createWindow() {
   const win = new BrowserWindow({
-    width: 1200,
+    width: 1280,
     height: 800,
     webPreferences: {
+      // 기존 프로젝트 설정 유지 (preload 있으면 그대로)
       preload: path.join(__dirname, "preload.cjs"),
       contextIsolation: true,
       nodeIntegration: false,
     },
   });
 
-  // ✅ 최소 안전 로딩: renderer/index.html
-  win.loadFile(path.join(__dirname, "../renderer/index.html"));
-}
+  // ✅ 여기! renderer/index.html이 실제 엔트리
+  const indexHtml = path.join(__dirname, "..", "renderer", "index.html");
+  if (!fs.existsSync(indexHtml)) {
+    console.error("[renderer] index.html not found:", indexHtml);
+  }
+  win.loadFile(indexHtml);
 
-  ipcMain.handle("print:sendRaw", async (_e, { target, raw }) => {
-  if (!target) throw new Error("print:sendRaw target is required");
-  if (typeof raw !== "string" || raw.length <= 0) throw new Error("print:sendRaw raw is required");
-
-  return await new Promise((resolve, reject) => {
-    const tmp = path.join(os.tmpdir(), `raw_${Date.now()}.txt`);
-
+  // ✅ renderer에 config 주입
+  const appConfig = getAppConfig();
+  win.webContents.on("did-finish-load", async () => {
     try {
-      // ✅ TSPL/ZPL은 보통 ASCII 계열이 더 안전 (UTF-8 BOM/멀티바이트 피하기)
-      fs.writeFileSync(tmp, raw, "ascii");
+      const js = `window.__APP_CONFIG__ = ${JSON.stringify(appConfig)};`;
+      await win.webContents.executeJavaScript(js, true);
+      console.log("[config] injected:", appConfig);
     } catch (e) {
-      return reject(e);
+      console.error("[config] inject failed:", e);
     }
-
-    // ✅ copy /b 대신 print /D 사용 (스풀러 경유)
-    // 예: print /D:\\localhost\XPDT108B C:\temp\raw.txt
-    execFile(
-      "cmd.exe",
-      ["/c", "print", `/D:${target}`, tmp],
-      { windowsHide: true },
-      (err, stdout, stderr) => {
-        try { fs.unlinkSync(tmp); } catch {}
-        if (err) return reject(new Error((stderr || stdout || err.message || "print failed").toString()));
-        resolve({ ok: true });
-      }
-    );
   });
-});
+
+  // win.webContents.openDevTools({ mode: "detach" });
+}
 
 app.whenReady().then(() => {
   createWindow();
+
   app.on("activate", () => {
     if (BrowserWindow.getAllWindows().length === 0) createWindow();
   });

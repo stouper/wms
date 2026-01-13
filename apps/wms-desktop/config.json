@@ -1,0 +1,7 @@
+{
+  "mode": "dev",
+  "api": {
+    "dev": "http://localhost:3000",
+    "prod": "https://backend.dheska.com"
+  }
+}
