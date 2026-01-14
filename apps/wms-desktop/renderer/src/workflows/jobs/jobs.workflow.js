@@ -1,5 +1,6 @@
 // renderer/src/workflows/jobs/jobs.workflow.js
 import { jobsApi } from "./jobs.api";
+import { ymdKST } from "../../lib/dates";
 
 /** ===== 공통 유틸 ===== */
 function unwrapJob(full) {
@@ -44,6 +45,12 @@ function ymdToNum(ymd) {
   return Number(s.replaceAll("-", ""));
 }
 
+/**
+ * ✅ job에서 출고/완료일(ymd) 뽑기
+ * - 기존: exportDate / doneYmd / workDate 등 (이미 YYYY-MM-DD 또는 YYYYMMDD)
+ * - 추가: doneAt / completedAt / finishedAt 같은 ISO DateTime도 지원
+ * - 최종: KST 기준 YYYY-MM-DD로 통일(ymdKST)
+ */
 function pickYmdFromJob(job) {
   const v =
     job?._exportDate ||
@@ -52,10 +59,38 @@ function pickYmdFromJob(job) {
     job?.doneYmd ||
     job?.workDate ||
     job?.ymd ||
+    job?.doneAt ||
+    job?.completedAt ||
+    job?.finishedAt ||
     "";
+
+  // Date 객체면 바로 KST ymd
+  if (v instanceof Date) {
+    try {
+      return ymdKST(v);
+    } catch {
+      return "";
+    }
+  }
+
   const s = String(v || "").trim();
+  if (!s) return "";
+
+  // 1) YYYY-MM-DD
   if (/^\d{4}-\d{2}-\d{2}$/.test(s)) return s;
+
+  // 2) YYYYMMDD
   if (/^\d{8}$/.test(s)) return `${s.slice(0, 4)}-${s.slice(4, 6)}-${s.slice(6, 8)}`;
+
+  // 3) ISO / datetime / 기타 parse 가능 값 → ymdKST로 KST 기준 날짜 뽑기
+  //    (예: 2026-01-15T01:23:45.000Z, 2026-01-15 10:20:30 등)
+  try {
+    const dt = new Date(s);
+    if (!Number.isNaN(dt.getTime())) return ymdKST(dt);
+  } catch {
+    // ignore
+  }
+
   return "";
 }
 
@@ -123,6 +158,7 @@ export const jobsFlow = {
       throw new Error("기간 형식이 이상해. YYYY-MM-DD 형태로 넣어줘");
     }
 
+    // 백엔드에 range 전용 API가 있으면 우선 사용
     if (typeof jobsApi.listDoneRange === "function") {
       const data = await jobsApi.listDoneRange({ fromYmd, toYmd });
       const rows = Array.isArray(data) ? data : data?.rows || [];
@@ -136,18 +172,16 @@ export const jobsFlow = {
         });
     }
 
+    // fallback: 전체 목록 받아서 프론트에서 필터
     const all = await jobsFlow.listJobs();
 
     const done = (all || [])
       .map(unwrapJob)
       .filter((j) => {
         const status = String(j?.status || j?.state || "").toUpperCase();
-        const isDone =
-          status === "DONE" ||
-          status === "COMPLETED" ||
-          status === "FINISHED" ||
-          String(j?.doneAt || j?.completedAt || j?.finishedAt || "").trim().length > 0;
+        const hasDoneAt = String(j?.doneAt || j?.completedAt || j?.finishedAt || "").trim().length > 0;
 
+        const isDone = status === "DONE" || status === "COMPLETED" || status === "FINISHED" || hasDoneAt;
         if (!isDone) return false;
 
         const ymd = pickYmdFromJob(j);

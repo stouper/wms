@@ -52,61 +52,111 @@ export default function WarehouseInboundPage({ pageTitle = "창고 입고(반품
     flashTimerRef.current = setTimeout(() => setFlashTotals(false), 120);
   }
 
+  /**
+   * ✅ 비프 안정화 핵심
+   * - AudioContext를 매번 만들지 말고 1개를 재사용
+   * - suspended 상태면 resume
+   * - 처음 1회 워밍업(무음 ping)으로 첫 삑 실패 방지
+   */
+  const audioCtxRef = useRef(null);
+  const audioReadyRef = useRef(false);
+
+  function getAudioCtx() {
+    const Ctx = window.AudioContext || window.webkitAudioContext;
+    if (!Ctx) return null;
+    if (!audioCtxRef.current) audioCtxRef.current = new Ctx();
+    return audioCtxRef.current;
+  }
+
+  async function ensureAudioReady() {
+    const ctx = getAudioCtx();
+    if (!ctx) return false;
+
+    try {
+      if (ctx.state === "suspended") await ctx.resume();
+      audioReadyRef.current = ctx.state === "running";
+      return audioReadyRef.current;
+    } catch {
+      return false;
+    }
+  }
+
+  async function warmUpAudioOnce() {
+    if (audioReadyRef.current) return;
+    const ok = await ensureAudioReady();
+    if (!ok) return;
+
+    const ctx = audioCtxRef.current;
+    try {
+      const o = ctx.createOscillator();
+      const g = ctx.createGain();
+      g.gain.value = 0.0001; // 거의 무음
+      o.type = "sine";
+      o.frequency.value = 440;
+      o.connect(g);
+      g.connect(ctx.destination);
+      o.start();
+      setTimeout(() => {
+        try {
+          o.stop();
+        } catch {}
+      }, 30);
+    } catch {
+      // ignore
+    }
+  }
+
+  function safeBeep({ startHz, endHz, ms = 120, gain = 0.12, type = "square" }) {
+    const ctx = getAudioCtx();
+    if (!ctx) return;
+
+    ensureAudioReady().then((ok) => {
+      if (!ok) return;
+
+      try {
+        const o = ctx.createOscillator();
+        const g = ctx.createGain();
+        o.type = type;
+        g.gain.value = gain;
+
+        o.connect(g);
+        g.connect(ctx.destination);
+
+        const t0 = ctx.currentTime;
+        o.frequency.setValueAtTime(startHz, t0);
+        if (typeof endHz === "number") {
+          o.frequency.setValueAtTime(endHz, t0 + 0.05);
+        }
+
+        o.start();
+        setTimeout(() => {
+          try {
+            o.stop();
+          } catch {}
+          try {
+            o.disconnect();
+            g.disconnect();
+          } catch {}
+        }, ms);
+      } catch {
+        // ignore
+      }
+    });
+  }
+
   // ✅ 성공음
   function playScanSuccessBeep() {
-    const ctx = new (window.AudioContext || window.webkitAudioContext)();
-    const o = ctx.createOscillator();
-    o.type = "square";
-    o.connect(ctx.destination);
-
-    o.frequency.setValueAtTime(900, ctx.currentTime);
-    o.frequency.setValueAtTime(1300, ctx.currentTime + 0.05);
-
-    o.start();
-    setTimeout(() => {
-      o.stop();
-      ctx.close();
-    }, 120);
+    safeBeep({ startHz: 900, endHz: 1300, ms: 120, gain: 0.10, type: "square" });
   }
 
   // ❌ 실패음
   function playScanErrorBeep() {
-    const ctx = new (window.AudioContext || window.webkitAudioContext)();
-    const o = ctx.createOscillator();
-    const g = ctx.createGain();
-
-    o.type = "square";
-    o.frequency.value = 500;
-    g.gain.value = 0.12;
-
-    o.connect(g);
-    g.connect(ctx.destination);
-
-    o.start();
-    setTimeout(() => {
-      o.stop();
-      ctx.close();
-    }, 160);
+    safeBeep({ startHz: 500, endHz: null, ms: 160, gain: 0.12, type: "square" });
   }
 
   // ⚠️ 경고음
   function playScanWarnBeep() {
-    const ctx = new (window.AudioContext || window.webkitAudioContext)();
-    const o = ctx.createOscillator();
-    const g = ctx.createGain();
-
-    o.type = "square";
-    o.frequency.value = 800;
-    g.gain.value = 0.1;
-
-    o.connect(g);
-    g.connect(ctx.destination);
-
-    o.start();
-    setTimeout(() => {
-      o.stop();
-      ctx.close();
-    }, 140);
+    safeBeep({ startHz: 800, endHz: null, ms: 140, gain: 0.10, type: "square" });
   }
 
   function unwrapJob(resp) {
@@ -119,9 +169,7 @@ export default function WarehouseInboundPage({ pageTitle = "창고 입고(반품
   async function loadJobsFromServer() {
     try {
       const listAll = await jobsFlow.listJobs();
-      const normalized = (Array.isArray(listAll) ? listAll : [])
-        .map((x) => unwrapJob(x) || x)
-        .filter(Boolean);
+      const normalized = (Array.isArray(listAll) ? listAll : []).map((x) => unwrapJob(x) || x).filter(Boolean);
 
       // ✅ 창고입고(반품): "입고" 또는 "반품"만
       const list = normalized.filter((j) => {
@@ -210,7 +258,11 @@ export default function WarehouseInboundPage({ pageTitle = "창고 입고(반품
   }
 
   async function doScan() {
+    // ✅ 사용자 제스처 시점: 오디오 워밍업(처음 1번만)
+    warmUpAudioOnce();
+
     if (!selectedJobId) {
+      playScanWarnBeep();
       push({ kind: "warn", title: "Job 선택", message: "먼저 Job을 선택해줘" });
       return;
     }
@@ -258,6 +310,8 @@ export default function WarehouseInboundPage({ pageTitle = "창고 입고(반품
       }
       if (result.reloadJob) await loadJob(selectedJobId);
     } catch (e) {
+      // ✅ 예외도 실패음
+      playScanErrorBeep();
       push({ kind: "error", title: "처리 실패", message: e?.message || String(e) });
     } finally {
       setLoading(false);
@@ -348,6 +402,7 @@ export default function WarehouseInboundPage({ pageTitle = "창고 입고(반품
                 <button
                   type="button"
                   onClick={async () => {
+                    warmUpAudioOnce();
                     setSelectedJobId(j.id);
                     await loadJob(j.id);
                     setTimeout(() => scanRef.current?.focus?.(), 50);
@@ -366,6 +421,9 @@ export default function WarehouseInboundPage({ pageTitle = "창고 입고(반품
                 <button
                   type="button"
                   onClick={async () => {
+                    warmUpAudioOnce();
+                    playScanWarnBeep();
+
                     const ok = confirm("이 작지를 삭제할까?");
                     if (!ok) return;
                     try {
@@ -374,6 +432,7 @@ export default function WarehouseInboundPage({ pageTitle = "창고 입고(반품
                       await loadJobsFromServer();
                       push({ kind: "success", title: "삭제", message: "작지를 삭제했어" });
                     } catch (err) {
+                      playScanErrorBeep();
                       push({ kind: "error", title: "삭제 실패", message: err?.message || String(err) });
                     } finally {
                       setLoading(false);
@@ -447,10 +506,12 @@ export default function WarehouseInboundPage({ pageTitle = "창고 입고(반품
                               type="button"
                               disabled={approvingExtra}
                               onClick={async () => {
+                                warmUpAudioOnce();
                                 playScanWarnBeep();
                                 try {
                                   await approveExtra(it.id, 1);
                                 } catch (err) {
+                                  playScanErrorBeep();
                                   push({ kind: "error", title: "추가 입고 승인 실패", message: err?.message || String(err) });
                                 }
                               }}
@@ -491,7 +552,15 @@ export default function WarehouseInboundPage({ pageTitle = "창고 입고(반품
       <div style={{ display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
         <h1 style={{ margin: 0 }}>{pageTitle || mode.title}</h1>
 
-        <button type="button" style={{ ...primaryBtn, padding: "8px 10px" }} onClick={loadJobsFromServer} disabled={loading}>
+        <button
+          type="button"
+          style={{ ...primaryBtn, padding: "8px 10px" }}
+          onClick={() => {
+            warmUpAudioOnce();
+            loadJobsFromServer();
+          }}
+          disabled={loading}
+        >
           Job 새로고침
         </button>
       </div>
@@ -515,8 +584,12 @@ export default function WarehouseInboundPage({ pageTitle = "창고 입고(반품
               value={scanValue}
               onChange={(e) => setScanValue(e.target.value)}
               onKeyDown={(e) => {
-                if (e.key === "Enter") doScan();
+                if (e.key !== "Enter") return;
+                e.preventDefault();
+                e.stopPropagation();
+                doScan();
               }}
+              onFocus={() => warmUpAudioOnce()}
               placeholder="barcode/skuCode"
               style={{ ...inputStyle, width: 320 }}
             />
@@ -527,6 +600,7 @@ export default function WarehouseInboundPage({ pageTitle = "창고 입고(반품
               placeholder="qty"
               style={{ ...inputStyle, width: 90 }}
               inputMode="numeric"
+              onFocus={() => warmUpAudioOnce()}
             />
 
             <input
@@ -534,9 +608,15 @@ export default function WarehouseInboundPage({ pageTitle = "창고 입고(반품
               onChange={(e) => setScanLoc(e.target.value)}
               placeholder="locationCode (필수)"
               style={{ ...inputStyle, width: 180 }}
+              onFocus={() => warmUpAudioOnce()}
             />
 
-            <button type="button" style={primaryBtn} onClick={doScan} disabled={loading || !selectedJobId}>
+            <button
+              type="button"
+              style={primaryBtn}
+              onClick={doScan}
+              disabled={loading || !selectedJobId}
+            >
               입고 처리
             </button>
           </div>

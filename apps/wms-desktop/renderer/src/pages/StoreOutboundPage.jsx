@@ -37,61 +37,119 @@ export default function StoreOutboundPage({ pageTitle = "매장 출고", default
     flashTimerRef.current = setTimeout(() => setFlashTotals(false), 120);
   }
 
+  /**
+   * ✅ 비프 안정화 핵심
+   * - AudioContext를 매번 만들지 말고 1개를 재사용
+   * - user gesture 이후에는 정상적으로 재생됨(스캔 입력/버튼 클릭)
+   * - oscillator는 매번 새로 만들어 아주 짧게 재생
+   */
+  const audioCtxRef = useRef(null);
+  const audioReadyRef = useRef(false);
+
+  function getAudioCtx() {
+    const Ctx = window.AudioContext || window.webkitAudioContext;
+    if (!Ctx) return null;
+
+    if (!audioCtxRef.current) {
+      audioCtxRef.current = new Ctx();
+    }
+    return audioCtxRef.current;
+  }
+
+  async function ensureAudioReady() {
+    const ctx = getAudioCtx();
+    if (!ctx) return false;
+
+    // suspended면 resume 필요 (특히 Electron/Chrome에서 간헐적으로 suspended로 돌아갈 때 있음)
+    try {
+      if (ctx.state === "suspended") await ctx.resume();
+      audioReadyRef.current = ctx.state === "running";
+      return audioReadyRef.current;
+    } catch {
+      return false;
+    }
+  }
+
+  // 아주 짧은 “무음 ping”으로 오디오 워밍업 (처음만)
+  async function warmUpAudioOnce() {
+    if (audioReadyRef.current) return;
+    const ok = await ensureAudioReady();
+    if (!ok) return;
+
+    const ctx = audioCtxRef.current;
+    try {
+      const o = ctx.createOscillator();
+      const g = ctx.createGain();
+      g.gain.value = 0.0001; // 거의 무음
+      o.type = "sine";
+      o.frequency.value = 440;
+      o.connect(g);
+      g.connect(ctx.destination);
+      o.start();
+      setTimeout(() => {
+        try {
+          o.stop();
+        } catch {}
+      }, 30);
+    } catch {
+      // ignore
+    }
+  }
+
+  function safeBeep({ startHz, endHz, ms = 120, gain = 0.12, type = "square" }) {
+    const ctx = getAudioCtx();
+    if (!ctx) return;
+
+    // state가 suspended면 재생 시도 전에 resume
+    ensureAudioReady().then((ok) => {
+      if (!ok) return;
+
+      try {
+        const o = ctx.createOscillator();
+        const g = ctx.createGain();
+
+        o.type = type;
+        g.gain.value = gain;
+
+        o.connect(g);
+        g.connect(ctx.destination);
+
+        const t0 = ctx.currentTime;
+        o.frequency.setValueAtTime(startHz, t0);
+        if (typeof endHz === "number") {
+          // 약간의 글라이드(삑↗)
+          o.frequency.setValueAtTime(endHz, t0 + 0.05);
+        }
+
+        o.start();
+        setTimeout(() => {
+          try {
+            o.stop();
+          } catch {}
+          try {
+            o.disconnect();
+            g.disconnect();
+          } catch {}
+        }, ms);
+      } catch {
+        // ignore
+      }
+    });
+  }
+
   // ✅ 성공음: "띠↗삑" (900→1300)
   function playScanSuccessBeep() {
-    const ctx = new (window.AudioContext || window.webkitAudioContext)();
-    const o = ctx.createOscillator();
-    o.type = "square";
-    o.connect(ctx.destination);
-
-    o.frequency.setValueAtTime(900, ctx.currentTime);
-    o.frequency.setValueAtTime(1300, ctx.currentTime + 0.05);
-
-    o.start();
-    setTimeout(() => {
-      o.stop();
-      ctx.close();
-    }, 120);
+    safeBeep({ startHz: 900, endHz: 1300, ms: 120, gain: 0.10, type: "square" });
   }
 
   // ❌ 실패음: 저음 단발
   function playScanErrorBeep() {
-    const ctx = new (window.AudioContext || window.webkitAudioContext)();
-    const o = ctx.createOscillator();
-    const g = ctx.createGain();
-
-    o.type = "square";
-    o.frequency.value = 500;
-    g.gain.value = 0.12;
-
-    o.connect(g);
-    g.connect(ctx.destination);
-
-    o.start();
-    setTimeout(() => {
-      o.stop();
-      ctx.close();
-    }, 160);
+    safeBeep({ startHz: 500, endHz: null, ms: 160, gain: 0.12, type: "square" });
   }
 
   // ⚠️ 경고음: 승인/오버픽/컨펌 뜰 때
   function playScanWarnBeep() {
-    const ctx = new (window.AudioContext || window.webkitAudioContext)();
-    const o = ctx.createOscillator();
-    const g = ctx.createGain();
-
-    o.type = "square";
-    o.frequency.value = 800;
-    g.gain.value = 0.1;
-
-    o.connect(g);
-    g.connect(ctx.destination);
-
-    o.start();
-    setTimeout(() => {
-      o.stop();
-      ctx.close();
-    }, 140);
+    safeBeep({ startHz: 800, endHz: null, ms: 140, gain: 0.10, type: "square" });
   }
 
   // ✅ 박스(팩킹리스트) 출력 관련
@@ -229,7 +287,11 @@ export default function StoreOutboundPage({ pageTitle = "매장 출고", default
   }
 
   async function doScan() {
+    // ✅ 사용자 제스처 시점에 오디오 워밍업(처음 1번만)
+    warmUpAudioOnce();
+
     if (!selectedJobId) {
+      playScanWarnBeep();
       push({ kind: "warn", title: "Job 선택", message: "먼저 Job을 선택해줘" });
       return;
     }
@@ -254,6 +316,7 @@ export default function StoreOutboundPage({ pageTitle = "매장 출고", default
         qty: safeQty,
         locationCode: loc,
         confirm: (msg) => {
+          // confirm 뜨기 직전에 경고음
           playScanWarnBeep();
           return window.confirm(msg);
         },
@@ -284,6 +347,8 @@ export default function StoreOutboundPage({ pageTitle = "매장 출고", default
       }
       if (result.reloadJob) await loadJob(selectedJobId);
     } catch (e) {
+      // ✅ 예외(네트워크/throw)도 실패음 울리기
+      playScanErrorBeep();
       push({ kind: "error", title: "처리 실패", message: e?.message || String(e) });
     } finally {
       setLoading(false);
@@ -324,6 +389,9 @@ export default function StoreOutboundPage({ pageTitle = "매장 출고", default
                 <button
                   type="button"
                   onClick={async () => {
+                    // user gesture → 오디오 워밍업
+                    warmUpAudioOnce();
+
                     setSelectedJobId(j.id);
                     await loadJob(j.id);
                     setTimeout(() => scanRef.current?.focus?.(), 50);
@@ -342,6 +410,8 @@ export default function StoreOutboundPage({ pageTitle = "매장 출고", default
                 <button
                   type="button"
                   onClick={async () => {
+                    warmUpAudioOnce();
+
                     const ok = confirm("이 작지를 삭제할까?");
                     if (!ok) return;
                     try {
@@ -350,6 +420,7 @@ export default function StoreOutboundPage({ pageTitle = "매장 출고", default
                       await loadJobsFromServer();
                       push({ kind: "success", title: "삭제", message: "작지를 삭제했어" });
                     } catch (err) {
+                      playScanErrorBeep();
                       push({ kind: "error", title: "삭제 실패", message: err?.message || String(err) });
                     } finally {
                       setLoading(false);
@@ -479,10 +550,12 @@ export default function StoreOutboundPage({ pageTitle = "매장 출고", default
                               type="button"
                               disabled={approvingExtra}
                               onClick={async () => {
+                                warmUpAudioOnce();
                                 playScanWarnBeep();
                                 try {
                                   await approveExtra(it.id, 1);
                                 } catch (err) {
+                                  playScanErrorBeep();
                                   push({ kind: "error", title: "추가피킹 승인 실패", message: err?.message || String(err) });
                                 }
                               }}
@@ -535,6 +608,8 @@ export default function StoreOutboundPage({ pageTitle = "매장 출고", default
           }}
           disabled={loading || !selectedJob || !(Array.isArray(selectedJob?.items) && selectedJob.items.length)}
           onClick={() => {
+            warmUpAudioOnce();
+
             const job = selectedJob;
             const items = Array.isArray(job?.items) ? job.items : [];
 
@@ -568,6 +643,8 @@ export default function StoreOutboundPage({ pageTitle = "매장 출고", default
           style={{ ...primaryBtn, background: "#fbfcf8ff" }}
           disabled={loading || !selectedJob || boxItems.size === 0}
           onClick={async () => {
+            warmUpAudioOnce();
+
             const ok = await printBoxLabel({
               job: selectedJob,
               boxNo,
@@ -594,7 +671,15 @@ export default function StoreOutboundPage({ pageTitle = "매장 출고", default
       <div style={{ marginTop: 12, border: "1px solid #e5e7eb", borderRadius: 12, padding: 12, background: "#fff" }}>
         <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 10, flexWrap: "wrap" }}>
           <div style={{ fontWeight: 900 }}>스캔</div>
-          <button type="button" style={{ ...primaryBtn, padding: "8px 10px" }} onClick={loadJobsFromServer} disabled={loading}>
+          <button
+            type="button"
+            style={{ ...primaryBtn, padding: "8px 10px" }}
+            onClick={() => {
+              warmUpAudioOnce();
+              loadJobsFromServer();
+            }}
+            disabled={loading}
+          >
             Job 새로고침
           </button>
         </div>
@@ -606,8 +691,12 @@ export default function StoreOutboundPage({ pageTitle = "매장 출고", default
               value={scanValue}
               onChange={(e) => setScanValue(e.target.value)}
               onKeyDown={(e) => {
-                if (e.key === "Enter") doScan();
+                if (e.key !== "Enter") return;
+                e.preventDefault();
+                e.stopPropagation();
+                doScan();
               }}
+              onFocus={() => warmUpAudioOnce()}
               placeholder="barcode/skuCode"
               style={{ ...inputStyle, width: 320 }}
             />
@@ -618,6 +707,7 @@ export default function StoreOutboundPage({ pageTitle = "매장 출고", default
               placeholder="qty"
               style={{ ...inputStyle, width: 90 }}
               inputMode="numeric"
+              onFocus={() => warmUpAudioOnce()}
             />
 
             <input
@@ -625,9 +715,15 @@ export default function StoreOutboundPage({ pageTitle = "매장 출고", default
               onChange={(e) => setScanLoc(e.target.value)}
               placeholder="locationCode (선택)"
               style={{ ...inputStyle, width: 180 }}
+              onFocus={() => warmUpAudioOnce()}
             />
 
-            <button type="button" style={primaryBtn} onClick={doScan} disabled={loading || !selectedJobId}>
+            <button
+              type="button"
+              style={primaryBtn}
+              onClick={doScan}
+              disabled={loading || !selectedJobId}
+            >
               스캔 처리
             </button>
           </div>

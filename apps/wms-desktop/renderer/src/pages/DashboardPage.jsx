@@ -136,26 +136,12 @@ export default function DashboardPage() {
     if (!raw) return "";
 
     // outbound 계열
-    if (
-      raw === "출고" ||
-      raw === "out" ||
-      raw === "outbound" ||
-      raw.includes("outbound") ||
-      raw.includes("출고")
-    ) {
+    if (raw === "출고" || raw === "out" || raw === "outbound" || raw.includes("outbound") || raw.includes("출고")) {
       return "출고";
     }
 
     // inbound/returns 계열 (현재 Dashboard 분기에서는 "반품"을 inbound 쪽으로 사용)
-    if (
-      raw === "반품" ||
-      raw === "입고" ||
-      raw === "in" ||
-      raw === "inbound" ||
-      raw.includes("inbound") ||
-      raw.includes("반품") ||
-      raw.includes("입고")
-    ) {
+    if (raw === "반품" || raw === "입고" || raw === "in" || raw === "inbound" || raw.includes("inbound") || raw.includes("반품") || raw.includes("입고")) {
       return "반품";
     }
 
