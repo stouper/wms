@@ -14,13 +14,26 @@ function qs(obj = {}) {
 function normalizeKind(v) {
   const s = String(v ?? "").trim();
   if (!s) return "";
+
   if (s.includes("출고")) return "출고";
   if (s.includes("반품")) return "반품";
-  // 혹시 영문 들어오면 대응
+
   const low = s.toLowerCase();
-  if (low.includes("outbound")) return "출고";
-  if (low.includes("inbound")) return "반품";
+  if (low.includes("outbound") || low === "out") return "출고";
+  if (low.includes("inbound") || low === "in") return "반품";
+
   return s;
+}
+
+function kindPayload(kindKorean) {
+  const k = normalizeKind(kindKorean);
+  const isIn = k === "반품";
+  return {
+    kind: k, // "출고" | "반품"
+    jobKind: k,
+    direction: isIn ? "IN" : "OUT",
+    type: isIn ? "IN" : "OUT",
+  };
 }
 
 function groupRows(jobRows) {
@@ -36,7 +49,6 @@ function groupRows(jobRows) {
 
     if (!storeCode) continue;
     if (!Number.isFinite(qty) || qty <= 0) continue;
-    // skuCode/makerCode 중 하나는 있어야 정상
     if (!skuCode && !makerCode) continue;
 
     const key = `${kind || "미분류"}__${storeCode}`;
@@ -65,8 +77,17 @@ export const jobsApi = {
     return http.get(`/jobs/${jobId}`);
   },
 
-  create: async ({ storeCode, title, memo } = {}) => {
-    return http.post(`/jobs`, { storeCode, title, memo });
+  // ✅ kind/type/direction 받을 수 있게 확장
+  create: async ({ storeCode, title, memo, kind, jobKind, type, direction } = {}) => {
+    return http.post(`/jobs`, {
+      storeCode,
+      title,
+      memo,
+      ...(kind ? { kind } : {}),
+      ...(jobKind ? { jobKind } : {}),
+      ...(type ? { type } : {}),
+      ...(direction ? { direction } : {}),
+    });
   },
 
   addItems: async (jobId, { items } = {}) => {
@@ -79,26 +100,32 @@ export const jobsApi = {
     return http.del(`/jobs/${jobId}`);
   },
 
-  // ✅ 스캔 (백엔드에 /jobs/:id/items/scan 라우트가 있는 로그가 있었음)
+  // ✅ 출고 스캔(피킹)
   scan: async (jobId, body) => {
     if (!jobId) throw new Error("jobId is required");
     return http.post(`/jobs/${jobId}/items/scan`, body || {});
   },
 
-  // ✅ extra 승인 (프로젝트가 이미 쓰던 방식 유지)
+  // ✅ 입고/반품 수령(= IN 처리)
+  receive: async (jobId, body) => {
+    if (!jobId) throw new Error("jobId is required");
+    return http.post(`/jobs/${jobId}/receive`, body || {});
+  },
+
+  // ✅ 마지막 스캔 취소(UNDO)
+  undoLast: async (jobId) => {
+    if (!jobId) throw new Error("jobId is required");
+    return http.post(`/jobs/${jobId}/undo-last`, {});
+  },
+
   approveExtra: async (jobId, { jobItemId, qty } = {}) => {
     if (!jobId) throw new Error("jobId is required");
     if (!jobItemId) throw new Error("jobItemId is required");
     return http.post(`/jobs/${jobId}/approve-extra`, { jobItemId, qty });
   },
 
-  allowOverpick: async (jobId, { allowOverpick = true } = {}) => {
-    if (!jobId) throw new Error("jobId is required");
-    return http.patch(`/jobs/${jobId}/allow-overpick`, { allowOverpick });
-  },
-
   /**
-   * ✅ Dashboard 작지 생성 (출고/반품)
+   * Dashboard 작지 생성 (출고/반품)
    * - parcel(CJ용) 절대 안 탐
    * - /jobs + /jobs/:id/items 로 “작지” 생성
    */
@@ -119,23 +146,28 @@ export const jobsApi = {
       const kind = g.kind || "미분류";
       const storeCode = g.storeCode;
 
-      // ✅ title/memo는 서버에서 크게 상관 없지만, 추적용으로 남겨둠
       const title = `[${kind}] ${storeCode}`;
       const memo = `excel=${jobFileName || ""}; kind=${kind}; store=${storeCode}`;
 
-      const created = await jobsApi.create({ storeCode, title, memo });
+      const kp = kindPayload(kind);
+      const created = await jobsApi.create({
+        storeCode,
+        title,
+        memo,
+        ...kp,
+      });
+
       const jobId = created?.id || created?.job?.id;
       if (!jobId) throw new Error("job create succeeded but jobId is missing");
 
-      // ✅ 아이템 payload: 서버가 받는 필드명에 최대한 맞춰 넉넉히 전달
       const items = (g.rows || []).map((r) => ({
         storeCode: r.storeCode,
         skuCode: r.skuCode,
         makerCode: r.makerCode,
         name: r.name,
         qty: r.qty,
-        qtyPlanned: r.qty, // 서버가 qtyPlanned를 쓰는 경우 대비
-        reqNo: r.reqNo, // memo로 박아도 되고 서버가 받으면 더 좋음
+        qtyPlanned: r.qty,
+        reqNo: r.reqNo,
       }));
 
       await jobsApi.addItems(jobId, { items });
@@ -151,4 +183,24 @@ export const jobsApi = {
   createJobsFromParsedRows: async ({ jobRows, jobFileName } = {}) => {
     return jobsApi.createFromParsedRows({ jobRows, jobFileName });
   },
+  // ================================
+  // 🔽 UNDO / TX (추가)
+  // ================================
+
+  txList: async (jobId) => {
+    return http.get(`/jobs/${jobId}/tx`);
+  },
+
+  undoLast: async (jobId) => {
+    return http.post(`/jobs/${jobId}/undo-last`, {});
+  },
+
+  undoUntil: async (jobId, txId) => {
+    return http.post(`/jobs/${jobId}/undo`, { txId });
+  },
+
+  undoAll: async (jobId) => {
+    return http.post(`/jobs/${jobId}/undo-all`, {});
+  },
+
 };

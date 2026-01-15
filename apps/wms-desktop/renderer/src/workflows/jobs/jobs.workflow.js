@@ -149,6 +149,18 @@ export const jobsFlow = {
     return true;
   },
 
+  // ✅ (추가) 마지막 스캔 취소(UNDO) — 다른 로직/시그니처 안 건드림
+  undoLast: async ({ jobId }) => {
+    const res = await jobsApi.undoLast(jobId);
+    return {
+      ok: true,
+      result: res,
+      toast: { kind: "info", title: "UNDO", message: "마지막 스캔을 취소했어" },
+      resetScan: true,
+      reloadJob: true,
+    };
+  },
+
   /** ===== Dashboard 조회 ===== */
   fetchDoneJobsForRange: async ({ fromYmd, toYmd }) => {
     const fromN = ymdToNum(fromYmd);
@@ -309,17 +321,30 @@ export const jobsFlow = {
   },
 
   /** =========================
-   * ✅ Inbound Scan (입고)
+   * ✅ Inbound Scan (입고/반품)
+   * =========================
+   *
+   * ✅ 핵심:
+   * - 백엔드에 /jobs/:id/receive 가 있으면 그걸로 보내야 IN으로 찍힘.
+   * - receive가 없는 환경(구버전 백엔드)에서는 기존 /items/scan 유지.
+   * - 반품 기본 로케이션은 RET-01
    * ========================= */
   scanInbound: async ({ jobId, value, qty = 1, locationCode = "", confirm }) => {
+    // ✅ 반품 기본 로케이션: 비어있으면 RET-01
+    const loc = String(locationCode || "").trim() || "RET-01";
+
     const body = {
       value,
       qty,
-      ...(locationCode ? { locationCode } : {}),
+      locationCode: loc,
     };
 
+    // ✅ receive 라우트 지원 여부에 따라 분기
+    const useReceive = typeof jobsApi.receive === "function";
+    const apiCall = useReceive ? jobsApi.receive : jobsApi.scan;
+
     try {
-      const res = await jobsApi.scan(jobId, body);
+      const res = await apiCall(jobId, body);
 
       return {
         ok: true,
@@ -344,7 +369,7 @@ export const jobsFlow = {
       const next = picked + qty;
 
       if (next <= planned + approved) {
-        const res2 = await jobsApi.scan(jobId, { ...body, force: true });
+        const res2 = await apiCall(jobId, { ...body, force: true });
         return {
           ok: true,
           lastScan: res2,
@@ -360,7 +385,7 @@ export const jobsFlow = {
       if (!ok) return { ok: true, resetScan: true };
 
       await jobsApi.approveExtra(jobId, { jobItemId: hit.id, qty: need });
-      const res3 = await jobsApi.scan(jobId, { ...body, force: true });
+      const res3 = await apiCall(jobId, { ...body, force: true });
 
       return {
         ok: true,
@@ -370,5 +395,32 @@ export const jobsFlow = {
         reloadJob: true,
       };
     }
+  },
+
+  // ================================
+  // 🔽 UNDO / TX (추가)
+  // ================================
+
+  fetchTx: async ({ jobId }) => {
+    if (!jobId) throw new Error("jobId is required");
+    const res = await jobsApi.txList(jobId);
+    // fetch/axios 래퍼 차이 대응
+    return Array.isArray(res) ? res : (res?.data ?? res ?? []);
+  },
+
+  undoLast: async ({ jobId }) => {
+    if (!jobId) throw new Error("jobId is required");
+    return jobsApi.undoLast(jobId);
+  },
+
+  undoUntil: async ({ jobId, txId }) => {
+    if (!jobId) throw new Error("jobId is required");
+    if (!txId) throw new Error("txId is required");
+    return jobsApi.undoUntil(jobId, txId);
+  },
+
+  undoAll: async ({ jobId }) => {
+    if (!jobId) throw new Error("jobId is required");
+    return jobsApi.undoAll(jobId);
   },
 };

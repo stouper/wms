@@ -1,4 +1,4 @@
-import { Body, Controller, Delete, Get, Param, Patch, Post, Query } from '@nestjs/common';
+import { Body, Controller, Delete, Get, Param, Patch, Post, Query, BadRequestException } from '@nestjs/common';
 import { JobsService } from './jobs.service';
 import { CreateJobDto } from './dto/create-job.dto';
 import { AddItemsDto } from './dto/add-items.dto';
@@ -38,10 +38,14 @@ export class JobsController {
     } as any);
   }
 
-  // ✅ 디테일: 반드시 items(+sku) 포함해서 내려줘야 desktop에서 보임
   @Get(':id')
   get(@Param('id') id: string) {
     return this.jobs.getJob(id);
+  }
+
+  @Delete(':id')
+  delete(@Param('id') id: string) {
+    return this.jobs.deleteJob(id);
   }
 
   @Post(':id/items')
@@ -59,40 +63,62 @@ export class JobsController {
     return this.jobs.approveExtra(id, itemId, Number(body?.qty || 0));
   }
 
-  // ✅ SKU 스캔(피킹) — Desktop이 쓰는 "유일한" 엔드포인트 (정석)
+  // ✅ SKU 스캔(피킹)
+  // ✅ (프론트 호환) /jobs/:id/items/scan
   @Post(':id/items/scan')
   scanItem(@Param('id') id: string, @Body() dto: ScanDto) {
     return this.jobs.scan(id, dto as any);
   }
 
-  // ✅ 반품 입고(잡 귀속) — Desktop 반품 탭에서 사용
+  @Post(':id/scan')
+  scan(@Param('id') id: string, @Body() dto: ScanDto) {
+    return this.jobs.scan(id, dto as any);
+  }
+
+  // ✅ 입고(반품)
   @Post(':id/receive')
-  receive(@Param('id') id: string, @Body() dto: any) {
+  receive(@Param('id') id: string, @Body() dto: ScanDto) {
     return this.jobs.receive(id, dto as any);
   }
 
-  @Post(':id/parcel')
+  // ✅ (택배) 송장번호/박스 등 업데이트
+  @Post(':id/parcels/upsert')
   upsertParcel(@Param('id') id: string, @Body() dto: UpsertParcelDto) {
     return this.jobs.upsertParcel(id, dto as any);
   }
 
-  @Post(':id/done')
-  done(@Param('id') id: string) {
-    return this.jobs.markDone(id);
-  }
-
-  @Delete(':id')
-  delete(@Param('id') id: string) {
-    return this.jobs.deleteJob(id);
-  }
-
-  // ✅ C안: 실재고 우선 토글
+  // ✅ C안: allowOverpick 토글
   @Patch(':id/allow-overpick')
   setAllowOverpick(
     @Param('id') id: string,
     @Body() body: { allowOverpick: boolean },
   ) {
     return this.jobs.setAllowOverpick(id, Boolean(body?.allowOverpick));
+  }
+
+  // ✅ job 기준 InventoryTx 목록 (undo UI용)
+  @Get(':id/tx')
+  listTx(@Param('id') id: string) {
+    return this.jobs.listInventoryTx(id);
+  }
+
+  // ✅ 최근 tx부터 특정 tx까지 연속 undo (body: { txId })
+  @Post(':id/undo')
+  undoUntil(@Param('id') id: string, @Body() body: { txId?: string }) {
+    const txId = (body?.txId ?? '').toString().trim();
+    if (!txId) throw new BadRequestException('txId is required');
+    return this.jobs.undoUntilTx(id, txId);
+  }
+
+  // ✅ job 전체 undo (최근 tx부터 끝까지)
+  @Post(':id/undo-all')
+  undoAll(@Param('id') id: string) {
+    return this.jobs.undoAllTx(id);
+  }
+
+  @Post(':id/undo-last')
+  undoLast(@Param('id') id: string) {
+    return this.jobs.undoLastTx(id);
   }
 
   // ✅ (호환) Desktop: POST /jobs/:jobId/approve-extra  (body: { jobItemId, qty })

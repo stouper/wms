@@ -15,10 +15,34 @@ export default function WarehouseInboundPage({ pageTitle = "창고 입고(반품
 
   const { push, ToastHost } = useToasts();
 
+  /**
+   * ✅ 공통: 토스트 뜰 때 경고/에러 비프
+   * - 기존: warn만 체크해서 warning 같은 값이면 소리 안 남
+   * - now: warn/warning, error/danger/fail 모두 커버
+   */
+  const pushToast = (toast) => {
+    if (!toast) return;
+    try {
+      const k = String(toast.kind || "").toLowerCase();
+      if (k === "error" || k === "danger" || k === "fail" || k === "failed") playScanErrorBeep();
+      else if (k === "warn" || k === "warning") playScanWarnBeep();
+    } catch {
+      // ignore
+    }
+    push(toast);
+  };
+
   const createdKey = `wms.jobs.created.${PAGE_KEY}`;
   const selectedKey = `wms.jobs.selected.${PAGE_KEY}`;
 
   const [loading, setLoading] = useState(false);
+
+  // ✅ undo 처리중
+  const [undoing, setUndoing] = useState(false);
+
+  // ✅ 스캔 로그(TX)
+  const [scanTxLogs, setScanTxLogs] = useState([]);
+  const [txLoading, setTxLoading] = useState(false);
 
   const [created, setCreated] = useState(() => safeReadJson(createdKey, []));
   const [selectedJobId, setSelectedJobId] = useState(() => safeReadLocal(selectedKey, "") || "");
@@ -54,9 +78,9 @@ export default function WarehouseInboundPage({ pageTitle = "창고 입고(반품
 
   /**
    * ✅ 비프 안정화 핵심
-   * - AudioContext를 매번 만들지 말고 1개를 재사용
-   * - suspended 상태면 resume
-   * - 처음 1회 워밍업(무음 ping)으로 첫 삑 실패 방지
+   * - AudioContext 1개 재사용
+   * - suspended면 resume
+   * - 첫 1회 워밍업(무음 ping)으로 “최초 삑 씹힘” 방지
    */
   const audioCtxRef = useRef(null);
   const audioReadyRef = useRef(false);
@@ -82,9 +106,9 @@ export default function WarehouseInboundPage({ pageTitle = "창고 입고(반품
   }
 
   async function warmUpAudioOnce() {
-    if (audioReadyRef.current) return;
+    if (audioReadyRef.current) return true;
     const ok = await ensureAudioReady();
-    if (!ok) return;
+    if (!ok) return false;
 
     const ctx = audioCtxRef.current;
     try {
@@ -104,7 +128,24 @@ export default function WarehouseInboundPage({ pageTitle = "창고 입고(반품
     } catch {
       // ignore
     }
+    return true;
   }
+
+  // ✅ 첫 사용자 입력에서 오디오 선워밍업
+  useEffect(() => {
+    const kick = async () => {
+      try {
+        await warmUpAudioOnce();
+      } catch {}
+    };
+    window.addEventListener("pointerdown", kick, { once: true, capture: true });
+    window.addEventListener("keydown", kick, { once: true, capture: true });
+    return () => {
+      window.removeEventListener("pointerdown", kick, { capture: true });
+      window.removeEventListener("keydown", kick, { capture: true });
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   function safeBeep({ startHz, endHz, ms = 120, gain = 0.12, type = "square" }) {
     const ctx = getAudioCtx();
@@ -146,7 +187,7 @@ export default function WarehouseInboundPage({ pageTitle = "창고 입고(반품
 
   // ✅ 성공음
   function playScanSuccessBeep() {
-    safeBeep({ startHz: 900, endHz: 1300, ms: 120, gain: 0.10, type: "square" });
+    safeBeep({ startHz: 900, endHz: 1300, ms: 120, gain: 0.1, type: "square" });
   }
 
   // ❌ 실패음
@@ -156,7 +197,7 @@ export default function WarehouseInboundPage({ pageTitle = "창고 입고(반품
 
   // ⚠️ 경고음
   function playScanWarnBeep() {
-    safeBeep({ startHz: 800, endHz: null, ms: 140, gain: 0.10, type: "square" });
+    safeBeep({ startHz: 800, endHz: null, ms: 140, gain: 0.1, type: "square" });
   }
 
   function unwrapJob(resp) {
@@ -164,6 +205,19 @@ export default function WarehouseInboundPage({ pageTitle = "창고 입고(반품
     if (resp?.job && typeof resp.job === "object") return resp.job;
     if (resp?.id) return resp;
     return null;
+  }
+
+  async function loadTx(jobId) {
+    if (!jobId) return;
+    setTxLoading(true);
+    try {
+      const txs = await jobsFlow.fetchTx({ jobId });
+      setScanTxLogs(Array.isArray(txs) ? txs : []);
+    } catch {
+      setScanTxLogs([]);
+    } finally {
+      setTxLoading(false);
+    }
   }
 
   async function loadJobsFromServer() {
@@ -184,10 +238,11 @@ export default function WarehouseInboundPage({ pageTitle = "창고 입고(반품
         const nextId = keep ? selectedJobId : list[0].id;
         setSelectedJobId(nextId);
         await loadJob(nextId);
+        await loadTx(nextId);
         setTimeout(() => scanRef.current?.focus?.(), 80);
       }
     } catch (e) {
-      push({ kind: "error", title: "Job 목록 로드 실패", message: e?.message || String(e) });
+      pushToast({ kind: "error", title: "Job 목록 로드 실패", message: e?.message || String(e) });
     }
   }
 
@@ -209,7 +264,7 @@ export default function WarehouseInboundPage({ pageTitle = "창고 입고(반품
         }),
       );
     } catch (e) {
-      push({ kind: "error", title: "Job 상세 로드 실패", message: e?.message || String(e) });
+      pushToast({ kind: "error", title: "Job 상세 로드 실패", message: e?.message || String(e) });
     }
   }
 
@@ -250,20 +305,58 @@ export default function WarehouseInboundPage({ pageTitle = "창고 입고(반품
     setApprovingExtra(true);
     try {
       await jobsFlow.approveExtra({ jobId: selectedJobId, jobItemId, qty: n });
-      push({ kind: "success", title: "추가 입고 승인", message: `+${n} 승인 완료` });
+      pushToast({ kind: "success", title: "추가 입고 승인", message: `+${n} 승인 완료` });
       await loadJob(selectedJobId);
+      await loadTx(selectedJobId);
     } finally {
       setApprovingExtra(false);
     }
   }
 
-  async function doScan() {
-    // ✅ 사용자 제스처 시점: 오디오 워밍업(처음 1번만)
-    warmUpAudioOnce();
+  // ✅ Outbound처럼: 직전취소(UNDO)
+  async function doUndoLast() {
+    await warmUpAudioOnce();
 
     if (!selectedJobId) {
       playScanWarnBeep();
-      push({ kind: "warn", title: "Job 선택", message: "먼저 Job을 선택해줘" });
+      pushToast({ kind: "warn", title: "Job 선택", message: "먼저 Job을 선택해줘" });
+      return;
+    }
+
+    playScanWarnBeep();
+    const ok = window.confirm("직전 스캔(입고)을 취소할까?");
+    if (!ok) return;
+
+    setUndoing(true);
+    try {
+      const result = await jobsFlow.undoLast({ jobId: selectedJobId });
+
+      if (result?.toast) pushToast(result.toast);
+      else pushToast({ kind: "info", title: "UNDO", message: "마지막 스캔을 취소했어" });
+
+      triggerTotalsFlash();
+      await loadJob(selectedJobId);
+      await loadTx(selectedJobId);
+
+      setLastScan(null);
+      setTimeout(() => scanRef.current?.focus?.(), 50);
+
+      playScanSuccessBeep();
+    } catch (e) {
+      playScanErrorBeep();
+      pushToast({ kind: "error", title: "UNDO 실패", message: e?.message || String(e) });
+    } finally {
+      setUndoing(false);
+    }
+  }
+
+  async function doScan() {
+    // ✅ Inbound 최초 스캔 삑 씹힘 방지: 워밍업 완료까지 대기
+    await warmUpAudioOnce();
+
+    if (!selectedJobId) {
+      playScanWarnBeep();
+      pushToast({ kind: "warn", title: "Job 선택", message: "먼저 Job을 선택해줘" });
       return;
     }
 
@@ -294,7 +387,7 @@ export default function WarehouseInboundPage({ pageTitle = "창고 입고(반품
 
       if (!result?.ok) {
         playScanErrorBeep();
-        push({ kind: "error", title: "처리 실패", message: result?.error || "unknown error" });
+        pushToast({ kind: "error", title: "처리 실패", message: result?.error || "unknown error" });
         return;
       }
 
@@ -302,17 +395,19 @@ export default function WarehouseInboundPage({ pageTitle = "창고 입고(반품
       triggerTotalsFlash();
 
       if (result.lastScan !== undefined) setLastScan(result.lastScan);
-      if (result.toast) push(result.toast);
+      if (result.toast) pushToast(result.toast);
 
       if (result.resetScan) {
         setScanValue("");
         scanRef.current?.focus?.();
       }
+
+      // ✅ 잡/tx 갱신
       if (result.reloadJob) await loadJob(selectedJobId);
+      await loadTx(selectedJobId);
     } catch (e) {
-      // ✅ 예외도 실패음
       playScanErrorBeep();
-      push({ kind: "error", title: "처리 실패", message: e?.message || String(e) });
+      pushToast({ kind: "error", title: "처리 실패", message: e?.message || String(e) });
     } finally {
       setLoading(false);
     }
@@ -402,9 +497,10 @@ export default function WarehouseInboundPage({ pageTitle = "창고 입고(반품
                 <button
                   type="button"
                   onClick={async () => {
-                    warmUpAudioOnce();
+                    await warmUpAudioOnce();
                     setSelectedJobId(j.id);
                     await loadJob(j.id);
+                    await loadTx(j.id);
                     setTimeout(() => scanRef.current?.focus?.(), 50);
                   }}
                   style={{ all: "unset", cursor: "pointer", flex: 1, minWidth: 0 }}
@@ -414,14 +510,14 @@ export default function WarehouseInboundPage({ pageTitle = "창고 입고(반품
                     {j.title || "Job"}
                   </div>
                   <div style={{ fontSize: 12, color: "#64748b", whiteSpace: "nowrap" }}>
-                    store <b>{storeLabel(j.storeCode)}</b> · <b>{j.status}</b>
+                    store <b>{storeLabel(j.storeCode || defaultStoreCode)}</b> · <b>{j.status}</b>
                   </div>
                 </button>
 
                 <button
                   type="button"
                   onClick={async () => {
-                    warmUpAudioOnce();
+                    await warmUpAudioOnce();
                     playScanWarnBeep();
 
                     const ok = confirm("이 작지를 삭제할까?");
@@ -430,10 +526,10 @@ export default function WarehouseInboundPage({ pageTitle = "창고 입고(반품
                       setLoading(true);
                       await deleteJob(j.id);
                       await loadJobsFromServer();
-                      push({ kind: "success", title: "삭제", message: "작지를 삭제했어" });
+                      pushToast({ kind: "success", title: "삭제", message: "작지를 삭제했어" });
                     } catch (err) {
                       playScanErrorBeep();
-                      push({ kind: "error", title: "삭제 실패", message: err?.message || String(err) });
+                      pushToast({ kind: "error", title: "삭제 실패", message: err?.message || String(err) });
                     } finally {
                       setLoading(false);
                     }
@@ -506,13 +602,13 @@ export default function WarehouseInboundPage({ pageTitle = "창고 입고(반품
                               type="button"
                               disabled={approvingExtra}
                               onClick={async () => {
-                                warmUpAudioOnce();
+                                await warmUpAudioOnce();
                                 playScanWarnBeep();
                                 try {
                                   await approveExtra(it.id, 1);
                                 } catch (err) {
                                   playScanErrorBeep();
-                                  push({ kind: "error", title: "추가 입고 승인 실패", message: err?.message || String(err) });
+                                  pushToast({ kind: "error", title: "추가 입고 승인 실패", message: err?.message || String(err) });
                                 }
                               }}
                               style={{
@@ -545,6 +641,175 @@ export default function WarehouseInboundPage({ pageTitle = "창고 입고(반품
     );
   }
 
+  // ✅ Outbound 스타일: 스캔 로그 + 취소(UNDO)들
+  function TxLogs() {
+    if (!selectedJobId) return null;
+
+    return (
+      <div style={{ marginTop: 12, border: "1px solid #e5e7eb", borderRadius: 12, padding: 12, background: "#fff" }}>
+        <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 10, flexWrap: "wrap" }}>
+          <div style={{ fontWeight: 900 }}>스캔 로그</div>
+
+          <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
+            <button
+              type="button"
+              disabled={txLoading || undoing || loading || !selectedJobId}
+              onClick={async () => {
+                await warmUpAudioOnce();
+                await loadTx(selectedJobId);
+              }}
+              style={{
+                padding: "6px 10px",
+                borderRadius: 10,
+                border: "1px solid #e5e7eb",
+                background: "#fff",
+                cursor: "pointer",
+                fontSize: 12,
+                whiteSpace: "nowrap",
+              }}
+            >
+              새로고침
+            </button>
+
+            <button
+              type="button"
+              disabled={txLoading || undoing || loading || !selectedJobId || !scanTxLogs.length}
+              onClick={async () => {
+                await warmUpAudioOnce();
+                playScanWarnBeep();
+                const ok = window.confirm("이 Job의 스캔 로그를 전부 취소(UNDO ALL)할까?");
+                if (!ok) return;
+
+                setUndoing(true);
+                try {
+                  await jobsFlow.undoAll({ jobId: selectedJobId });
+                  pushToast({ kind: "info", title: "UNDO ALL", message: "전체 취소 완료" });
+                  triggerTotalsFlash();
+                  await loadJob(selectedJobId);
+                  await loadTx(selectedJobId);
+                  playScanSuccessBeep();
+                } catch (e) {
+                  playScanErrorBeep();
+                  pushToast({ kind: "error", title: "UNDO ALL 실패", message: e?.message || String(e) });
+                } finally {
+                  setUndoing(false);
+                }
+              }}
+              style={{
+                padding: "6px 10px",
+                borderRadius: 10,
+                border: "1px solid #e5e7eb",
+                background: "#fff",
+                cursor: "pointer",
+                fontSize: 12,
+                whiteSpace: "nowrap",
+              }}
+            >
+              (전체취소)
+            </button>
+          </div>
+        </div>
+
+        <div style={{ marginTop: 10, border: "1px solid #e5e7eb", borderRadius: 10, overflow: "hidden" }}>
+          <div style={{ maxHeight: 260, overflow: "auto" }}>
+            {!scanTxLogs.length ? (
+              <div style={{ padding: 12, fontSize: 12, color: "#64748b" }}>
+                {txLoading ? "불러오는 중..." : "아직 스캔 로그가 없어."}
+              </div>
+            ) : (
+              <table style={{ width: "100%", borderCollapse: "collapse" }}>
+                <thead>
+                  <tr>
+                    <Th>time</Th>
+                    <Th>type</Th>
+                    <Th align="right">qty</Th>
+                    <Th>location</Th>
+                    <Th>sku</Th>
+                    <Th></Th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {scanTxLogs.map((tx, idx) => {
+                    const t = tx?.createdAt ? new Date(tx.createdAt) : null;
+                    const time = t ? t.toLocaleTimeString() : "-";
+                    const type = tx?.type || tx?.kind || "-";
+                    const qty = tx?.qty ?? tx?.deltaQty ?? "-";
+                    const loc = tx?.locationCode || tx?.location?.code || tx?.locationId || "-";
+                    const sku = tx?.skuCode || tx?.sku?.sku || tx?.sku?.makerCode || tx?.makerCode || tx?.jobItemId || "-";
+                    const undoCount = idx + 1;
+
+                    return (
+                      <tr key={tx.id || idx}>
+                        <Td style={{ fontSize: 12, color: "#64748b" }}>{time}</Td>
+                        <Td style={{ fontSize: 12 }}>{type}</Td>
+                        <Td align="right" style={{ fontSize: 12 }}>
+                          {qty}
+                        </Td>
+                        <Td style={{ fontSize: 12 }}>{loc}</Td>
+                        <Td style={{ fontSize: 12 }}>{sku}</Td>
+                        <Td align="right">
+                          <button
+                            type="button"
+                            disabled={undoing || loading || !selectedJobId}
+                            onClick={async () => {
+                              await warmUpAudioOnce();
+                              playScanWarnBeep();
+
+                              const msg =
+                                undoCount === 1
+                                  ? "직전 스캔 1건을 취소할까?"
+                                  : `최근 스캔 ${undoCount}건을 취소(여기까지 연속)할까?`;
+
+                              const ok = window.confirm(msg);
+                              if (!ok) return;
+
+                              setUndoing(true);
+                              try {
+                                if (undoCount === 1) {
+                                  await jobsFlow.undoLast({ jobId: selectedJobId });
+                                } else {
+                                  await jobsFlow.undoUntil({ jobId: selectedJobId, txId: tx.id });
+                                }
+
+                                pushToast({ kind: "info", title: "UNDO", message: `취소 완료 (${undoCount}건)` });
+                                triggerTotalsFlash();
+                                await loadJob(selectedJobId);
+                                await loadTx(selectedJobId);
+                                setLastScan(null);
+                                playScanSuccessBeep();
+                              } catch (e) {
+                                playScanErrorBeep();
+                                pushToast({ kind: "error", title: "UNDO 실패", message: e?.message || String(e) });
+                              } finally {
+                                setUndoing(false);
+                              }
+                            }}
+                            style={{
+                              padding: "6px 10px",
+                              borderRadius: 10,
+                              border: "1px solid #e5e7eb",
+                              background: "#fff",
+                              cursor: "pointer",
+                              fontSize: 12,
+                              whiteSpace: "nowrap",
+                            }}
+                            title={undoCount === 1 ? "직전취소" : "여기까지 연속취소"}
+                          >
+                            취소
+                          </button>
+                        </Td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
+            )}
+          </div>
+        </div>
+      </div>
+    );
+  }
+
   return (
     <div style={{ padding: 16 }}>
       <ToastHost />
@@ -555,8 +820,8 @@ export default function WarehouseInboundPage({ pageTitle = "창고 입고(반품
         <button
           type="button"
           style={{ ...primaryBtn, padding: "8px 10px" }}
-          onClick={() => {
-            warmUpAudioOnce();
+          onClick={async () => {
+            await warmUpAudioOnce();
             loadJobsFromServer();
           }}
           disabled={loading}
@@ -611,12 +876,7 @@ export default function WarehouseInboundPage({ pageTitle = "창고 입고(반품
               onFocus={() => warmUpAudioOnce()}
             />
 
-            <button
-              type="button"
-              style={primaryBtn}
-              onClick={doScan}
-              disabled={loading || !selectedJobId}
-            >
+            <button type="button" style={primaryBtn} onClick={doScan} disabled={loading || !selectedJobId}>
               입고 처리
             </button>
           </div>
@@ -649,6 +909,25 @@ export default function WarehouseInboundPage({ pageTitle = "창고 입고(반품
                   </>
                 ) : null}
 
+                {/* ✅ Outbound처럼 (직전취소) */}
+                <button
+                  type="button"
+                  onClick={doUndoLast}
+                  disabled={undoing || loading || !selectedJobId}
+                  style={{
+                    padding: "6px 10px",
+                    borderRadius: 10,
+                    border: "1px solid #e5e7eb",
+                    background: undoing ? "#f1f5f9" : "#fff",
+                    cursor: undoing ? "not-allowed" : "pointer",
+                    fontSize: 12,
+                    whiteSpace: "nowrap",
+                  }}
+                  title="마지막 스캔을 취소(UNDO)"
+                >
+                  (직전취소)
+                </button>
+
                 <button
                   type="button"
                   onClick={() => setShowScanDebug((v) => !v)}
@@ -678,6 +957,7 @@ export default function WarehouseInboundPage({ pageTitle = "창고 입고(반품
       </div>
 
       <JobDetail />
+      <TxLogs />
     </div>
   );
 }

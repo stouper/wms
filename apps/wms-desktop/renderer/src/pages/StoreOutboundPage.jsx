@@ -16,6 +16,19 @@ export default function StoreOutboundPage({ pageTitle = "매장 출고", default
   const mode = storeShipMode;
 
   const { push, ToastHost } = useToasts();
+
+  // ✅ 토스트 뜰 때 경고/에러 비프를 원래대로 복구
+  const pushToast = (toast) => {
+    if (!toast) return;
+    try {
+      if (toast.kind === 'error') playScanErrorBeep();
+      else if (toast.kind === 'warn') playScanWarnBeep();
+    } catch (e) {
+      // ignore
+    }
+    push(toast);
+  };
+
   const [loading, setLoading] = useState(false);
 
   const createdKey = `wms.jobs.created.${PAGE_KEY}`;
@@ -172,6 +185,13 @@ export default function StoreOutboundPage({ pageTitle = "매장 출고", default
 
   const [approvingExtra, setApprovingExtra] = useState(false);
 
+  // ✅ (추가) undo 처리중
+  const [undoing, setUndoing] = useState(false);
+
+  // ✅ (추가) 스캔 로그(TX)
+  const [scanTxLogs, setScanTxLogs] = useState([]);
+  const [txLoading, setTxLoading] = useState(false);
+
   useEffect(() => safeWriteJson(createdKey, created), [createdKey, created]);
   useEffect(() => safeWriteLocal(selectedKey, selectedJobId || ""), [selectedKey, selectedJobId]);
 
@@ -211,10 +231,11 @@ export default function StoreOutboundPage({ pageTitle = "매장 출고", default
 
         // ✅ 아이템 포함 상세로 갱신
         await loadJob(nextId);
+        await loadTx(nextId);
         setTimeout(() => scanRef.current?.focus?.(), 80);
       }
     } catch (e) {
-      push({ kind: "error", title: "Job 목록 로드 실패", message: e?.message || String(e) });
+      pushToast({ kind: "error", title: "Job 목록 로드 실패", message: e?.message || String(e) });
     }
   }
 
@@ -237,7 +258,21 @@ export default function StoreOutboundPage({ pageTitle = "매장 출고", default
         }),
       );
     } catch (e) {
-      push({ kind: "error", title: "Job 상세 로드 실패", message: e?.message || String(e) });
+      pushToast({ kind: "error", title: "Job 상세 로드 실패", message: e?.message || String(e) });
+    }
+  }
+
+
+  async function loadTx(jobId) {
+    if (!jobId) return;
+    setTxLoading(true);
+    try {
+      const txs = await jobsFlow.fetchTx({ jobId });
+      setScanTxLogs(Array.isArray(txs) ? txs : []);
+    } catch (e) {
+      setScanTxLogs([]);
+    } finally {
+      setTxLoading(false);
     }
   }
 
@@ -279,10 +314,51 @@ export default function StoreOutboundPage({ pageTitle = "매장 출고", default
     setApprovingExtra(true);
     try {
       await jobsFlow.approveExtra({ jobId: selectedJobId, jobItemId, qty: n });
-      push({ kind: "success", title: "추가피킹 승인", message: `+${n} 승인 완료` });
+      pushToast({ kind: "success", title: "추가피킹 승인", message: `+${n} 승인 완료` });
       await loadJob(selectedJobId);
+      await loadTx(selectedJobId);
     } finally {
       setApprovingExtra(false);
+    }
+  }
+
+  // ✅ (추가) 직전취소(UNDO)
+  async function doUndoLast() {
+    warmUpAudioOnce();
+
+    if (!selectedJobId) {
+      playScanWarnBeep();
+      pushToast({ kind: "warn", title: "Job 선택", message: "먼저 Job을 선택해줘" });
+      return;
+    }
+
+    // 실수 방지 확인
+    playScanWarnBeep();
+    const ok = window.confirm("직전 스캔(출고)을 취소할까?");
+    if (!ok) return;
+
+    setUndoing(true);
+    try {
+      const result = await jobsFlow.undoLast({ jobId: selectedJobId });
+
+      if (result?.toast) pushToast(result.toast);
+      else pushToast({ kind: "info", title: "UNDO", message: "마지막 스캔을 취소했어" });
+
+      triggerTotalsFlash();
+      await loadJob(selectedJobId);
+
+      // 결과 표시도 직관적으로 갱신
+      setLastScan(null);
+
+      // 포커스 복귀
+      setTimeout(() => scanRef.current?.focus?.(), 50);
+
+      playScanSuccessBeep();
+    } catch (e) {
+      playScanErrorBeep();
+      pushToast({ kind: "error", title: "UNDO 실패", message: e?.message || String(e) });
+    } finally {
+      setUndoing(false);
     }
   }
 
@@ -292,7 +368,7 @@ export default function StoreOutboundPage({ pageTitle = "매장 출고", default
 
     if (!selectedJobId) {
       playScanWarnBeep();
-      push({ kind: "warn", title: "Job 선택", message: "먼저 Job을 선택해줘" });
+      pushToast({ kind: "warn", title: "Job 선택", message: "먼저 Job을 선택해줘" });
       return;
     }
 
@@ -325,7 +401,7 @@ export default function StoreOutboundPage({ pageTitle = "매장 출고", default
       if (!result?.ok) {
         // ❌ 실패: 저음 1회
         playScanErrorBeep();
-        push({ kind: "error", title: "처리 실패", message: result?.error || "unknown error" });
+        pushToast({ kind: "error", title: "처리 실패", message: result?.error || "unknown error" });
         return;
       }
 
@@ -334,7 +410,7 @@ export default function StoreOutboundPage({ pageTitle = "매장 출고", default
       triggerTotalsFlash();
 
       if (result.lastScan !== undefined) setLastScan(result.lastScan);
-      if (result.toast) push(result.toast);
+      if (result.toast) pushToast(result.toast);
 
       const sku = pickSkuFromScan(result.lastScan);
       if (sku) {
@@ -346,10 +422,11 @@ export default function StoreOutboundPage({ pageTitle = "매장 출고", default
         scanRef.current?.focus?.();
       }
       if (result.reloadJob) await loadJob(selectedJobId);
+      await loadTx(selectedJobId);
     } catch (e) {
       // ✅ 예외(네트워크/throw)도 실패음 울리기
       playScanErrorBeep();
-      push({ kind: "error", title: "처리 실패", message: e?.message || String(e) });
+      pushToast({ kind: "error", title: "처리 실패", message: e?.message || String(e) });
     } finally {
       setLoading(false);
     }
@@ -394,6 +471,7 @@ export default function StoreOutboundPage({ pageTitle = "매장 출고", default
 
                     setSelectedJobId(j.id);
                     await loadJob(j.id);
+                    await loadTx(j.id);
                     setTimeout(() => scanRef.current?.focus?.(), 50);
                   }}
                   style={{ all: "unset", cursor: "pointer", flex: 1, minWidth: 0 }}
@@ -418,10 +496,10 @@ export default function StoreOutboundPage({ pageTitle = "매장 출고", default
                       setLoading(true);
                       await deleteJob(j.id);
                       await loadJobsFromServer();
-                      push({ kind: "success", title: "삭제", message: "작지를 삭제했어" });
+                      pushToast({ kind: "success", title: "삭제", message: "작지를 삭제했어" });
                     } catch (err) {
                       playScanErrorBeep();
-                      push({ kind: "error", title: "삭제 실패", message: err?.message || String(err) });
+                      pushToast({ kind: "error", title: "삭제 실패", message: err?.message || String(err) });
                     } finally {
                       setLoading(false);
                     }
@@ -442,6 +520,167 @@ export default function StoreOutboundPage({ pageTitle = "매장 출고", default
             );
           })}
         </div>
+
+        {/* ✅ 스캔 로그(TX) */}
+        <div style={{ marginTop: 12, borderTop: "1px solid #e5e7eb", paddingTop: 12 }}>
+          <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 10, flexWrap: "wrap" }}>
+            <div style={{ fontWeight: 900 }}>스캔 로그</div>
+
+            <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
+              <button
+                type="button"
+                disabled={txLoading || undoing || loading || !selectedJobId}
+                onClick={async () => {
+                  warmUpAudioOnce?.();
+                  await loadTx(selectedJobId);
+                }}
+                style={{
+                  padding: "6px 10px",
+                  borderRadius: 10,
+                  border: "1px solid #e5e7eb",
+                  background: "#fff",
+                  cursor: "pointer",
+                  fontSize: 12,
+                  whiteSpace: "nowrap",
+                }}
+              >
+                새로고침
+              </button>
+
+              <button
+                type="button"
+                disabled={txLoading || undoing || loading || !selectedJobId || !scanTxLogs.length}
+                onClick={async () => {
+                  warmUpAudioOnce?.();
+                  playScanWarnBeep?.();
+                  const ok = window.confirm("이 Job의 스캔 로그를 전부 취소(UNDO ALL)할까?");
+                  if (!ok) return;
+
+                  setUndoing(true);
+                  try {
+                    await jobsFlow.undoAll({ jobId: selectedJobId });
+                    pushToast({ kind: "info", title: "UNDO ALL", message: "전체 취소 완료" });
+                    triggerTotalsFlash?.();
+                    await loadJob(selectedJobId);
+                    await loadTx(selectedJobId);
+                    playScanSuccessBeep?.();
+                  } catch (e) {
+                    playScanErrorBeep?.();
+                    pushToast({ kind: "error", title: "UNDO ALL 실패", message: e?.message || String(e) });
+                  } finally {
+                    setUndoing(false);
+                  }
+                }}
+                style={{
+                  padding: "6px 10px",
+                  borderRadius: 10,
+                  border: "1px solid #e5e7eb",
+                  background: "#fff",
+                  cursor: "pointer",
+                  fontSize: 12,
+                  whiteSpace: "nowrap",
+                }}
+              >
+                (전체취소)
+              </button>
+            </div>
+          </div>
+
+          <div style={{ marginTop: 10, border: "1px solid #e5e7eb", borderRadius: 10, overflow: "hidden" }}>
+            <div style={{ maxHeight: 260, overflow: "auto" }}>
+              {!scanTxLogs.length ? (
+                <div style={{ padding: 12, fontSize: 12, color: "#64748b" }}>
+                  {txLoading ? "불러오는 중..." : "아직 스캔 로그가 없어."}
+                </div>
+              ) : (
+                <table style={{ width: "100%", borderCollapse: "collapse" }}>
+                  <thead>
+                    <tr>
+                      <Th>time</Th>
+                      <Th>type</Th>
+                      <Th align="right">qty</Th>
+                      <Th>location</Th>
+                      <Th>sku</Th>
+                      <Th></Th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {scanTxLogs.map((tx, idx) => {
+                      const t = tx?.createdAt ? new Date(tx.createdAt) : null;
+                      const time = t ? t.toLocaleTimeString() : "-";
+                      const type = tx?.type || tx?.kind || "-";
+                      const qty = tx?.qty ?? tx?.deltaQty ?? "-";
+                      const loc = tx?.locationCode || tx?.location?.code || tx?.locationId || "-";
+                      const sku = tx?.skuCode || tx?.sku?.sku || tx?.sku?.makerCode || tx?.makerCode || tx?.jobItemId || "-";
+                      const undoCount = idx + 1;
+
+                      return (
+                        <tr key={tx.id || idx}>
+                          <Td style={{ fontSize: 12, color: "#64748b" }}>{time}</Td>
+                          <Td style={{ fontSize: 12 }}>{type}</Td>
+                          <Td align="right" style={{ fontSize: 12 }}>{qty}</Td>
+                          <Td style={{ fontSize: 12 }}>{loc}</Td>
+                          <Td style={{ fontSize: 12 }}>{sku}</Td>
+                          <Td align="right">
+                            <button
+                              type="button"
+                              disabled={undoing || loading || !selectedJobId}
+                              onClick={async () => {
+                                warmUpAudioOnce?.();
+                                playScanWarnBeep?.();
+
+                                const msg =
+                                  undoCount === 1
+                                    ? "직전 스캔 1건을 취소할까?"
+                                    : `최근 스캔 ${undoCount}건을 취소(여기까지 연속)할까?`;
+
+                                const ok = window.confirm(msg);
+                                if (!ok) return;
+
+                                setUndoing(true);
+                                try {
+                                  if (undoCount === 1) {
+                                    await jobsFlow.undoLast({ jobId: selectedJobId });
+                                  } else {
+                                    await jobsFlow.undoUntil({ jobId: selectedJobId, txId: tx.id });
+                                  }
+
+                                  pushToast({ kind: "info", title: "UNDO", message: `취소 완료 (${undoCount}건)` });
+                                  triggerTotalsFlash?.();
+                                  await loadJob(selectedJobId);
+                                  await loadTx(selectedJobId);
+                                  playScanSuccessBeep?.();
+                                } catch (e) {
+                                  playScanErrorBeep?.();
+                                  pushToast({ kind: "error", title: "UNDO 실패", message: e?.message || String(e) });
+                                } finally {
+                                  setUndoing(false);
+                                }
+                              }}
+                              style={{
+                                padding: "6px 10px",
+                                borderRadius: 10,
+                                border: "1px solid #e5e7eb",
+                                background: "#fff",
+                                cursor: "pointer",
+                                fontSize: 12,
+                                whiteSpace: "nowrap",
+                              }}
+                              title={undoCount === 1 ? "직전취소" : "여기까지 연속취소"}
+                            >
+                              취소
+                            </button>
+                          </Td>
+                        </tr>
+                      );
+                    })}
+                  </tbody>
+                </table>
+              )}
+            </div>
+          </div>
+        </div>
+
       </div>
     );
   }
@@ -556,7 +795,7 @@ export default function StoreOutboundPage({ pageTitle = "매장 출고", default
                                   await approveExtra(it.id, 1);
                                 } catch (err) {
                                   playScanErrorBeep();
-                                  push({ kind: "error", title: "추가피킹 승인 실패", message: err?.message || String(err) });
+                                  pushToast({ kind: "error", title: "추가피킹 승인 실패", message: err?.message || String(err) });
                                 }
                               }}
                               style={{
@@ -718,12 +957,7 @@ export default function StoreOutboundPage({ pageTitle = "매장 출고", default
               onFocus={() => warmUpAudioOnce()}
             />
 
-            <button
-              type="button"
-              style={primaryBtn}
-              onClick={doScan}
-              disabled={loading || !selectedJobId}
-            >
+            <button type="button" style={primaryBtn} onClick={doScan} disabled={loading || !selectedJobId}>
               스캔 처리
             </button>
           </div>
@@ -755,6 +989,25 @@ export default function StoreOutboundPage({ pageTitle = "매장 출고", default
                     </b>
                   </>
                 ) : null}
+
+                {/* ✅ (추가) 직전취소 */}
+                <button
+                  type="button"
+                  onClick={doUndoLast}
+                  disabled={undoing || loading || !selectedJobId}
+                  style={{
+                    padding: "6px 10px",
+                    borderRadius: 10,
+                    border: "1px solid #e5e7eb",
+                    background: undoing ? "#f1f5f9" : "#fff",
+                    cursor: undoing ? "not-allowed" : "pointer",
+                    fontSize: 12,
+                    whiteSpace: "nowrap",
+                  }}
+                  title="마지막 스캔을 취소(UNDO)"
+                >
+                  (직전취소)
+                </button>
 
                 <button
                   type="button"

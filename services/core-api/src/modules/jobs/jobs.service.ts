@@ -770,5 +770,226 @@ async addItems(jobId: string, dto: any) {
   async deleteJob(jobId: string) {
     await (this.prisma as any).job.delete({ where: { id: jobId } as any });
     return { ok: true };
+    
   }
+
+  async undoLastTx(jobId: string) {
+  return this.prisma.$transaction(async (tx) => {
+    // 1) 아직 undo 안 된 마지막 InventoryTx (이 Job 기준)
+    const lastTx = await (tx as any).inventoryTx.findFirst({
+      where: { jobId, undoneAt: null },
+      orderBy: { createdAt: 'desc' },
+    });
+
+    if (!lastTx) {
+      throw new BadRequestException('되돌릴 스캔/입고 기록이 없어');
+    }
+
+    const absQty = Math.abs(Number(lastTx.qty || 0));
+    if (!absQty) {
+      throw new BadRequestException('수량이 0인 트랜잭션은 되돌릴 수 없어');
+    }
+
+    if (!lastTx.locationId) {
+      throw new BadRequestException('location 없는 트랜잭션은 undo 불가');
+    }
+
+    // ✅ 1-1) "스캔 취소(UNDO)" 정석 규칙:
+    // 같은 SKU+Location에 대해 lastTx 이후(createdAt 더 큰) 트랜잭션이 하나라도 있으면
+    // 순서가 깨지므로 undo 불가 (시간 역순 undo 강제)
+    const newerTx = await (tx as any).inventoryTx.findFirst({
+      where: {
+        skuId: lastTx.skuId,
+        locationId: lastTx.locationId,
+        undoneAt: null,
+        createdAt: { gt: lastTx.createdAt },
+      },
+      select: { id: true, type: true, qty: true, createdAt: true },
+      orderBy: { createdAt: 'asc' },
+    });
+
+    if (newerTx) {
+      throw new BadRequestException(
+        '이 스캔 이후 동일 SKU/로케이션에서 다른 작업이 진행되어 취소할 수 없어. (최근 작업부터 먼저 취소해야 함)',
+      );
+    }
+
+    // 2) 재고 반대로 복구
+    // out(-qty) → +absQty / in(+qty) → -absQty
+    const delta = lastTx.qty < 0 ? +absQty : -absQty;
+
+    // inventory 현재값
+    const invRow = await (tx as any).inventory.findUnique({
+      where: {
+        skuId_locationId: {
+          skuId: lastTx.skuId,
+          locationId: lastTx.locationId,
+        },
+      },
+      select: { qty: true },
+    });
+
+    const before = Number(invRow?.qty ?? 0);
+    const after = before + delta;
+
+    // ✅ 음수 방어는 유지하되, 메시지를 더 명확하게
+    if (after < 0) {
+      throw new BadRequestException(
+        '재고가 이미 다른 작업으로 사용되어 취소할 수 없어. (해당 SKU/로케이션 재고 부족)',
+      );
+    }
+
+    await (tx as any).inventory.upsert({
+      where: {
+        skuId_locationId: {
+          skuId: lastTx.skuId,
+          locationId: lastTx.locationId,
+        },
+      },
+      create: {
+        skuId: lastTx.skuId,
+        locationId: lastTx.locationId,
+        qty: after,
+      },
+      update: {
+        qty: { increment: delta },
+      },
+    });
+
+    // 3) jobItem.qtyPicked 되돌리기
+    if (lastTx.jobItemId) {
+      const item = await (tx as any).jobItem.findUnique({
+        where: { id: lastTx.jobItemId },
+        select: {
+          id: true,
+          qtyPicked: true,
+          extraPickedQty: true,
+          qtyPlanned: true,
+        },
+      });
+
+      if (item) {
+        const nextPicked = Math.max(0, Number(item.qtyPicked) - absQty);
+        await (tx as any).jobItem.update({
+          where: { id: item.id },
+          data: { qtyPicked: nextPicked },
+        });
+      }
+    }
+
+    // 4) undo용 InventoryTx 생성 (감사 로그)
+    const undoTx = await (tx as any).inventoryTx.create({
+      data: {
+        type: 'undo',
+        qty: delta,
+        skuId: lastTx.skuId,
+        locationId: lastTx.locationId,
+        jobId: lastTx.jobId,
+        jobItemId: lastTx.jobItemId,
+        isForced: true,
+        beforeQty: before,
+        afterQty: after,
+      },
+    });
+
+    // 5) 원본 tx에 undone 표시
+    await (tx as any).inventoryTx.update({
+      where: { id: lastTx.id },
+      data: {
+        undoneAt: new Date(),
+        undoneTxId: undoTx.id,
+      },
+    });
+
+    // 6) job done 상태 되돌리기(필요 시)
+    const job = await (tx as any).job.findUnique({
+      where: { id: jobId },
+      select: { status: true },
+    });
+
+    if (job?.status === 'done') {
+      const items = await (tx as any).jobItem.findMany({
+        where: { jobId },
+        select: { qtyPicked: true, qtyPlanned: true },
+      });
+
+      const stillDone =
+        items.length > 0 &&
+        items.every((it: any) => Number(it.qtyPicked) >= Number(it.qtyPlanned));
+
+      if (!stillDone) {
+        await (tx as any).job.update({
+          where: { id: jobId },
+          data: { status: 'open', doneAt: null },
+        });
+      }
+    }
+
+    return {
+      ok: true,
+      undoneTxId: lastTx.id,
+      undoAppliedTxId: undoTx.id,
+      delta,
+    };
+  });
 }
+  // ================================
+  // 🔽 UNDO 확장 (추가)
+  // ================================
+
+  // job 기준 InventoryTx 목록
+  async listInventoryTx(jobId: string) {
+    return (this.prisma as any).inventoryTx.findMany({
+      where: { jobId, undoneAt: null },
+      orderBy: { createdAt: 'desc' },
+    });
+  }
+
+  // 최근 tx부터 특정 tx까지 연속 undo
+  async undoUntilTx(jobId: string, targetTxId: string) {
+    const txs = await (this.prisma as any).inventoryTx.findMany({
+      where: { jobId, undoneAt: null },
+      orderBy: { createdAt: 'desc' },
+      select: { id: true } as any,
+    });
+
+    const idx = (txs || []).findIndex((t: any) => t.id === targetTxId);
+    if (idx < 0) {
+      throw new BadRequestException('해당 tx는 undo 대상이 아니야');
+    }
+
+    let undoneCount = 0;
+    for (let i = 0; i <= idx; i++) {
+      await this.undoLastTx(jobId);
+      undoneCount += 1;
+    }
+
+    return { ok: true, undoneCount, untilTxId: targetTxId };
+  }
+
+  // job 전체 undo
+  async undoAllTx(jobId: string) {
+    let undoneCount = 0;
+
+    while (true) {
+      const last = await (this.prisma as any).inventoryTx.findFirst({
+        where: { jobId, undoneAt: null },
+        orderBy: { createdAt: 'desc' },
+        select: { id: true } as any,
+      });
+
+      if (!last) break;
+
+      await this.undoLastTx(jobId);
+      undoneCount += 1;
+
+      if (undoneCount > 5000) {
+        throw new BadRequestException('undoAll safety stop');
+      }
+    }
+
+    return { ok: true, undoneCount };
+  }
+
+}
+  

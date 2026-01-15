@@ -82,6 +82,10 @@ model InventoryTx {
   jobId     String?
   jobItemId String?
 
+  // ✅ undo용 (추가)
+  undoneAt   DateTime?
+  undoneTxId String?
+
   createdAt DateTime @default(now())
 
   sku      Sku       @relation(fields: [skuId], references: [id], onDelete: Cascade)
@@ -96,6 +100,9 @@ model InventoryTx {
   @@index([isForced], map: "InventoryTx_isForced_idx")
   @@index([jobId], map: "InventoryTx_jobId_idx")
   @@index([jobItemId], map: "InventoryTx_jobItemId_idx")
+   // ✅ undo 조회 빨라짐 (추가)
+  @@index([undoneAt], map: "InventoryTx_undoneAt_idx")
+  @@index([undoneTxId], map: "InventoryTx_undoneTxId_idx")
 }
 
 model Job {
