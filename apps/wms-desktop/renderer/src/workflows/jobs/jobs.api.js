@@ -112,12 +112,6 @@ export const jobsApi = {
     return http.post(`/jobs/${jobId}/receive`, body || {});
   },
 
-  // ✅ 마지막 스캔 취소(UNDO)
-  undoLast: async (jobId) => {
-    if (!jobId) throw new Error("jobId is required");
-    return http.post(`/jobs/${jobId}/undo-last`, {});
-  },
-
   approveExtra: async (jobId, { jobItemId, qty } = {}) => {
     if (!jobId) throw new Error("jobId is required");
     if (!jobItemId) throw new Error("jobItemId is required");

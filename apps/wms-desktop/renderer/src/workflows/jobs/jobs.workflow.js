@@ -408,11 +408,7 @@ export const jobsFlow = {
     return Array.isArray(res) ? res : (res?.data ?? res ?? []);
   },
 
-  undoLast: async ({ jobId }) => {
-    if (!jobId) throw new Error("jobId is required");
-    return jobsApi.undoLast(jobId);
-  },
-
+ 
   undoUntil: async ({ jobId, txId }) => {
     if (!jobId) throw new Error("jobId is required");
     if (!txId) throw new Error("txId is required");
