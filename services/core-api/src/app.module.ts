@@ -12,22 +12,22 @@ import { ImportsModule } from './modules/imports/imports.module';
 import { JobsModule } from './modules/jobs/jobs.module';
 import { ExportsModule } from './modules/exports/exports.module';
 
-/**
- * AppModule
- * - ConfigModule 전역 로드 (env)
- * - Prisma/Inventory/Imports/Jobs/Exports 모듈 조립
- */
+// ✅ Sales (추가)
+import { SalesModule } from './modules/sales/sales.module';
+
 @Module({
   imports: [
     ConfigModule.forRoot({ isGlobal: true }),
     PrismaModule,
 
-    InventoryModule, // InventoryService를 exports 하고 있어야 함
-    ImportsModule,   // 컨트롤러/서비스/어댑터 등록
+    InventoryModule,
+    ImportsModule,
 
-    // ✅ 작업지시 + EPMS Export
     JobsModule,
     ExportsModule,
+
+    // ✅ 매출 업로드/조회
+    SalesModule,
   ],
   controllers: [],
   providers: [],

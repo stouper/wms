@@ -176,3 +176,25 @@ model JobParcel {
 
   job Job @relation(fields: [jobId], references: [id], onDelete: Cascade)
 }
+model SalesRaw {
+  id         String   @id @default(cuid())
+
+  // 업로드 추적 (강추)
+  uploadedAt DateTime @default(now())
+  sourceKey  String?
+
+  // 매장별 매출에 필요한 최소 컬럼
+  saleDate   DateTime // 일 단위(시간은 00:00:00로 저장 권장)
+  storeCode  String
+  storeName  String?
+  productType String? // 상품타입 (예: 신발, 지비츠, 기타)
+  itemCode    String? // 단품코드
+  codeName    String? // 코드명
+
+  qty        Int      @default(0)
+  amount     Int      // 원 단위 Int
+
+  // 조회 성능용 인덱스 (필수급)
+  @@index([saleDate])
+  @@index([storeCode, saleDate])
+}
