@@ -1,5 +1,5 @@
 // workflows/sales/sales.workflow.js
-import { uploadSalesExcel } from "./sales.api";
+import { uploadSalesExcel, fetchSalesByStore } from "./sales.api";
 
 export async function runSalesImport({ file, sourceKey, onProgress }) {
   onProgress?.({ stage: "validating" });
@@ -9,5 +9,12 @@ export async function runSalesImport({ file, sourceKey, onProgress }) {
   const result = await uploadSalesExcel({ file, sourceKey });
 
   onProgress?.({ stage: "done", result });
+  return result;
+}
+
+export async function runSalesByStore({ from, to, onProgress }) {
+  onProgress?.({ stage: "loading-summary" });
+  const result = await fetchSalesByStore({ from, to });
+  onProgress?.({ stage: "done-summary", result });
   return result;
 }
