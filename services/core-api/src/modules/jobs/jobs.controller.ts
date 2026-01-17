@@ -1,4 +1,5 @@
 import { Body, Controller, Delete, Get, Param, Patch, Post, Query, BadRequestException } from '@nestjs/common';
+import { JobType } from '@prisma/client';
 import { JobsService } from './jobs.service';
 import { CreateJobDto } from './dto/create-job.dto';
 import { AddItemsDto } from './dto/add-items.dto';
@@ -20,6 +21,7 @@ export class JobsController {
     @Query('date') date?: string,
     @Query('status') status?: string,
     @Query('storeCode') storeCode?: string,
+    @Query('type') type?: JobType,
   ) {
     const s = (status ?? '').toString().trim().toLowerCase();
 
@@ -35,6 +37,7 @@ export class JobsController {
       date,
       status: (normalized || undefined) as any,
       storeCode: sc,
+      type,
     } as any);
   }
 
@@ -102,23 +105,23 @@ export class JobsController {
     return this.jobs.listInventoryTx(id);
   }
 
-  // ✅ 최근 tx부터 특정 tx까지 연속 undo (body: { txId })
+  // ✅ 최근 tx부터 특정 tx까지 연속 undo (body: { txId, operatorId })
   @Post(':id/undo')
-  undoUntil(@Param('id') id: string, @Body() body: { txId?: string }) {
+  undoUntil(@Param('id') id: string, @Body() body: { txId?: string; operatorId?: string }) {
     const txId = (body?.txId ?? '').toString().trim();
     if (!txId) throw new BadRequestException('txId is required');
-    return this.jobs.undoUntilTx(id, txId);
+    return this.jobs.undoUntilTx(id, txId, body?.operatorId);
   }
 
   // ✅ job 전체 undo (최근 tx부터 끝까지)
   @Post(':id/undo-all')
-  undoAll(@Param('id') id: string) {
-    return this.jobs.undoAllTx(id);
+  undoAll(@Param('id') id: string, @Body() body?: { operatorId?: string }) {
+    return this.jobs.undoAllTx(id, body?.operatorId);
   }
 
   @Post(':id/undo-last')
-  undoLast(@Param('id') id: string) {
-    return this.jobs.undoLastTx(id);
+  undoLast(@Param('id') id: string, @Body() body?: { operatorId?: string }) {
+    return this.jobs.undoLastTx(id, body?.operatorId);
   }
 
   // ✅ (호환) Desktop: POST /jobs/:jobId/approve-extra  (body: { jobItemId, qty })

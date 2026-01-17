@@ -16,4 +16,9 @@ export class ScanDto {
   @IsOptional()
   @IsBoolean()
   force?: boolean; // 409 이후 승인범위 내 재시도용
+
+  // ✅ 작업자 ID (MVP: 필수 아님, 프론트에서 보내면 저장)
+  @IsOptional()
+  @IsString()
+  operatorId?: string;
 }

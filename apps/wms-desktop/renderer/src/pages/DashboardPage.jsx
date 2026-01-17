@@ -918,14 +918,18 @@ function buildEpmsOutCsvWithHeader({ jobs, workDateYmd }) {
 
   // ✅ 출고(1)/반품(2) 판별
   function jobToEpmsType(job) {
-    const title = String(job?.title || "").toLowerCase(); // [out] / [in] 포함
-    const memo = String(job?.memo || "").toLowerCase(); // excel=...; kind=inbound/outbound
+    const jobType = job?.type;
 
-    // 1순위: memo의 kind
+    // 1순위: Job.type 기준
+    if (jobType === 'RETURN' || jobType === 'INBOUND') return 2;
+    if (jobType === 'OUTBOUND') return 1;
+
+    // fallback: memo/title 기반 (하위 호환)
+    const title = String(job?.title || "").toLowerCase();
+    const memo = String(job?.memo || "").toLowerCase();
+
     if (memo.includes("kind=inbound")) return 2;
     if (memo.includes("kind=outbound")) return 1;
-
-    // 2순위: title prefix([IN]) / 키워드
     if (title.includes("[in]") || title.includes("반품") || title.includes("입고")) return 2;
 
     return 1;

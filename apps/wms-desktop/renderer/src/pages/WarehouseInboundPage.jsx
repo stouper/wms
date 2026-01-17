@@ -225,10 +225,9 @@ export default function WarehouseInboundPage({ pageTitle = "창고 입고(반품
       const listAll = await jobsFlow.listJobs();
       const normalized = (Array.isArray(listAll) ? listAll : []).map((x) => unwrapJob(x) || x).filter(Boolean);
 
-      // ✅ 창고입고(반품): "입고" 또는 "반품"만
+      // ✅ Job.type 기준 필터링: RETURN만
       const list = normalized.filter((j) => {
-        const t = j.title || "";
-        return t.includes("입고") || t.includes("반품");
+        return j.type === 'RETURN';
       });
 
       setCreated(list);

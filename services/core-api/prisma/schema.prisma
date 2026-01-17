@@ -7,8 +7,13 @@ datasource db {
   url      = env("DATABASE_URL")
 }
 
-
-
+enum JobType {
+  INBOUND
+  OUTBOUND
+  RETURN
+  MOVE
+  ADJUST
+}
 
 model Store {
   id        String     @id @default(cuid())
@@ -86,6 +91,9 @@ model InventoryTx {
   undoneAt   DateTime?
   undoneTxId String?
 
+  // ✅ 작업자 ID (MVP: 로그인 없이 단순 기록용)
+  operatorId String?
+
   createdAt DateTime @default(now())
 
   sku      Sku       @relation(fields: [skuId], references: [id], onDelete: Cascade)
@@ -103,6 +111,7 @@ model InventoryTx {
    // ✅ undo 조회 빨라짐 (추가)
   @@index([undoneAt], map: "InventoryTx_undoneAt_idx")
   @@index([undoneTxId], map: "InventoryTx_undoneTxId_idx")
+  @@index([operatorId], map: "InventoryTx_operatorId_idx")
 }
 
 model Job {
@@ -115,6 +124,12 @@ model Job {
   // 'open' | 'picking' | 'done' | 'cancelled'
   status    String   @default("open")
 
+  // Job 타입 (입고/출고/반품/이동/조정)
+  type      JobType  @default(OUTBOUND)
+
+  // ✅ 작업자 ID (MVP: 로그인 없이 단순 기록용)
+  operatorId String?
+
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
   doneAt    DateTime?
@@ -125,6 +140,8 @@ model Job {
 
   @@index([storeCode], map: "Job_storeCode_idx")
   @@index([doneAt], map: "Job_doneAt_idx")
+  @@index([type], map: "Job_type_idx")
+  @@index([operatorId], map: "Job_operatorId_idx")
 }
 
 model JobItem {

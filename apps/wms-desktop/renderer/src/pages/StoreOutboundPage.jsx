@@ -230,10 +230,9 @@ export default function StoreOutboundPage({ pageTitle = "매장 출고", default
       const listAll = await jobsFlow.listJobs();
       const normalized = (Array.isArray(listAll) ? listAll : []).map((x) => unwrapJob(x) || x).filter(Boolean);
 
-      // ✅ 기존 로직 유지: title에 "출고" 포함, "입고" 제외
+      // ✅ Job.type 기준 필터링: OUTBOUND만
       const list = normalized.filter((j) => {
-        const t = j.title || "";
-        return t.includes("출고") && !t.includes("입고");
+        return j.type === 'OUTBOUND';
       });
 
       setCreated(list);

@@ -5,7 +5,7 @@ import {
   NotFoundException,
 } from '@nestjs/common';
 import { PrismaService } from '../../prisma/prisma.service';
-import { Prisma } from '@prisma/client';
+import { JobType, Prisma } from '@prisma/client';
 import * as ExcelJS from 'exceljs';
 
 @Injectable()
@@ -67,16 +67,20 @@ export class JobsService {
 
     const title = this.norm(dto?.title) || '작업';
     const memo = this.norm(dto?.memo);
+    const type = dto?.type ?? JobType.OUTBOUND;
+    const operatorId = this.norm(dto?.operatorId) || null;
 
     const job = await this.prisma.job.create({
       data: {
         storeCode,
         title,
         memo: memo || null,
+        type,
         status: 'open',
         allowOverpick: Boolean(dto?.allowOverpick),
+        operatorId,
       } as any,
-      select: { id: true, storeCode: true, title: true, memo: true, status: true, allowOverpick: true } as any,
+      select: { id: true, storeCode: true, title: true, memo: true, type: true, status: true, allowOverpick: true, operatorId: true } as any,
     } as any);
 
     return { ok: true, ...job };
@@ -85,6 +89,7 @@ export class JobsService {
   async listJobs(params?: {
   storeCode?: string;
   status?: string;
+  type?: JobType;
 }) {
   const where: any = {};
 
@@ -106,6 +111,11 @@ export class JobsService {
   ) {
     where.status = params.status;
   }
+
+  // type 필터 (옵션)
+  if (params?.type) {
+    where.type = params.type;
+  }
 const rows = await this.prisma.job.findMany({
   where,
   orderBy: { createdAt: "desc" },
@@ -114,6 +124,7 @@ const rows = await this.prisma.job.findMany({
     storeCode: true,
     title: true,
     memo: true,
+    type: true,
     status: true,
     allowOverpick: true,
     createdAt: true,
@@ -285,6 +296,7 @@ async addItems(jobId: string, dto: any) {
       locationCode?: string;
       force?: boolean;
       forceReason?: string;
+      operatorId?: string;
     },
   ) {
     const job = await this.prisma.job.findUnique({
@@ -292,6 +304,11 @@ async addItems(jobId: string, dto: any) {
       include: { items: true } as any,
     } as any);
     if (!job) throw new NotFoundException(`Job not found: ${jobId}`);
+
+    // ✅ Job type 검증: scan은 OUTBOUND만 허용
+    if ((job as any).type !== JobType.OUTBOUND) {
+      throw new ConflictException(`Job type mismatch: expected OUTBOUND, got ${(job as any).type}`);
+    }
 
     const allowOverpick = Boolean((job as any).allowOverpick);
 
@@ -462,6 +479,7 @@ async addItems(jobId: string, dto: any) {
           jobItemId: item.id,
           isForced: force,
           forcedReason: force ? forceReason || null : null,
+          operatorId: this.norm(dto.operatorId) || null,
         } as any,
       });
 
@@ -571,6 +589,7 @@ async addItems(jobId: string, dto: any) {
       skuCode?: string;
       qty?: number;
       locationCode?: string;
+      operatorId?: string;
     },
   ) {
     const job = await this.prisma.job.findUnique({
@@ -578,6 +597,12 @@ async addItems(jobId: string, dto: any) {
       include: { items: true } as any,
     } as any);
     if (!job) throw new NotFoundException(`Job not found: ${jobId}`);
+
+    // ✅ Job type 검증: receive는 INBOUND 또는 RETURN만 허용
+    const jobType = (job as any).type;
+    if (jobType !== JobType.INBOUND && jobType !== JobType.RETURN) {
+      throw new ConflictException(`Job type mismatch: expected INBOUND/RETURN, got ${jobType}`);
+    }
 
     const raw = this.norm(dto?.value || dto?.barcode || dto?.skuCode);
     if (!raw) throw new BadRequestException('value/barcode/skuCode is required');
@@ -688,6 +713,7 @@ async addItems(jobId: string, dto: any) {
           jobId,
           jobItemId: item.id,
           isForced: false,
+          operatorId: this.norm(dto?.operatorId) || null,
         } as any,
       });
 
@@ -773,7 +799,7 @@ async addItems(jobId: string, dto: any) {
     
   }
 
-  async undoLastTx(jobId: string) {
+  async undoLastTx(jobId: string, operatorId?: string) {
   return this.prisma.$transaction(async (tx) => {
     // 1) 아직 undo 안 된 마지막 InventoryTx (이 Job 기준)
     const lastTx = await (tx as any).inventoryTx.findFirst({
@@ -889,6 +915,7 @@ async addItems(jobId: string, dto: any) {
         isForced: true,
         beforeQty: before,
         afterQty: after,
+        operatorId: this.norm(operatorId) || null,
       },
     });
 
@@ -946,7 +973,7 @@ async addItems(jobId: string, dto: any) {
   }
 
   // 최근 tx부터 특정 tx까지 연속 undo
-  async undoUntilTx(jobId: string, targetTxId: string) {
+  async undoUntilTx(jobId: string, targetTxId: string, operatorId?: string) {
     const txs = await (this.prisma as any).inventoryTx.findMany({
       where: { jobId, undoneAt: null },
       orderBy: { createdAt: 'desc' },
@@ -960,7 +987,7 @@ async addItems(jobId: string, dto: any) {
 
     let undoneCount = 0;
     for (let i = 0; i <= idx; i++) {
-      await this.undoLastTx(jobId);
+      await this.undoLastTx(jobId, operatorId);
       undoneCount += 1;
     }
 
@@ -968,7 +995,7 @@ async addItems(jobId: string, dto: any) {
   }
 
   // job 전체 undo
-  async undoAllTx(jobId: string) {
+  async undoAllTx(jobId: string, operatorId?: string) {
     let undoneCount = 0;
 
     while (true) {
@@ -980,7 +1007,7 @@ async addItems(jobId: string, dto: any) {
 
       if (!last) break;
 
-      await this.undoLastTx(jobId);
+      await this.undoLastTx(jobId, operatorId);
       undoneCount += 1;
 
       if (undoneCount > 5000) {

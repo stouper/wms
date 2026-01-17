@@ -1,5 +1,6 @@
 // renderer/src/workflows/jobs/jobs.api.js
 import { http } from "../_common/http";
+import { getOperatorId } from "../_common/operator";
 
 function qs(obj = {}) {
   const p = new URLSearchParams();
@@ -32,7 +33,7 @@ function kindPayload(kindKorean) {
     kind: k, // "출고" | "반품"
     jobKind: k,
     direction: isIn ? "IN" : "OUT",
-    type: isIn ? "IN" : "OUT",
+    type: isIn ? "RETURN" : "OUTBOUND",
   };
 }
 
@@ -79,6 +80,7 @@ export const jobsApi = {
 
   // ✅ kind/type/direction 받을 수 있게 확장
   create: async ({ storeCode, title, memo, kind, jobKind, type, direction } = {}) => {
+    const operatorId = getOperatorId();
     return http.post(`/jobs`, {
       storeCode,
       title,
@@ -87,6 +89,7 @@ export const jobsApi = {
       ...(jobKind ? { jobKind } : {}),
       ...(type ? { type } : {}),
       ...(direction ? { direction } : {}),
+      ...(operatorId ? { operatorId } : {}),
     });
   },
 
@@ -103,13 +106,21 @@ export const jobsApi = {
   // ✅ 출고 스캔(피킹)
   scan: async (jobId, body) => {
     if (!jobId) throw new Error("jobId is required");
-    return http.post(`/jobs/${jobId}/items/scan`, body || {});
+    const operatorId = getOperatorId();
+    return http.post(`/jobs/${jobId}/items/scan`, {
+      ...(body || {}),
+      ...(operatorId ? { operatorId } : {}),
+    });
   },
 
   // ✅ 입고/반품 수령(= IN 처리)
   receive: async (jobId, body) => {
     if (!jobId) throw new Error("jobId is required");
-    return http.post(`/jobs/${jobId}/receive`, body || {});
+    const operatorId = getOperatorId();
+    return http.post(`/jobs/${jobId}/receive`, {
+      ...(body || {}),
+      ...(operatorId ? { operatorId } : {}),
+    });
   },
 
   approveExtra: async (jobId, { jobItemId, qty } = {}) => {
@@ -186,15 +197,25 @@ export const jobsApi = {
   },
 
   undoLast: async (jobId) => {
-    return http.post(`/jobs/${jobId}/undo-last`, {});
+    const operatorId = getOperatorId();
+    return http.post(`/jobs/${jobId}/undo-last`, {
+      ...(operatorId ? { operatorId } : {}),
+    });
   },
 
   undoUntil: async (jobId, txId) => {
-    return http.post(`/jobs/${jobId}/undo`, { txId });
+    const operatorId = getOperatorId();
+    return http.post(`/jobs/${jobId}/undo`, {
+      txId,
+      ...(operatorId ? { operatorId } : {}),
+    });
   },
 
   undoAll: async (jobId) => {
-    return http.post(`/jobs/${jobId}/undo-all`, {});
+    const operatorId = getOperatorId();
+    return http.post(`/jobs/${jobId}/undo-all`, {
+      ...(operatorId ? { operatorId } : {}),
+    });
   },
 
 };
