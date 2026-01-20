@@ -15,6 +15,9 @@ import { ExportsModule } from './modules/exports/exports.module';
 // ✅ Sales (추가)
 import { SalesModule } from './modules/sales/sales.module';
 
+// ✅ CJ API (추가)
+import { CjApiModule } from './modules/cj-api/cj-api.module';
+
 @Module({
   imports: [
     ConfigModule.forRoot({ isGlobal: true }),
@@ -28,6 +31,9 @@ import { SalesModule } from './modules/sales/sales.module';
 
     // ✅ 매출 업로드/조회
     SalesModule,
+
+    // ✅ CJ 대한통운 택배 API
+    CjApiModule,
   ],
   controllers: [],
   providers: [],

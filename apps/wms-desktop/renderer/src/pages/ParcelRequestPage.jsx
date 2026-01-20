@@ -1,46 +1,98 @@
 // apps/wms-desktop/renderer/src/pages/ParcelRequestPage.jsx
 
 import React, { useMemo, useRef, useState } from "react";
-import { runParcelRequest } from "../workflows/parcelRequest/parcelRequest.workflow";
+import { runParcelRequest, parcelShipMode } from "../workflows/parcelRequest/parcelRequest.workflow";
 import { getApiBase } from "../workflows/_common/api";
+import { primaryBtn } from "../ui/styles";
+import { useToasts } from "../lib/toasts.jsx";
 
 export default function ParcelRequestPage() {
   const apiBase = getApiBase();
   const fileRef = useRef(null);
+  const { push, ToastHost } = useToasts();
 
   const [fileName, setFileName] = useState("");
   const [rows, setRows] = useState([]);
   const [error, setError] = useState("");
+  const [creating, setCreating] = useState(false);
 
   const sample = useMemo(() => rows.slice(0, 50), [rows]);
 
   async function onPickFile(e) {
-  setError("");
-  const f = e.target.files?.[0];
-  if (!f) return;
-  setFileName(f.name);
+    setError("");
+    const f = e.target.files?.[0];
+    if (!f) return;
+    setFileName(f.name);
 
-  const res = await runParcelRequest({ file: f });
+    const res = await runParcelRequest({ file: f });
 
-  if (!res.ok) {
-    setRows([]);
-    setError(res.error);
-    return;
+    if (!res.ok) {
+      setRows([]);
+      setError(res.error);
+      return;
+    }
+
+    setRows(res.data.rows || []);
   }
 
-  setRows(res.data.rows || []);
-}
+  async function onCreateJobs() {
+    if (!rows || rows.length === 0) {
+      push({ kind: "warn", title: "데이터 없음", message: "먼저 엑셀 파일을 업로드해주세요" });
+      return;
+    }
+
+    setCreating(true);
+    try {
+      const result = await parcelShipMode.createJobsFromPreview({
+        rows,
+        fileName,
+      });
+
+      if (!result?.ok) {
+        throw new Error(result?.error || "작지 생성 실패");
+      }
+
+      push({
+        kind: "success",
+        title: "작지 생성 완료",
+        message: `${result.createdCount}개의 택배 작지가 생성되었습니다`,
+      });
+
+      // 파일 입력 초기화
+      setRows([]);
+      setFileName("");
+      setError("");
+      if (fileRef.current) fileRef.current.value = "";
+    } catch (e) {
+      push({ kind: "error", title: "작지 생성 실패", message: e?.message || String(e) });
+    } finally {
+      setCreating(false);
+    }
+  }
 
   return (
     <div style={{ padding: 16 }}>
+      <ToastHost />
+
       <h1 style={{ margin: 0 }}>택배 요청</h1>
       <div style={{ marginTop: 8, opacity: 0.8, fontSize: 13 }}>
-        온라인 주문서(택배요청) 엑셀을 업로드해서 내용을 미리보기 합니다.
+        온라인 주문서(택배요청) 엑셀을 업로드해서 내용을 미리보기하고 작지를 생성합니다.
       </div>
 
-      <div style={{ marginTop: 12, display: "flex", gap: 8, alignItems: "center" }}>
+      <div style={{ marginTop: 12, display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
         <input ref={fileRef} type="file" accept=".xlsx,.xls" onChange={onPickFile} />
         <div style={{ fontSize: 12, opacity: 0.8 }}>{fileName ? `선택: ${fileName}` : ""}</div>
+
+        {rows.length > 0 && (
+          <button
+            type="button"
+            style={{ ...primaryBtn, marginLeft: "auto" }}
+            onClick={onCreateJobs}
+            disabled={creating}
+          >
+            {creating ? "작지 생성 중..." : `작지 생성 (${rows.length}건)`}
+          </button>
+        )}
       </div>
 
       {error ? (
@@ -98,7 +150,8 @@ export default function ParcelRequestPage() {
       </div>
 
       <div style={{ marginTop: 12, fontSize: 12, opacity: 0.75 }}>
-        다음 단계: 이 택배요청 rows를 “출고 Job”으로 변환해서 백엔드로 생성(작지 생성) 연결.
+        "작지 생성" 버튼을 누르면 주문번호별로 출고 Job과 택배 정보(JobParcel)가 생성됩니다.
+        생성된 작지는 "매장 출고" 페이지에서 확인하고 스캔할 수 있습니다.
       </div>
     </div>
   );

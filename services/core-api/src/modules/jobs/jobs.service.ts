@@ -142,6 +142,7 @@ const rows = await this.prisma.job.findMany({
         },
       },
     },
+    parcel: true,
   },
 });
 
@@ -210,22 +211,23 @@ async addItems(jobId: string, dto: any) {
       );
     }
 
-    // ✅ makerCode 기준 SKU 찾기
+    // ✅ SKU 찾기: makerCode 또는 sku 필드로 검색
     let sku: any = await this.prisma.sku.findFirst({
-      where: { makerCode: maker } as any,
+      where: {
+        OR: [
+          { makerCode: maker } as any,
+          { sku: maker } as any,
+        ],
+      } as any,
     } as any);
 
-    // ✅ sku unique는 sku 필드이므로 skuCode 없으면 maker 기반으로 만들어줌
-    const skuCode = String(row?.skuCode ?? "").trim() ||
-      `UNASSIGNED-${maker}-${Date.now()}-${Math.random().toString(16).slice(2, 8)}`;
-
+    // ✅ SKU가 없으면 에러 발생 (자동 생성 금지)
     if (!sku) {
-      const code = skuCode.toUpperCase().trim();
-      sku = await (this.prisma as any).sku.upsert({
-        where: { sku: code } as any,
-        update: { makerCode: maker, name } as any,
-        create: { sku: code, makerCode: maker, name } as any,
-      } as any);
+      throw new BadRequestException(
+        `SKU를 찾을 수 없습니다: "${maker}"\n` +
+        `SKU 테이블에 sku 또는 makerCode가 "${maker}"인 레코드가 없습니다.\n` +
+        `Prisma Studio에서 SKU를 먼저 등록해주세요.`
+      );
     } else {
       // 기존 sku에 maker/name 없을 때만 보강
       const patch: any = {};
@@ -774,11 +776,22 @@ async addItems(jobId: string, dto: any) {
     const job = await this.prisma.job.findUnique({ where: { id: jobId } as any } as any);
     if (!job) throw new NotFoundException(`Job not found: ${jobId}`);
 
-    const payload = dto || {};
-    const row = await (this.prisma as any).parcel.upsert({
+    const data = {
+      orderNo: dto.orderNo || null,
+      recipientName: dto.recipientName,
+      phone: dto.phone,
+      zip: dto.zip || null,
+      addr1: dto.addr1,
+      addr2: dto.addr2 || null,
+      memo: dto.memo || null,
+      carrierCode: dto.carrierCode || null,
+      waybillNo: dto.waybillNo || null,
+    };
+
+    const row = await (this.prisma as any).jobParcel.upsert({
       where: { jobId } as any,
-      create: { jobId, payload } as any,
-      update: { payload } as any,
+      create: { jobId, ...data } as any,
+      update: data as any,
     });
 
     return { ok: true, row };

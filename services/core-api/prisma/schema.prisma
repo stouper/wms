@@ -39,25 +39,28 @@ model Location {
 }
 
 model Sku {
-  id        String  @id @default(cuid())
-  sku       String  @unique          // ✅ “SKU 코드”는 이 필드
-  makerCode String?
-  name      String?
-  productType String @default("SHOES")
+  id          String  @id @default(cuid())
+  sku         String  @unique // SKU 코드
+  makerCode   String?
+  name        String?
+  productType String  @default("SHOES")
 
+  // ✅ [추가] 별도 바코드 (포장지 바코드 등)
+  barcode String?
 
   inventories  Inventory[]
   inventoryTxs InventoryTx[]
   jobItems     JobItem[]
 
   @@index([makerCode], map: "Sku_makerCode_idx")
+  @@index([barcode], map: "Sku_barcode_idx")
 }
 
 model Inventory {
-  id         String   @id @default(cuid())
+  id         String @id @default(cuid())
   skuId      String
   locationId String
-  qty        Int      @default(0)
+  qty        Int    @default(0)
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
@@ -71,28 +74,34 @@ model Inventory {
 }
 
 model InventoryTx {
-  id         String   @id @default(cuid())
-  type       String   // 'in' | 'out' | 'move' | 'adjust' 등
+  id         String  @id @default(cuid())
+  type       String // 'in' | 'out' | 'move' | 'adjust' 등
   qty        Int
   skuId      String
   locationId String?
 
-  // ✅ 강제출고(0유지)용 로그
+  // 강제출고(0유지)용 로그
   isForced     Boolean @default(false)
   forcedReason String?
   beforeQty    Int?
   afterQty     Int?
 
-  // ✅ 추적용(있으면 진짜 편함)
+  // 추적용
   jobId     String?
   jobItemId String?
 
-  // ✅ undo용 (추가)
+  // undo용
   undoneAt   DateTime?
   undoneTxId String?
 
-  // ✅ 작업자 ID (MVP: 로그인 없이 단순 기록용)
+  // 작업자 ID (MVP: 로그인 없이 단순 기록용)
   operatorId String?
+
+  // ✅ [추가] 거래 메모 (수동 조정 사유 등)
+  note String?
+
+  // ✅ [추가] 스캔 디바이스 ID (터미널 추적)
+  deviceId String?
 
   createdAt DateTime @default(now())
 
@@ -108,31 +117,42 @@ model InventoryTx {
   @@index([isForced], map: "InventoryTx_isForced_idx")
   @@index([jobId], map: "InventoryTx_jobId_idx")
   @@index([jobItemId], map: "InventoryTx_jobItemId_idx")
-   // ✅ undo 조회 빨라짐 (추가)
   @@index([undoneAt], map: "InventoryTx_undoneAt_idx")
   @@index([undoneTxId], map: "InventoryTx_undoneTxId_idx")
   @@index([operatorId], map: "InventoryTx_operatorId_idx")
+  // ✅ [추가] UNDO 성능 개선용 복합 인덱스
+  @@index([jobId, createdAt(sort: Desc)], map: "InventoryTx_jobId_createdAt_idx")
 }
 
 model Job {
-  id        String   @id @default(cuid())
-  storeCode String   // 매장코드(숫자) 그대로 저장
+  id            String  @id @default(cuid())
+  storeCode     String // 매장코드(숫자) 그대로 저장
   allowOverpick Boolean @default(false)
-  title     String?
-  memo      String?
+  title         String?
+  memo          String?
+  cjShipment    CjShipment?
 
   // 'open' | 'picking' | 'done' | 'cancelled'
-  status    String   @default("open")
+  status String @default("open")
 
   // Job 타입 (입고/출고/반품/이동/조정)
-  type      JobType  @default(OUTBOUND)
+  type JobType @default(OUTBOUND)
 
-  // ✅ 작업자 ID (MVP: 로그인 없이 단순 기록용)
+  // 작업자 ID (MVP: 로그인 없이 단순 기록용)
   operatorId String?
 
-  createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
+  // ✅ [추가] 작업 우선순위 (0=일반, 1=높음, 2=긴급)
+  priority Int @default(0)
+
+  // ✅ [추가] 판매채널 ("STORE" | "ONLINE" | "COUPANG" 등)
+  channel String?
+
+  createdAt DateTime  @default(now())
+  updatedAt DateTime  @updatedAt
   doneAt    DateTime?
+
+  // ✅ [추가] 작업 시작 시간 (첫 스캔 시 기록)
+  workStartedAt DateTime?
 
   items  JobItem[]
   parcel JobParcel?
@@ -142,23 +162,27 @@ model Job {
   @@index([doneAt], map: "Job_doneAt_idx")
   @@index([type], map: "Job_type_idx")
   @@index([operatorId], map: "Job_operatorId_idx")
+  @@index([priority], map: "Job_priority_idx")
+  @@index([channel], map: "Job_channel_idx")
 }
 
 model JobItem {
-  id         String   @id @default(cuid())
-  jobId      String
-  skuId      String
+  id    String @id @default(cuid())
+  jobId String
+  skuId String
 
   qtyPlanned Int
-  qtyPicked  Int      @default(0)
+  qtyPicked  Int @default(0)
 
   makerCodeSnapshot String?
   nameSnapshot      String?
 
-  // ✅ 추가피킹(Planned 초과) 승인/사용
+  // 추가피킹(Planned 초과) 승인/사용
   extraApprovedQty Int @default(0)
   extraPickedQty   Int @default(0)
 
+  // ✅ [추가] 예상 픽업 위치 가이드
+  locationHint String?
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
@@ -174,8 +198,8 @@ model JobItem {
 }
 
 model JobParcel {
-  id            String  @id @default(cuid())
-  jobId         String  @unique
+  id    String @id @default(cuid())
+  jobId String @unique
 
   orderNo       String?
   recipientName String
@@ -185,33 +209,78 @@ model JobParcel {
   addr2         String?
   memo          String?
 
-  carrierCode   String?
-  waybillNo     String?
+  carrierCode String?
+  waybillNo   String?
 
-  createdAt     DateTime @default(now())
-  updatedAt     DateTime @updatedAt
+  // ✅ [추가] CJ 예약 요청 시점
+  requestedCjAt DateTime?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
 
   job Job @relation(fields: [jobId], references: [id], onDelete: Cascade)
-}
-model SalesRaw {
-  id         String   @id @default(cuid())
 
-  // 업로드 추적 (강추)
+  @@index([orderNo], map: "JobParcel_orderNo_idx")
+}
+
+model SalesRaw {
+  id String @id @default(cuid())
+
+  // 업로드 추적
   uploadedAt DateTime @default(now())
   sourceKey  String?
 
   // 매장별 매출에 필요한 최소 컬럼
-  saleDate   DateTime // 일 단위(시간은 00:00:00로 저장 권장)
-  storeCode  String
-  storeName  String?
+  saleDate    DateTime // 일 단위(시간은 00:00:00로 저장 권장)
+  storeCode   String
+  storeName   String?
   productType String? // 상품타입 (예: 신발, 지비츠, 기타)
   itemCode    String? // 단품코드
   codeName    String? // 코드명
 
-  qty        Int      @default(0)
-  amount     Int      // 원 단위 Int
+  qty    Int @default(0)
+  amount Int // 원 단위 Int
 
-  // 조회 성능용 인덱스 (필수급)
+  // 조회 성능용 인덱스
   @@index([saleDate])
   @@index([storeCode, saleDate])
+}
+
+// CJ 대한통운 1Day Token 저장
+model CjToken {
+  id        String   @id @default(cuid())
+  tokenNum  String   @unique // = TOKEN_NUM
+  expiresAt DateTime // = TOKEN_EXPRTN_DTM 파싱값
+
+  createdAt DateTime @default(now())
+
+  @@index([expiresAt])
+}
+
+// CJ 송장/예약접수 결과 (WMS Job 1:1)
+model CjShipment {
+  id String @id @default(cuid())
+
+  jobId String @unique
+  job   Job    @relation(fields: [jobId], references: [id], onDelete: Cascade)
+
+  // CJ 키/값(필요한 것만 최소 저장)
+  invcNo    String? // 운송장번호 (INVC_NO)
+  custUseNo String? // 주문/내부관리번호 (CUST_USE_NO)
+  rcptYmd   String? // 접수일자 (RCPT_YMD)
+  mpckKey   String? // 묶음키 (MPCK_KEY)
+
+  // 추적/감사용 원문 저장
+  reqInvcNoJson Json?
+  regBookJson   Json?
+  cjResJson     Json?
+
+  // 취소 시점
+  cancelledAt DateTime?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([invcNo])
+  @@index([custUseNo])
 }

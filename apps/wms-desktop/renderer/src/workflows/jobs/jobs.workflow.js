@@ -149,6 +149,20 @@ export const jobsFlow = {
     return true;
   },
 
+  // ✅ 스캔 (택배 작업용)
+  scan: async ({ jobId, barcode, qty, operatorId }) => {
+    const result = await jobsApi.scan(jobId, {
+      value: barcode,
+      qty,
+      operatorId,
+    });
+    return {
+      ok: true,
+      result,
+      message: result?.picked ? `스캔 성공 (피킹: ${result.picked.qtyPicked}/${result.picked.qtyPlanned})` : "스캔 성공",
+    };
+  },
+
   // ✅ (추가) 마지막 스캔 취소(UNDO) — 다른 로직/시그니처 안 건드림
   undoLast: async ({ jobId }) => {
     const res = await jobsApi.undoLast(jobId);

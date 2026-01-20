@@ -1,0 +1,30 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(find:*)",
+      "Bash(npm run start:dev:*)",
+      "Bash(netstat:*)",
+      "Bash(findstr:*)",
+      "Bash(taskkill:*)",
+      "Bash(node -e:*)",
+      "Bash(node parse_excel.js:*)",
+      "Bash(del parse_excel.js)",
+      "Bash(node test-parcel-parse.js:*)",
+      "Bash(node test-parcel-parse.cjs:*)",
+      "Bash(curl:*)",
+      "Bash(node test-job-creation.mjs:*)",
+      "Bash(for id in cmkmmps9x0004oi2gy9xvfg45 cmkmmprhh0003oi2gfxm4b4ep cmkmmpqov0002oi2gn4fp7vsn cmkmmppw40001oi2gxeckv0pt cmkmmpp3j0000oi2g4w5wabv1)",
+      "Bash(do curl -X DELETE \"http://localhost:3000/jobs/$id\")",
+      "Bash(done)",
+      "Bash(for id in cmkmmublj000083w2ekzpz50q cmkmmucey000383w2ysjhda7e cmkmmud82000683w2d25s2r2m cmkmmue0s000983w20oyn4364 cmkmmuetn000c83w2dvz7rm9u)",
+      "Bash(powershell -Command \"\\(Get-Content ''C:\\\\repo\\\\wms\\\\apps\\\\wms-desktop\\\\renderer\\\\src\\\\pages\\\\StoreOutboundPage.jsx''\\).Length\")",
+      "WebFetch(domain:)",
+      "Bash(npx ts-node:*)",
+      "Bash(npx prisma generate:*)",
+      "Bash(npx prisma:*)",
+      "Bash(python3:*)",
+      "Bash(cmd.exe //c \"taskkill /PID 29800 /F\")",
+      "Bash(tasklist:*)"
+    ]
+  }
+}

@@ -7,7 +7,7 @@ import SalesPage from "./pages/SalesPage";
 
 import WarehouseInboundPage from "./pages/WarehouseInboundPage";
 import StoreOutboundPage from "./pages/StoreOutboundPage";
-import ParcelRequestPage from "./pages/ParcelRequestPage";
+import ParcelShipmentPage from "./pages/ParcelShipmentPage";
 
 // ✅ 작업자 ID 관리
 import { getOperatorId, setOperatorId } from "./workflows/_common/operator";
@@ -21,7 +21,7 @@ const MENUS = [
   { key: "salesImport", label: "매출" },
 
   { key: "storeShip", label: "매장 출고" },
-  { key: "delivery", label: "택배 출고" },
+  { key: "delivery", label: "택배 작업" },
 ];
 
 export default function App() {
@@ -76,7 +76,7 @@ export default function App() {
       case "storeShip":
         return StoreOutboundPage;
       case "delivery":
-        return ParcelRequestPage;
+        return ParcelShipmentPage;
       default:
         return () => <div>페이지 없음</div>;
     }

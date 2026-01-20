@@ -1,4 +1,4 @@
-﻿// apps/wms-desktop/renderer/src/pages/StoreOutboundPage.jsx
+// apps/wms-desktop/renderer/src/pages/StoreOutboundPage.jsx
 import React, { useEffect, useMemo, useRef, useState } from "react";
 import { useToasts } from "../lib/toasts.jsx";
 import { jobsFlow } from "../workflows/jobs/jobs.workflow";
@@ -85,7 +85,7 @@ export default function StoreOutboundPage({ pageTitle = "매장 출고", default
    * ✅ 비프 안정화 핵심 (Inbound와 동일)
    * - AudioContext 1개 재사용
    * - suspended면 resume
-   * - 첫 1회 워밍업(무음 ping)으로 “최초 삑 씹힘” 방지
+   * - 첫 1회 워밍업(무음 ping)으로 "최초 삑 씹힘" 방지
    */
   const audioCtxRef = useRef(null);
   const audioReadyRef = useRef(false);
@@ -230,9 +230,10 @@ export default function StoreOutboundPage({ pageTitle = "매장 출고", default
       const listAll = await jobsFlow.listJobs();
       const normalized = (Array.isArray(listAll) ? listAll : []).map((x) => unwrapJob(x) || x).filter(Boolean);
 
-      // ✅ Job.type 기준 필터링: OUTBOUND만
+      // ✅ Job.type 기준 필터링: OUTBOUND이면서 parcel이 없는 것만 (일반 매장 출고)
+      // 택배 작지(parcel 있는 Job)는 "택배 작업" 페이지에서만 표시
       const list = normalized.filter((j) => {
-        return j.type === 'OUTBOUND';
+        return j.type === 'OUTBOUND' && !j.parcel;
       });
 
       setCreated(list);
