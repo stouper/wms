@@ -80,6 +80,20 @@ async function testCjApi() {
     try {
       console.log('   테스트용 데이터 생성 중...');
 
+      // 테스트용 Store 확인/생성
+      let testStore = await prisma.store.findFirst({
+        where: { code: 'PARCEL' },
+      });
+      if (!testStore) {
+        testStore = await prisma.store.create({
+          data: {
+            code: 'PARCEL',
+            name: '택배 출고',
+            isHq: false,
+          },
+        });
+      }
+
       // 기존 테스트 SKU 확인 또는 생성
       let testSku = await prisma.sku.findFirst({
         where: { sku: 'TEST-CJ-SKU' },
@@ -89,7 +103,7 @@ async function testCjApi() {
           data: {
             sku: 'TEST-CJ-SKU',
             name: 'CJ API 테스트 상품',
-            barcode: 'TEST-CJ-SKU',
+            makerCode: 'TEST-CJ-SKU',
           },
         });
       }
@@ -99,7 +113,7 @@ async function testCjApi() {
         data: {
           type: 'OUTBOUND',
           status: 'open',
-          storeCode: '9999', // 테스트용 매장코드
+          storeId: testStore.id,
           items: {
             create: {
               skuId: testSku.id,

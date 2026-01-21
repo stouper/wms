@@ -2,15 +2,22 @@ import {
   BadRequestException,
   ConflictException,
   Injectable,
+  Logger,
   NotFoundException,
 } from '@nestjs/common';
 import { PrismaService } from '../../prisma/prisma.service';
 import { JobType, Prisma } from '@prisma/client';
 import * as ExcelJS from 'exceljs';
+import { ExportsService } from '../exports/exports.service';
 
 @Injectable()
 export class JobsService {
-  constructor(private readonly prisma: PrismaService) {}
+  private readonly logger = new Logger(JobsService.name);
+
+  constructor(
+    private readonly prisma: PrismaService,
+    private readonly exportsService: ExportsService, // ✅ CJ 자동 예약용
+  ) {}
 
   // ✅ C안: Job 단위 실재고 우선 토글
   async setAllowOverpick(jobId: string, allowOverpick: boolean) {
@@ -62,45 +69,85 @@ export class JobsService {
 
   // ===== jobs =====
   async createJob(dto: any) {
-    const storeCode = String(dto?.storeCode ?? '').trim();
-    if (!storeCode) throw new BadRequestException('storeCode is required');
+    const storeId = String(dto?.storeId ?? '').trim();
+    if (!storeId) throw new BadRequestException('storeId is required');
+
+    // Store 존재 여부 확인
+    const store = await this.prisma.store.findUnique({
+      where: { id: storeId } as any,
+      select: { id: true, code: true, name: true } as any,
+    } as any);
+    if (!store) throw new BadRequestException(`Store not found: ${storeId}`);
 
     const title = this.norm(dto?.title) || '작업';
     const memo = this.norm(dto?.memo);
     const type = dto?.type ?? JobType.OUTBOUND;
     const operatorId = this.norm(dto?.operatorId) || null;
 
+    // 의뢰요청일 파싱
+    let requestDate: Date | null = null;
+    if (dto?.requestDate) {
+      const parsed = new Date(dto.requestDate);
+      if (!isNaN(parsed.getTime())) {
+        requestDate = parsed;
+      }
+    }
+
+    // ✅ 배치 Job용 필드
+    const parentId = this.norm(dto?.parentId) || null;
+    const packType = this.norm(dto?.packType) || null;
+    const sortOrder = Number(dto?.sortOrder ?? 0);
+
+    // parentId가 있으면 부모 Job 존재 여부 확인
+    if (parentId) {
+      const parentJob = await this.prisma.job.findUnique({
+        where: { id: parentId } as any,
+        select: { id: true } as any,
+      } as any);
+      if (!parentJob) throw new BadRequestException(`Parent Job not found: ${parentId}`);
+    }
+
     const job = await this.prisma.job.create({
       data: {
-        storeCode,
+        storeId,
         title,
         memo: memo || null,
         type,
         status: 'open',
         allowOverpick: Boolean(dto?.allowOverpick),
         operatorId,
+        requestDate,
+        parentId,
+        packType,
+        sortOrder,
       } as any,
-      select: { id: true, storeCode: true, title: true, memo: true, type: true, status: true, allowOverpick: true, operatorId: true } as any,
+      select: {
+        id: true, storeId: true, title: true, memo: true, type: true,
+        status: true, allowOverpick: true, operatorId: true, requestDate: true,
+        parentId: true, packType: true, sortOrder: true,
+      } as any,
     } as any);
 
     return { ok: true, ...job };
   }
 
   async listJobs(params?: {
-  storeCode?: string;
+  storeId?: string;
   status?: string;
   type?: JobType;
+  parentId?: string | null; // null이면 최상위만, undefined면 전체
+  parcel?: boolean; // true면 택배(parcel 있는) Job만
 }) {
   const where: any = {};
 
-  // storeCode 필터 (옵션)
+  // storeId 필터 (옵션)
   if (
-    params?.storeCode &&
-    params.storeCode !== 'undefined' &&
-    params.storeCode !== 'null' &&
-    params.storeCode.trim() !== ''
+    params?.storeId &&
+    params.storeId !== 'undefined' &&
+    params.storeId !== 'null' &&
+    params.storeId.trim() !== ''
   ) {
-    where.storeCode = params.storeCode.trim();
+    where.storeId = params.storeId.trim();
   }
 
   // status 필터 (옵션)
@@ -116,12 +163,28 @@ export class JobsService {
   if (params?.type) {
     where.type = params.type;
   }
+
+  // ✅ parentId 필터: null이면 최상위(배치) Job만
+  if (params?.parentId === null) {
+    where.parentId = null;
+  } else if (params?.parentId) {
+    where.parentId = params.parentId;
+  }
+
+  // ✅ parcel 필터: 택배 Job만
+  if (params?.parcel === true) {
+    where.parcel = { isNot: null };
+  }
+
 const rows = await this.prisma.job.findMany({
   where,
   orderBy: { createdAt: "desc" },
   select: {
     id: true,
-    storeCode: true,
+    storeId: true,
+    store: {
+      select: { id: true, code: true, name: true, isHq: true },
+    },
     title: true,
     memo: true,
     type: true,
@@ -130,6 +193,10 @@ const rows = await this.prisma.job.findMany({
     createdAt: true,
     updatedAt: true,
     doneAt: true,
+    // ✅ 배치 Job용 필드
+    parentId: true,
+    packType: true,
+    sortOrder: true,
     items: {
       select: {
         id: true,
@@ -138,11 +205,36 @@ const rows = await this.prisma.job.findMany({
         makerCodeSnapshot: true,
         nameSnapshot: true,
         sku: {
-          select: { makerCode: true, name: true },
+          select: { sku: true, makerCode: true, name: true },
         },
       },
     },
     parcel: true,
+    // ✅ 하위 Job 목록 (배치 Job인 경우)
+    children: {
+      orderBy: [{ sortOrder: 'asc' }, { createdAt: 'asc' }],
+      select: {
+        id: true,
+        title: true,
+        status: true,
+        packType: true,
+        sortOrder: true,
+        doneAt: true,
+        parcel: true,
+        items: {
+          select: {
+            id: true,
+            qtyPlanned: true,
+            qtyPicked: true,
+            makerCodeSnapshot: true,
+            nameSnapshot: true,
+            sku: {
+              select: { sku: true, makerCode: true, name: true },
+            },
+          },
+        },
+      },
+    },
   },
 });
 
@@ -153,7 +245,10 @@ const rows = await this.prisma.job.findMany({
   async getJob(jobId: string) {
     const job = await this.prisma.job.findUnique({
       where: { id: jobId } as any,
-      include: { items: { include: { sku: true } } } as any,
+      include: {
+        store: true,
+        items: { include: { sku: true } },
+      } as any,
     } as any);
     if (!job) throw new NotFoundException(`Job not found: ${jobId}`);
     return { ok: true, job };
@@ -182,14 +277,24 @@ async addItems(jobId: string, dto: any) {
     const qtyPlanned = Number(row?.qty ?? row?.qtyPlanned ?? 0);
     if (!Number.isFinite(qtyPlanned) || qtyPlanned <= 0) continue;
 
-    // ✅ 프론트에서 보내는 키 우선 (makerCode/name)
+    // ✅ 단품코드 (skuCode) - SKU 테이블의 sku 필드용
+    const skuCode = String(
+      row?.skuCode ??
+        row?.sku ??
+        row?.["단품코드"] ??
+        row?.["단품"] ??
+        row?.["품번"] ??
+        ""
+    ).trim();
+
+    // ✅ Maker코드 (makerCode) - SKU 테이블의 makerCode 필드용
     const maker = String(
       row?.makerCode ??
         row?.maker ??
         row?.makerCodeSnapshot ??
         row?.["Maker코드"] ??
         row?.["메이커코드"] ??
-        row?.["단품코드"] ??
+        row?.["바코드"] ??
         ""
     ).trim();
 
@@ -203,6 +308,15 @@ async addItems(jobId: string, dto: any) {
         ""
     ).trim();
 
+    // ✅ 상품구분 (productType)
+    const productType = String(
+      row?.productType ??
+        row?.["상품구분"] ??
+        row?.["제품구분"] ??
+        row?.["제품타입"] ??
+        ""
+    ).trim() || "SHOES";
+
     // 🔥 maker/name 필수 (빈 줄 방지)
     if (!maker || !name) {
       const keys = Object.keys(row || {}).join(" | ");
@@ -211,23 +325,61 @@ async addItems(jobId: string, dto: any) {
       );
     }
 
-    // ✅ SKU 찾기: makerCode 또는 sku 필드로 검색
-    let sku: any = await this.prisma.sku.findFirst({
-      where: {
-        OR: [
-          { makerCode: maker } as any,
-          { sku: maker } as any,
-        ],
-      } as any,
-    } as any);
+    // ✅ SKU 찾기: makerCode, sku(단품코드) 필드로 검색
+    const searchTerms: any[] = [];
+    if (maker) {
+      searchTerms.push({ makerCode: maker });
+      searchTerms.push({ sku: maker });
+    }
+    if (skuCode && skuCode !== maker) {
+      searchTerms.push({ sku: skuCode });
+    }
 
-    // ✅ SKU가 없으면 에러 발생 (자동 생성 금지)
+    let sku: any = searchTerms.length > 0
+      ? await this.prisma.sku.findFirst({
+          where: { OR: searchTerms } as any,
+        } as any)
+      : null;
+
+    // ✅ SKU가 없으면 자동 생성 + UNASSIGNED에 재고 추가
     if (!sku) {
-      throw new BadRequestException(
-        `SKU를 찾을 수 없습니다: "${maker}"\n` +
-        `SKU 테이블에 sku 또는 makerCode가 "${maker}"인 레코드가 없습니다.\n` +
-        `Prisma Studio에서 SKU를 먼저 등록해주세요.`
-      );
+      // SKU 생성: sku=단품코드, makerCode=Maker코드
+      sku = await this.prisma.sku.create({
+        data: {
+          sku: skuCode || maker, // 단품코드가 없으면 makerCode 사용
+          makerCode: maker,
+          name: name,
+          productType: productType,
+        } as any,
+      } as any);
+
+      // HQ Store의 UNASSIGNED location 찾기
+      const hqStore = await this.prisma.store.findFirst({
+        where: { isHq: true } as any,
+      } as any);
+
+      if (hqStore) {
+        const unassignedLoc = await this.prisma.location.findFirst({
+          where: { storeId: hqStore.id, code: 'UNASSIGNED' } as any,
+        } as any);
+
+        if (unassignedLoc) {
+          // UNASSIGNED에 재고 0으로 Inventory 생성 (이미 있으면 무시)
+          await this.prisma.inventory.upsert({
+            where: {
+              skuId_locationId: { skuId: sku.id, locationId: unassignedLoc.id },
+            } as any,
+            update: {},
+            create: {
+              skuId: sku.id,
+              locationId: unassignedLoc.id,
+              qty: 0,
+            } as any,
+          } as any);
+        }
+      }
+
+      console.log(`[addItems] SKU 자동 생성: sku=${skuCode || maker}, makerCode=${maker}, name=${name} → UNASSIGNED에 재고 추가`);
     } else {
       // 기존 sku에 maker/name 없을 때만 보강
       const patch: any = {};
@@ -292,7 +444,6 @@ async addItems(jobId: string, dto: any) {
     jobId: string,
     dto: {
       value?: string;
-      barcode?: string;
       skuCode?: string;
       qty?: number;
       locationCode?: string;
@@ -314,8 +465,8 @@ async addItems(jobId: string, dto: any) {
 
     const allowOverpick = Boolean((job as any).allowOverpick);
 
-    const raw = this.norm(dto.value || dto.barcode || dto.skuCode);
-    if (!raw) throw new BadRequestException('value/barcode/skuCode is required');
+    const raw = this.norm(dto.value || dto.skuCode);
+    if (!raw) throw new BadRequestException('value/skuCode is required');
 
     const qty = Number(dto.qty ?? 1);
     if (!Number.isFinite(qty) || qty <= 0) throw new BadRequestException('qty must be > 0');
@@ -325,7 +476,7 @@ async addItems(jobId: string, dto: any) {
 
     const locationCode = this.norm(dto.locationCode); // ✅ 선택값 (RF 스캔에서는 없을 수 있음)
 
-    // 1) sku 찾기: barcode(숫자) 우선 makerCode, 아니면 skuCode
+    // 1) sku 찾기: 숫자면 makerCode 우선, 아니면 skuCode
     let sku: any = null;
     if (this.isLikelyBarcode(raw)) {
       sku = await this.prisma.sku.findFirst({ where: { makerCode: raw } as any } as any);
@@ -587,7 +738,6 @@ async addItems(jobId: string, dto: any) {
     jobId: string,
     dto: {
       value?: string;
-      barcode?: string;
       skuCode?: string;
       qty?: number;
       locationCode?: string;
@@ -606,8 +756,8 @@ async addItems(jobId: string, dto: any) {
       throw new ConflictException(`Job type mismatch: expected INBOUND/RETURN, got ${jobType}`);
     }
 
-    const raw = this.norm(dto?.value || dto?.barcode || dto?.skuCode);
-    if (!raw) throw new BadRequestException('value/barcode/skuCode is required');
+    const raw = this.norm(dto?.value || dto?.skuCode);
+    if (!raw) throw new BadRequestException('value/skuCode is required');
 
     const qty = Number(dto?.qty ?? 1);
     if (!Number.isFinite(qty) || qty <= 0) throw new BadRequestException('qty must be > 0');
@@ -1029,6 +1179,215 @@ async addItems(jobId: string, dto: any) {
     }
 
     return { ok: true, undoneCount };
+  }
+
+  // ================================
+  // 🔽 배치(묶음) Job 스캔
+  // ================================
+
+  /**
+   * 배치 Job 스캔
+   * - 배치 Job의 하위 Job 중 해당 SKU가 포함된 Job을 찾아 스캔 처리
+   * - 단포(sortOrder=1) 우선, 합포(sortOrder=2) 나중
+   * - 하위 Job 완료 시 CJ 송장 발급 가능 상태로 변경
+   * - 모든 하위 Job 완료 시 배치 Job도 완료 처리
+   */
+  async scanBatch(
+    batchJobId: string,
+    dto: {
+      value?: string;
+      skuCode?: string;
+      qty?: number;
+      locationCode?: string;
+      operatorId?: string;
+    },
+  ) {
+    // 1) 배치 Job 확인
+    const batchJob = await this.prisma.job.findUnique({
+      where: { id: batchJobId } as any,
+      select: { id: true, parentId: true, status: true } as any,
+    } as any);
+
+    if (!batchJob) throw new NotFoundException(`Batch Job not found: ${batchJobId}`);
+    if ((batchJob as any).parentId) {
+      throw new BadRequestException('이 Job은 배치 Job이 아닙니다 (하위 Job입니다)');
+    }
+
+    const raw = this.norm(dto.value || dto.skuCode);
+    if (!raw) throw new BadRequestException('value/skuCode is required');
+
+    const qty = Number(dto.qty ?? 1);
+    if (!Number.isFinite(qty) || qty <= 0) throw new BadRequestException('qty must be > 0');
+
+    // 2) SKU 찾기
+    let sku: any = null;
+    if (this.isLikelyBarcode(raw)) {
+      sku = await this.prisma.sku.findFirst({ where: { makerCode: raw } as any } as any);
+    }
+    if (!sku) {
+      const code = this.normSkuCode(raw);
+      sku =
+        (await (this.prisma as any).sku.findUnique({ where: { sku: code } as any }).catch(() => null)) ||
+        (await (this.prisma as any).sku.findUnique({ where: { code } as any }).catch(() => null));
+    }
+    if (!sku) {
+      throw new NotFoundException(`SKU not found: ${raw}`);
+    }
+
+    // 3) 하위 Job 중 해당 SKU를 포함하고, 아직 완료되지 않은 Job 찾기
+    //    - sortOrder 오름차순 (단포=1 우선)
+    //    - 해당 SKU의 qtyPicked < qtyPlanned인 것
+    const childJobs = await this.prisma.job.findMany({
+      where: {
+        parentId: batchJobId,
+        status: { not: 'done' },
+      } as any,
+      orderBy: [{ sortOrder: 'asc' }, { createdAt: 'asc' }] as any,
+      include: {
+        items: {
+          where: { skuId: sku.id },
+          select: { id: true, qtyPlanned: true, qtyPicked: true },
+        },
+        parcel: true,
+      } as any,
+    } as any);
+
+    // 해당 SKU가 있고, 아직 피킹이 덜 된 Job 찾기
+    let targetJob: any = null;
+    let targetItem: any = null;
+
+    for (const job of childJobs) {
+      const item = (job as any).items?.find(
+        (it: any) => Number(it.qtyPicked) < Number(it.qtyPlanned)
+      );
+      if (item) {
+        targetJob = job;
+        targetItem = item;
+        break;
+      }
+    }
+
+    if (!targetJob || !targetItem) {
+      throw new NotFoundException(`이 바코드(${raw})가 포함된 미완료 주문이 없습니다`);
+    }
+
+    // 4) 해당 Job에 대해 기존 scan 로직 호출
+    const scanResult = await this.scan(targetJob.id, {
+      value: raw,
+      qty,
+      locationCode: dto.locationCode,
+      operatorId: dto.operatorId,
+    });
+
+    // 5) 해당 Job 완료 여부 확인
+    const updatedJob = await this.prisma.job.findUnique({
+      where: { id: targetJob.id } as any,
+      include: {
+        items: { select: { qtyPlanned: true, qtyPicked: true } },
+        parcel: true,
+      } as any,
+    } as any);
+
+    const items = (updatedJob as any)?.items || [];
+    const jobIsDone = items.length > 0 && items.every(
+      (it: any) => Number(it.qtyPicked) >= Number(it.qtyPlanned)
+    );
+
+    // 6) ✅ 주문 완료 시 자동 CJ 예약
+    let cjReservation: any = null;
+    if (jobIsDone) {
+      try {
+        this.logger.log(`주문 완료 - 자동 CJ 예약 시작: ${targetJob.id}`);
+        cjReservation = await this.exportsService.createCjReservation(targetJob.id);
+        this.logger.log(`CJ 예약 완료: ${cjReservation.invcNo}`);
+      } catch (cjError: any) {
+        // CJ 예약 실패해도 스캔 결과는 반환 (에러 로그만)
+        this.logger.error(`CJ 자동 예약 실패: ${cjError.message}`);
+        cjReservation = { error: cjError.message };
+      }
+    }
+
+    // 7) 모든 하위 Job 완료 여부 확인 → 배치 Job 완료 처리
+    const allChildren = await this.prisma.job.findMany({
+      where: { parentId: batchJobId } as any,
+      select: { id: true, status: true } as any,
+    } as any);
+
+    const allChildrenDone = allChildren.length > 0 && allChildren.every(
+      (c: any) => c.status === 'done'
+    );
+
+    if (allChildrenDone) {
+      await this.prisma.job.update({
+        where: { id: batchJobId } as any,
+        data: { status: 'done', doneAt: new Date() } as any,
+      } as any);
+    }
+
+    // 8) 결과 반환
+    return {
+      ...scanResult,
+      matchedJobId: targetJob.id,
+      matchedJobTitle: (targetJob as any).title,
+      matchedParcel: (targetJob as any).parcel,
+      jobCompleted: jobIsDone,
+      batchCompleted: allChildrenDone,
+      // ✅ CJ 예약 결과 포함
+      cjReservation,
+      // 진행 상황
+      progress: {
+        completedJobs: allChildren.filter((c: any) => c.status === 'done').length,
+        totalJobs: allChildren.length,
+      },
+    };
+  }
+
+  /**
+   * 배치 Job 상세 조회 (하위 Job 포함)
+   */
+  async getBatchJob(batchJobId: string) {
+    const job = await this.prisma.job.findUnique({
+      where: { id: batchJobId } as any,
+      include: {
+        store: true,
+        items: { include: { sku: true } },
+        parcel: true,
+        children: {
+          orderBy: [{ sortOrder: 'asc' }, { createdAt: 'asc' }],
+          include: {
+            items: { include: { sku: true } },
+            parcel: true,
+          },
+        },
+      } as any,
+    } as any);
+
+    if (!job) throw new NotFoundException(`Job not found: ${batchJobId}`);
+
+    // 진행 상황 계산
+    const children = (job as any).children || [];
+    const completedChildren = children.filter((c: any) => c.status === 'done');
+
+    // 단포/합포 통계
+    const singlePackJobs = children.filter((c: any) => c.packType === 'single');
+    const multiPackJobs = children.filter((c: any) => c.packType === 'multi');
+
+    return {
+      ok: true,
+      job,
+      progress: {
+        totalJobs: children.length,
+        completedJobs: completedChildren.length,
+        singlePack: {
+          total: singlePackJobs.length,
+          completed: singlePackJobs.filter((c: any) => c.status === 'done').length,
+        },
+        multiPack: {
+          total: multiPackJobs.length,
+          completed: multiPackJobs.filter((c: any) => c.status === 'done').length,
+        },
+      },
+    };
   }
 
 }

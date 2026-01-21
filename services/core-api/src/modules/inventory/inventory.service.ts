@@ -38,10 +38,17 @@ export class InventoryService {
     const locationCode = this.norm(code);
     if (!locationCode) throw new BadRequestException('locationCode is required');
 
+    // HQ store 찾기
+    const hqStore = await this.prisma.store.findFirst({
+      where: { isHq: true } as any,
+      select: { id: true } as any,
+    } as any);
+    if (!hqStore) throw new BadRequestException('본사 창고(isHq=true)가 등록되어 있지 않습니다.');
+
     const loc = await this.prisma.location.upsert({
-      where: { storeId_code: { storeId: 0, code: locationCode } } as any,
+      where: { storeId_code: { storeId: hqStore.id, code: locationCode } } as any,
       update: {} as any,
-      create: { storeId: 0, code: locationCode } as any,
+      create: { storeId: hqStore.id, code: locationCode } as any,
       select: { id: true, code: true } as any,
     } as any);
 

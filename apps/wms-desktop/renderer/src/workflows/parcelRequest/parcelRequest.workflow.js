@@ -22,71 +22,110 @@ export const parcelShipMode = {
   },
 
   /**
-   * 택배요청 rows → Job/JobParcel 생성
-   * - rows: parseParcelRequest 결과 (orderNo, receiverName, address, optionRaw, qty 등)
-   * - 주문번호별로 그룹화하여 각각 1개 Job 생성
-   * - JobParcel: 배송 정보 저장
-   * - JobItem: 상품 정보 (optionRaw에서 SKU 추출 시도)
+   * 택배요청 rows → 배치 Job + 하위 Job 생성
+   * - 배치 Job: 엑셀 파일 단위로 1개 생성
+   * - 하위 Job: 주문별로 생성 (parentId로 배치와 연결)
+   * - 단포(sortOrder=1) / 합포(sortOrder=2) 구분
    */
   async createJobsFromPreview({ rows, fileName } = {}) {
     if (!Array.isArray(rows) || rows.length === 0) {
       throw new Error("택배요청 데이터가 없습니다");
     }
 
-    console.log("✅ 택배 작지 생성 시작");
+    console.log("✅ 택배 배치 작지 생성 시작");
     console.log("📦 파싱된 rows 개수:", rows.length);
-    console.log("📦 첫 번째 row:", rows[0]);
 
     // 주문번호별로 그룹화
     const orderGroups = groupByOrderNo(rows);
+    const totalOrders = orderGroups.size;
 
-    console.log("📦 주문번호별 그룹 개수:", orderGroups.size);
-    console.log("📦 그룹 키(주문번호):", Array.from(orderGroups.keys()));
+    console.log("📦 주문번호별 그룹 개수:", totalOrders);
 
+    // ✅ 1) 배치 Job 생성
+    const now = new Date();
+    const timeStr = `${String(now.getMonth() + 1).padStart(2, "0")}/${String(now.getDate()).padStart(2, "0")} ${String(now.getHours()).padStart(2, "0")}:${String(now.getMinutes()).padStart(2, "0")}`;
+    const batchTitle = `[택배] ${timeStr} (${totalOrders}건)`;
+
+    // HQ(본사) 스토어 조회 - 택배는 본사에서 발송
+    let hqStoreId = null;
+    try {
+      const storesRes = await http.get("/stores");
+      const hqStore = (storesRes?.rows || []).find((s) => s.isHq || s.code === "HQ");
+      hqStoreId = hqStore?.id;
+    } catch (e) {
+      console.error("HQ 스토어 조회 실패:", e);
+    }
+
+    if (!hqStoreId) {
+      throw new Error("본사(HQ) 스토어를 찾을 수 없습니다");
+    }
+
+    const batchJob = await jobsApi.create({
+      storeId: hqStoreId,
+      title: batchTitle,
+      memo: `택배 배치: ${fileName || ""} (${totalOrders}건)`,
+      type: "OUTBOUND",
+      // 배치 Job은 parentId, packType 없음
+    });
+
+    const batchJobId = batchJob?.id || batchJob?.job?.id;
+    if (!batchJobId) throw new Error("배치 Job 생성 실패");
+
+    console.log("✅ 배치 Job 생성 완료:", batchJobId, batchTitle);
+
+    // ✅ 2) 하위 Job 생성 (주문별)
     let createdCount = 0;
-    const createdJobIds = [];
+    const createdJobIds = [batchJobId];
     const failedOrders = [];
 
     for (const [orderNo, orderRows] of orderGroups.entries()) {
-      let jobId = null;
+      let childJobId = null;
 
       try {
-        // 첫 번째 row의 배송 정보 사용
         const first = orderRows[0];
-        const storeCode = first.storeCode || "ONLINE";
 
-        // Job 생성
-        const job = await jobsApi.create({
-          storeCode,
-          title: `[택배] ${orderNo}`,
-          memo: `택배요청: ${fileName || ""}`,
+        // 단포/합포 판별
+        const totalQty = orderRows.reduce((sum, r) => sum + (r.qty || 1), 0);
+        const isSinglePack = orderRows.length === 1 && totalQty === 1;
+        const packType = isSinglePack ? "single" : "multi";
+        const sortOrder = isSinglePack ? 1 : 2;
+
+        // 지역 추출
+        const region = extractRegion(first.address);
+
+        // 하위 Job 타이틀: "수취인명 (지역) [단포/합포]"
+        const packLabel = isSinglePack ? "단포" : "합포";
+        const childTitle = `${first.receiverName || "?"} (${region}) [${packLabel}]`;
+
+        // 하위 Job 생성
+        const childJob = await jobsApi.create({
+          storeId: hqStoreId,
+          title: childTitle,
+          memo: `주문: ${orderNo}`,
           type: "OUTBOUND",
-          kind: "출고",
+          parentId: batchJobId,
+          packType,
+          sortOrder,
         });
 
-        jobId = job?.id || job?.job?.id;
-        if (!jobId) throw new Error("Job 생성 실패");
+        childJobId = childJob?.id || childJob?.job?.id;
+        if (!childJobId) throw new Error("하위 Job 생성 실패");
 
         // JobParcel 생성 (배송 정보)
-        await http.post(`/jobs/${jobId}/parcels/upsert`, {
-          orderNo: first.orderNo,
+        await http.post(`/jobs/${childJobId}/parcels/upsert`, {
+          orderNo: first.orderNo || orderNo,
           recipientName: first.receiverName,
           phone: first.phone,
           zip: first.zipcode,
           addr1: first.address,
-          addr2: "", // 상세주소는 address에 포함된 경우가 많음
+          addr2: "",
           memo: first.message,
-          carrierCode: "CJ", // 기본값
+          carrierCode: "CJ",
         });
 
         // JobItem 생성 (상품 정보)
-        // ✅ optionRaw를 그대로 makerCode로 사용
-        // 백엔드에서 SKU 테이블의 makerCode 또는 sku 필드와 자동 매칭
         const items = orderRows.map((r, idx) => {
           const optionName = String(r.optionRaw || "").trim();
-          if (!optionName) {
-            console.warn(`⚠️ 주문 ${orderNo} 행 ${idx}: optionRaw 없음`);
-          }
           return {
             makerCode: optionName || `UNKNOWN-${orderNo}-${idx + 1}`,
             name: optionName || "택배상품",
@@ -95,23 +134,22 @@ export const parcelShipMode = {
           };
         });
 
-        await jobsApi.addItems(jobId, { items });
+        await jobsApi.addItems(childJobId, { items });
 
         createdCount += 1;
-        createdJobIds.push(jobId);
+        createdJobIds.push(childJobId);
+
+        console.log(`✅ 하위 Job 생성: ${childTitle} (${packType})`);
       } catch (error) {
-        // ✅ 에러 발생 시 생성된 Job 삭제 (롤백)
-        if (jobId) {
-          console.error(`❌ 주문 ${orderNo} 작지 생성 실패, Job 삭제 중...`, error);
+        // 에러 발생 시 생성된 하위 Job 삭제
+        if (childJobId) {
           try {
-            await jobsApi.delete(jobId);
-            console.log(`✅ 실패한 Job 삭제 완료: ${jobId}`);
-          } catch (deleteError) {
-            console.error(`⚠️ Job 삭제 실패: ${jobId}`, deleteError);
+            await jobsApi.delete(childJobId);
+          } catch (e) {
+            console.error(`하위 Job 삭제 실패: ${childJobId}`, e);
           }
         }
 
-        // ✅ 실패 정보 기록 (에러를 던지지 않고 계속 진행)
         failedOrders.push({
           orderNo,
           error: error?.message || String(error),
@@ -119,26 +157,31 @@ export const parcelShipMode = {
       }
     }
 
-    // ✅ 부분 성공 허용: 일부 성공, 일부 실패 가능
-    if (failedOrders.length > 0) {
-      const failedMsg = failedOrders
-        .map((f) => `${f.orderNo}: ${f.error}`)
-        .join("\n");
-
-      if (createdCount === 0) {
-        // 모두 실패
-        throw new Error(`모든 작지 생성 실패:\n${failedMsg}`);
-      } else {
-        // 일부 실패
-        console.warn(`⚠️ 일부 작지 생성 실패:\n${failedMsg}`);
+    // 모두 실패한 경우 배치 Job도 삭제
+    if (createdCount === 0) {
+      try {
+        await jobsApi.delete(batchJobId);
+      } catch (e) {
+        console.error("배치 Job 삭제 실패:", e);
       }
+      throw new Error(`모든 작지 생성 실패:\n${failedOrders.map((f) => `${f.orderNo}: ${f.error}`).join("\n")}`);
     }
 
-    return { ok: true, createdCount, createdJobIds, failedOrders };
+    if (failedOrders.length > 0) {
+      console.warn(`⚠️ 일부 작지 생성 실패:`, failedOrders);
+    }
+
+    return {
+      ok: true,
+      batchJobId,
+      createdCount,
+      createdJobIds,
+      failedOrders,
+    };
   },
 
   async scan() {
-    return { ok: false, error: "택배 요청 화면에서는 스캔 기능을 아직 안 써. (미리보기까지만)" };
+    return { ok: false, error: "배치 스캔은 jobsApi.scanBatch()를 사용하세요" };
   },
 };
 
@@ -160,18 +203,15 @@ function groupByOrderNo(rows) {
   for (const r of rows) {
     let orderNo = String(r.orderNo || "").trim();
 
-    // ✅ 주문번호가 없으면 자동 생성 (수취인 정보 기준)
+    // 주문번호가 없으면 자동 생성 (수취인 정보 기준)
     if (!orderNo) {
       const receiverName = String(r.receiverName || "").trim();
       const address = String(r.address || "").trim();
       const phone = String(r.phone || "").trim();
 
-      // 수취인명+주소+연락처 기준으로 고유 키 생성
       const key = `${receiverName}|${address}|${phone}`;
       const hash = simpleHash(key);
       orderNo = `AUTO-${hash}`;
-
-      console.log(`📦 주문번호 자동 생성: ${orderNo} (${receiverName}, ${address.substring(0, 20)}...)`);
     }
 
     if (!map.has(orderNo)) {
@@ -184,48 +224,47 @@ function groupByOrderNo(rows) {
 }
 
 /**
- * 간단한 문자열 해시 생성 (같은 문자열 = 같은 해시)
+ * 간단한 문자열 해시 생성
  */
 function simpleHash(str) {
   let hash = 0;
   for (let i = 0; i < str.length; i++) {
     const char = str.charCodeAt(i);
     hash = (hash << 5) - hash + char;
-    hash = hash & hash; // 32bit 정수로 변환
+    hash = hash & hash;
   }
   return Math.abs(hash).toString(36).toUpperCase().substring(0, 8);
 }
 
 /**
- * optionRaw에서 SKU 코드 추출 시도
- * 패턴 예: "크록스 클래식 (207009-001)" → "207009-001"
- *         "상품명 / SKU: ABC123" → "ABC123"
+ * 주소에서 시/군/구 단위 지역 추출
+ * 예: "충청북도 청주시 서원구..." → "청주"
+ *     "경상북도 안동시 육사로..." → "안동"
+ *     "서울특별시 강남구..." → "강남"
  */
-function extractSkuCode(optionRaw) {
-  if (!optionRaw) return null;
+function extractRegion(address) {
+  if (!address) return "?";
 
-  const s = String(optionRaw).trim();
-  if (!s) return null;
+  const addr = String(address).trim();
 
-  // 패턴 1: 괄호 안의 코드 (예: 207009-001, ABC-123)
-  const pattern1 = /\(([A-Z0-9\-]+)\)/i;
-  const match1 = s.match(pattern1);
-  if (match1) return match1[1];
-
-  // 패턴 2: "SKU:" 또는 "코드:" 뒤의 값
-  const pattern2 = /(?:sku|코드|code)[\s:]+([A-Z0-9\-]+)/i;
-  const match2 = s.match(pattern2);
-  if (match2) return match2[1];
-
-  // 패턴 3: 슬래시(/) 앞뒤로 분리 후 코드 형식 찾기
-  const parts = s.split(/[\/\|]/);
-  for (const part of parts) {
-    const cleaned = part.trim();
-    // 숫자-숫자 형식 (예: 207009-001)
-    if (/^\d{5,}-\d{2,}$/.test(cleaned)) return cleaned;
-    // 대문자-숫자 형식 (예: ABC-123)
-    if (/^[A-Z]{2,}-\d+$/i.test(cleaned)) return cleaned;
+  // 패턴 1: "OO시" 추출 (예: 청주시, 안동시, 수원시)
+  const cityMatch = addr.match(/([가-힣]{1,4})시/);
+  if (cityMatch) {
+    return cityMatch[1]; // "청주", "안동" 등
   }
 
-  return null;
+  // 패턴 2: "OO구" 추출 (서울/부산 등 광역시)
+  const guMatch = addr.match(/([가-힣]{1,3})구/);
+  if (guMatch) {
+    return guMatch[1]; // "강남", "해운대" 등
+  }
+
+  // 패턴 3: "OO군" 추출
+  const gunMatch = addr.match(/([가-힣]{1,4})군/);
+  if (gunMatch) {
+    return gunMatch[1];
+  }
+
+  // 추출 실패 시 앞 10글자
+  return addr.substring(0, 10);
 }

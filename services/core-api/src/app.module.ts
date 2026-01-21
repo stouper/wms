@@ -18,6 +18,12 @@ import { SalesModule } from './modules/sales/sales.module';
 // ✅ CJ API (추가)
 import { CjApiModule } from './modules/cj-api/cj-api.module';
 
+// ✅ Stores (매장 관리)
+import { StoresModule } from './modules/stores/stores.module';
+
+// ✅ Locations (창고/로케이션 관리)
+import { LocationsModule } from './modules/locations/locations.module';
+
 @Module({
   imports: [
     ConfigModule.forRoot({ isGlobal: true }),
@@ -34,6 +40,12 @@ import { CjApiModule } from './modules/cj-api/cj-api.module';
 
     // ✅ CJ 대한통운 택배 API
     CjApiModule,
+
+    // ✅ 매장 관리
+    StoresModule,
+
+    // ✅ 창고/로케이션 관리
+    LocationsModule,
   ],
   controllers: [],
   providers: [],

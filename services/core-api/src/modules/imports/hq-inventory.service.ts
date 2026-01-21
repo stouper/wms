@@ -64,14 +64,14 @@ export class HqInventoryService {
       throw new BadRequestException('rows is required');
     }
 
-    // HQ store 찾기 (프로젝트 정책 유지)
+    // HQ store 찾기 (isHq: true 기준)
     const hqStore = await this.prisma.store.findFirst({
-      where: { code: 'HQ' } as any,
+      where: { isHq: true } as any,
       select: { id: true, code: true } as any,
     } as any);
 
     if (!hqStore) {
-      throw new BadRequestException('HQ store not found');
+      throw new BadRequestException('본사 창고(isHq=true)가 등록되어 있지 않습니다.');
     }
 
     // location별 skuMap 구성

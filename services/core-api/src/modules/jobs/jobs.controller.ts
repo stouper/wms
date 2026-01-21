@@ -20,8 +20,9 @@ export class JobsController {
   list(
     @Query('date') date?: string,
     @Query('status') status?: string,
-    @Query('storeCode') storeCode?: string,
+    @Query('storeId') storeId?: string,
     @Query('type') type?: JobType,
+    @Query('parentId') parentId?: string,
   ) {
     const s = (status ?? '').toString().trim().toLowerCase();
 
@@ -29,17 +30,52 @@ export class JobsController {
     const normalized =
       s === 'completed' || s === 'complete' || s === 'finished' ? 'done' : s;
 
-    const scRaw = (storeCode ?? '').toString().trim();
-    const sc =
-      scRaw && scRaw !== 'undefined' && scRaw !== 'null' ? scRaw : undefined;
+    const idRaw = (storeId ?? '').toString().trim();
+    const id =
+      idRaw && idRaw !== 'undefined' && idRaw !== 'null' ? idRaw : undefined;
+
+    // ✅ parentId 처리: "null"이면 null로 변환 (최상위 Job만)
+    let parentIdParsed: string | null | undefined = undefined;
+    if (parentId === 'null') {
+      parentIdParsed = null;
+    } else if (parentId && parentId !== 'undefined') {
+      parentIdParsed = parentId;
+    }
 
     return this.jobs.listJobs({
       date,
       status: (normalized || undefined) as any,
-      storeCode: sc,
+      storeId: id,
       type,
+      parentId: parentIdParsed,
     } as any);
   }
+
+  // ================================
+  // 🔽 배치(묶음) Job 관련 엔드포인트 (라우트 순서 중요: :id보다 위에!)
+  // ================================
+
+  /**
+   * 배치 Job 상세 조회 (하위 Job 포함)
+   * GET /jobs/:id/batch
+   */
+  @Get(':id/batch')
+  getBatchJob(@Param('id') id: string) {
+    return this.jobs.getBatchJob(id);
+  }
+
+  /**
+   * 배치 Job 스캔
+   * POST /jobs/:id/batch/scan
+   */
+  @Post(':id/batch/scan')
+  scanBatch(@Param('id') id: string, @Body() dto: ScanDto) {
+    return this.jobs.scanBatch(id, dto as any);
+  }
+
+  // ================================
+  // 🔽 단일 Job 관련 엔드포인트
+  // ================================
 
   @Get(':id')
   get(@Param('id') id: string) {
@@ -125,8 +161,6 @@ export class JobsController {
   }
 
   // ✅ (호환) Desktop: POST /jobs/:jobId/approve-extra  (body: { jobItemId, qty })
-  // 기존 라우트(PATCH /jobs/:id/items/:itemId/approve-extra)는 그대로 두고,
-  // 워크벤치 UI에서 쓰는 간단한 엔드포인트를 별칭으로 추가한다.
   @Post(':jobId/approve-extra')
   approveExtraAlias(
     @Param('jobId') jobId: string,

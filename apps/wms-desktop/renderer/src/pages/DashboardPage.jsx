@@ -4,7 +4,7 @@ import { useToasts } from "../lib/toasts.jsx";
 import { ymdKST } from "../lib/dates";
 import { primaryBtn, inputStyle } from "../ui/styles";
 import { holidays as fetchHolidays } from "@kyungseopk1m/holidays-kr";
-import { storeLabel } from "../workflows/_common/storeMap";
+import { storeLabel, jobStoreLabel, jobStoreCode, loadStores } from "../workflows/_common/storeMap";
 
 // ✅ 정답지 파서(출고/반품 공용)
 import { parseJobFileToRows } from "../workflows/_common/excel/parseStoreOutbound";
@@ -354,6 +354,11 @@ export default function DashboardPage() {
     return map;
   }
 
+  // 매장 캐시 로드
+  useEffect(() => {
+    loadStores();
+  }, []);
+
   useEffect(() => {
     let alive = true;
     (async () => {
@@ -682,7 +687,7 @@ export default function DashboardPage() {
                             <input type="checkbox" checked={checked} onChange={() => toggleSelectJob(id)} onClick={(e) => e.stopPropagation()} />
                             <div style={{ display: "grid", gap: 2 }}>
                               <div style={{ fontWeight: 900, fontSize: 14 }}>
-                                {storeLabel(storeCode)}{" "}
+                                {jobStoreLabel(j)}{" "}
                                 <span style={{ fontSize: 12, color: "#94a3b8", fontWeight: 700 }}>({shortId(id)})</span>
                               </div>
                               <div style={{ fontSize: 12, color: "#64748b" }}>
@@ -704,7 +709,7 @@ export default function DashboardPage() {
                   ) : (
                     <div style={{ padding: 12 }}>
                       <div style={{ fontWeight: 900, marginBottom: 6, fontSize: 14 }}>
-                        {storeLabel(activeJob?.storeCode || activeJob?.store_code || "-")} ({shortId(activeJob?.id)})
+                        {jobStoreLabel(activeJob)} ({shortId(activeJob?.id)})
                       </div>
 
                       <div style={{ fontSize: 12, color: "#64748b", marginBottom: 10 }}>
@@ -938,7 +943,8 @@ function buildEpmsOutCsvWithHeader({ jobs, workDateYmd }) {
   const rows = [header];
 
   for (const job of jobs || []) {
-    const storeCode = String(job?.storeCode || job?.store_code || "").trim();
+    // store relation 우선, fallback으로 storeCode/store_code
+    const storeCode = job?.store?.code || String(job?.storeCode || job?.store_code || "").trim();
     const items = job?.items || job?.jobItems || job?.job_items || [];
 
     const jobDateStr = job?._exportDate ? String(job._exportDate).replaceAll("-", "") : fallbackDateStr;

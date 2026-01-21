@@ -2,6 +2,28 @@
 import { http } from "../_common/http";
 import { getOperatorId } from "../_common/operator";
 
+// 매장코드 → storeId 캐시
+let storeCodeToIdCache = new Map();
+
+async function ensureStoreCache() {
+  if (storeCodeToIdCache.size > 0) return;
+  try {
+    const res = await http.get("/stores");
+    const rows = res?.rows || [];
+    storeCodeToIdCache = new Map(rows.map((s) => [s.code, s.id]));
+  } catch (e) {
+    console.error("매장 캐시 로드 실패:", e);
+  }
+}
+
+async function getStoreIdByCode(code) {
+  const c = String(code ?? "").trim();
+  if (!c) return null;
+
+  await ensureStoreCache();
+  return storeCodeToIdCache.get(c) || null;
+}
+
 function qs(obj = {}) {
   const p = new URLSearchParams();
   for (const [k, v] of Object.entries(obj)) {
@@ -46,6 +68,7 @@ function groupRows(jobRows) {
     const makerCode = String(r?.makerCode || "").trim();
     const name = String(r?.name || "").trim();
     const reqNo = String(r?.reqNo || "").trim();
+    const requestDate = String(r?.requestDate || "").trim();
     const qty = Number(r?.qty ?? 0);
 
     if (!storeCode) continue;
@@ -53,7 +76,12 @@ function groupRows(jobRows) {
     if (!skuCode && !makerCode) continue;
 
     const key = `${kind || "미분류"}__${storeCode}`;
-    if (!map.has(key)) map.set(key, { kind: kind || "", storeCode, rows: [] });
+    if (!map.has(key)) map.set(key, { kind: kind || "", storeCode, requestDate, rows: [] });
+
+    // 그룹의 requestDate가 비어있으면 첫 번째 값으로 설정
+    if (!map.get(key).requestDate && requestDate) {
+      map.get(key).requestDate = requestDate;
+    }
 
     map.get(key).rows.push({
       storeCode,
@@ -61,6 +89,7 @@ function groupRows(jobRows) {
       makerCode,
       name,
       reqNo,
+      productType: String(r?.productType || "").trim(),
       qty,
       jobKind: kind || null,
     });
@@ -69,8 +98,15 @@ function groupRows(jobRows) {
 }
 
 export const jobsApi = {
-  list: async ({ status, kind, storeCode } = {}) => {
-    return http.get(`/jobs${qs({ status, kind, storeCode })}`);
+  list: async ({ status, kind, storeId, storeCode, parentId } = {}) => {
+    // storeCode가 주어지면 storeId로 변환
+    let finalStoreId = storeId;
+    if (!finalStoreId && storeCode) {
+      finalStoreId = await getStoreIdByCode(storeCode);
+    }
+    // parentId가 null이면 "null" 문자열로 전달 (최상위 Job만 조회)
+    const parentIdParam = parentId === null ? "null" : parentId;
+    return http.get(`/jobs${qs({ status, kind, storeId: finalStoreId, parentId: parentIdParam })}`);
   },
 
   get: async (jobId) => {
@@ -78,17 +114,36 @@ export const jobsApi = {
     return http.get(`/jobs/${jobId}`);
   },
 
-  // ✅ kind/type/direction 받을 수 있게 확장
-  create: async ({ storeCode, title, memo, kind, jobKind, type, direction } = {}) => {
+  // ✅ kind/type/direction + 배치(parentId/packType/sortOrder) 받을 수 있게 확장
+  // storeId 또는 storeCode 지원 (storeCode는 자동으로 storeId 변환)
+  create: async ({ storeId, storeCode, title, memo, kind, jobKind, type, direction, requestDate, parentId, packType, sortOrder } = {}) => {
     const operatorId = getOperatorId();
+
+    // storeId가 없으면 storeCode로 조회
+    let finalStoreId = storeId;
+    if (!finalStoreId && storeCode) {
+      finalStoreId = await getStoreIdByCode(storeCode);
+      if (!finalStoreId) {
+        throw new Error(`매장을 찾을 수 없어: ${storeCode}`);
+      }
+    }
+
+    if (!finalStoreId) {
+      throw new Error("storeId 또는 storeCode가 필요해");
+    }
+
     return http.post(`/jobs`, {
-      storeCode,
+      storeId: finalStoreId,
       title,
       memo,
       ...(kind ? { kind } : {}),
       ...(jobKind ? { jobKind } : {}),
       ...(type ? { type } : {}),
       ...(direction ? { direction } : {}),
+      ...(requestDate ? { requestDate } : {}),
+      ...(parentId ? { parentId } : {}),
+      ...(packType ? { packType } : {}),
+      ...(sortOrder !== undefined ? { sortOrder } : {}),
       ...(operatorId ? { operatorId } : {}),
     });
   },
@@ -150,6 +205,7 @@ export const jobsApi = {
     for (const g of groups) {
       const kind = g.kind || "미분류";
       const storeCode = g.storeCode;
+      const requestDate = g.requestDate || null;
 
       const title = `[${kind}] ${storeCode}`;
       const memo = `excel=${jobFileName || ""}; kind=${kind}; store=${storeCode}`;
@@ -159,6 +215,7 @@ export const jobsApi = {
         storeCode,
         title,
         memo,
+        requestDate,
         ...kp,
       });
 
@@ -214,6 +271,32 @@ export const jobsApi = {
   undoAll: async (jobId) => {
     const operatorId = getOperatorId();
     return http.post(`/jobs/${jobId}/undo-all`, {
+      ...(operatorId ? { operatorId } : {}),
+    });
+  },
+
+  // ================================
+  // 🔽 배치(묶음) Job 관련 API
+  // ================================
+
+  /**
+   * 배치 Job 상세 조회 (하위 Job 포함)
+   */
+  getBatch: async (batchJobId) => {
+    if (!batchJobId) throw new Error("batchJobId is required");
+    return http.get(`/jobs/${batchJobId}/batch`);
+  },
+
+  /**
+   * 배치 Job 스캔
+   * - 하위 Job 중 해당 SKU 포함된 Job을 찾아 스캔
+   * - 단포 우선, 합포 나중
+   */
+  scanBatch: async (batchJobId, body) => {
+    if (!batchJobId) throw new Error("batchJobId is required");
+    const operatorId = getOperatorId();
+    return http.post(`/jobs/${batchJobId}/batch/scan`, {
+      ...(body || {}),
       ...(operatorId ? { operatorId } : {}),
     });
   },

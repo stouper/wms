@@ -5,6 +5,21 @@ dotenv.config();
 const prisma = new PrismaClient();
 
 async function main() {
+  // 테스트 Store 확인/생성 (택배용)
+  let store = await prisma.store.findFirst({ where: { code: 'PARCEL' } });
+  if (!store) {
+    store = await prisma.store.create({
+      data: {
+        code: 'PARCEL',
+        name: '택배 출고',
+        isHq: false,
+      },
+    });
+    console.log('Store 생성:', store.id);
+  } else {
+    console.log('기존 Store:', store.id);
+  }
+
   // 테스트 SKU 확인/생성
   let sku = await prisma.sku.findFirst({ where: { sku: 'TEST-CJ-SKU' } });
   if (!sku) {
@@ -12,7 +27,7 @@ async function main() {
       data: {
         sku: 'TEST-CJ-SKU',
         name: 'CJ 테스트 상품',
-        barcode: 'TEST-CJ-SKU',
+        makerCode: 'TEST-CJ-SKU',
       },
     });
     console.log('SKU 생성:', sku.id);
@@ -25,7 +40,7 @@ async function main() {
     data: {
       type: 'OUTBOUND',
       status: 'done',
-      storeCode: '9999',
+      storeId: store.id,
       title: '테스트 택배 #' + Date.now(),
       items: {
         create: {

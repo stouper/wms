@@ -8,7 +8,7 @@ import { Th, Td } from "../components/TableParts";
 import { storeShipMode } from "../workflows/storeOutbound/storeOutbound.workflow";
 import { addSku, pickSkuFromScan, printBoxLabel } from "../workflows/_common/print/packingBox";
 import { openJobSheetA4PrintWindow } from "../workflows/_common/print";
-import { storeLabel } from "../workflows/_common/storeMap";
+import { jobStoreLabel, jobStoreCode, loadStores } from "../workflows/_common/storeMap";
 
 const PAGE_KEY = "storeShip";
 
@@ -230,10 +230,17 @@ export default function StoreOutboundPage({ pageTitle = "매장 출고", default
       const listAll = await jobsFlow.listJobs();
       const normalized = (Array.isArray(listAll) ? listAll : []).map((x) => unwrapJob(x) || x).filter(Boolean);
 
-      // ✅ Job.type 기준 필터링: OUTBOUND이면서 parcel이 없는 것만 (일반 매장 출고)
-      // 택배 작지(parcel 있는 Job)는 "택배 작업" 페이지에서만 표시
+      // ✅ Job.type 기준 필터링: OUTBOUND이면서 일반 매장 출고만
+      // 택배 관련 Job 제외: 배치 Job([택배]), 하위 Job(parentId/packType)
       const list = normalized.filter((j) => {
-        return j.type === 'OUTBOUND' && !j.parcel;
+        // 택배 배치 Job 제외
+        if (j.title?.includes('[택배]')) return false;
+        // 택배 하위 Job 제외 (parentId가 있거나 packType이 있는 것)
+        if (j.parentId) return false;
+        if (j.packType) return false;
+        // parcel 있는 Job 제외
+        if (j.parcel) return false;
+        return j.type === 'OUTBOUND';
       });
 
       setCreated(list);
@@ -253,6 +260,7 @@ export default function StoreOutboundPage({ pageTitle = "매장 출고", default
   }
 
   useEffect(() => {
+    loadStores(); // 매장 캐시 로드
     loadJobsFromServer();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
@@ -521,7 +529,7 @@ export default function StoreOutboundPage({ pageTitle = "매장 출고", default
                     {j.title || "Job"}
                   </div>
                   <div style={{ fontSize: 12, color: "#64748b", whiteSpace: "nowrap" }}>
-                    store <b>{storeLabel(j.storeCode || defaultStoreCode)}</b> · <b>{j.status}</b>
+                    store <b>{jobStoreLabel(j, defaultStoreCode)}</b> · <b>{j.status}</b>
                   </div>
                 </button>
 
@@ -574,7 +582,7 @@ export default function StoreOutboundPage({ pageTitle = "매장 출고", default
         <div style={{ display: "flex", alignItems: "baseline", justifyContent: "space-between", gap: 10, flexWrap: "wrap" }}>
           <div style={{ fontWeight: 900 }}>선택된 Job 상세</div>
           <div style={{ fontSize: 12, color: "#64748b" }}>
-            store: <b>{storeLabel(selectedJob.storeCode || defaultStoreCode)}</b> · status: <b>{selectedJob.status}</b> · id:{" "}
+            store: <b>{jobStoreLabel(selectedJob, defaultStoreCode)}</b> · status: <b>{selectedJob.status}</b> · id:{" "}
             {selectedJob.id}
           </div>
         </div>
@@ -853,8 +861,8 @@ export default function StoreOutboundPage({ pageTitle = "매장 출고", default
             const payload = {
               jobTitle: job?.title || "매장 출고 작업지시서",
               jobId: job?.id || "",
-              storeCode: job?.storeCode || "",
-              storeName: "",
+              storeCode: jobStoreCode(job),
+              storeName: job?.store?.name || "",
               memo: job?.memo || "",
               createdAt: job?.createdAt || new Date().toISOString(),
               doneAt: job?.doneAt || "",

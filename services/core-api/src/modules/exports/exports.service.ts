@@ -45,6 +45,7 @@ export class ExportsService {
         doneAt: { gte: start, lt: end } as any,
       } as any,
       include: {
+        store: { select: { code: true } },
         items: {
           include: { sku: { select: { makerCode: true } } },
         } as any,
@@ -54,7 +55,7 @@ export class ExportsService {
     const map = new Map<string, Row>();
 
     for (const job of jobs) {
-      const storeCode = String(job.storeCode ?? '').trim();
+      const storeCode = String(job.store?.code ?? '').trim();
       if (!storeCode) continue;
 
       for (const it of (job.items ?? []) as any[]) {

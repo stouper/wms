@@ -8,5 +8,6 @@ import { CjApiModule } from '../cj-api/cj-api.module';
   imports: [CjApiModule],
   controllers: [ExportsController],
   providers: [ExportsService, PrismaService],
+  exports: [ExportsService], // ✅ JobsModule에서 사용하기 위해 export
 })
 export class ExportsModule {}

@@ -6,7 +6,7 @@ import { safeReadJson, safeReadLocal, safeWriteJson, safeWriteLocal } from "../l
 import { inputStyle, primaryBtn } from "../ui/styles";
 import { Th, Td } from "../components/TableParts";
 import { whInboundMode } from "../workflows/warehouseInbound/warehouseInbound.workflow";
-import { storeLabel } from "../workflows/_common/storeMap";
+import { jobStoreLabel, loadStores } from "../workflows/_common/storeMap";
 
 const PAGE_KEY = "whInbound";
 
@@ -246,6 +246,7 @@ export default function WarehouseInboundPage({ pageTitle = "창고 입고(반품
   }
 
   useEffect(() => {
+    loadStores(); // 매장 캐시 로드
     loadJobsFromServer();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
@@ -509,7 +510,7 @@ export default function WarehouseInboundPage({ pageTitle = "창고 입고(반품
                     {j.title || "Job"}
                   </div>
                   <div style={{ fontSize: 12, color: "#64748b", whiteSpace: "nowrap" }}>
-                    store <b>{storeLabel(j.storeCode || defaultStoreCode)}</b> · <b>{j.status}</b>
+                    store <b>{jobStoreLabel(j, defaultStoreCode)}</b> · <b>{j.status}</b>
                   </div>
                 </button>
 
@@ -562,7 +563,7 @@ export default function WarehouseInboundPage({ pageTitle = "창고 입고(반품
         <div style={{ display: "flex", alignItems: "baseline", justifyContent: "space-between", gap: 10, flexWrap: "wrap" }}>
           <div style={{ fontWeight: 900 }}>선택된 Job 상세</div>
           <div style={{ fontSize: 12, color: "#64748b" }}>
-            store: <b>{storeLabel(selectedJob.storeCode || defaultStoreCode)}</b> · status: <b>{selectedJob.status}</b> · id:{" "}
+            store: <b>{jobStoreLabel(selectedJob, defaultStoreCode)}</b> · status: <b>{selectedJob.status}</b> · id:{" "}
             {selectedJob.id}
           </div>
         </div>

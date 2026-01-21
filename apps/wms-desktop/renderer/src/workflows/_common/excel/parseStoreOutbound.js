@@ -145,10 +145,12 @@ function normalizeRows(objs) {
     const storeName = pick(o, ["storeName", "STORENAME", "거래처"]);
     const skuCode = pick(o, ["skuCode", "SKU", "단품코드", "단품", "품번"]);
     const makerCode = pick(o, ["makerCode", "MAKER", "Maker코드", "메이커코드", "바코드", "barcode"]);
-    const name = pick(o, ["name", "NAME", "코드명", "상품명", "품명"]); // ✅ 추가
+    const name = pick(o, ["name", "NAME", "코드명", "상품명", "품명"]);
     const qty = pick(o, ["qty", "Qty", "QTY", "수량", "의뢰수량", "수량(의뢰)"]);
     const kindRaw = pick(o, ["구분", "출고/반품", "작업구분", "TYPE", "type"]);
     const reqNo = pick(o, ["의뢰번호"]);
+    const requestDate = pick(o, ["의뢰요청일", "의뢰일", "요청일", "requestDate"]);
+    const productType = pick(o, ["상품구분", "제품구분", "제품타입", "productType", "ProductType"]);
 
     const kind = normalizeKind(kindRaw);
     if (kind) kindSet.add(kind);
@@ -159,7 +161,9 @@ function normalizeRows(objs) {
       skuCode: String(skuCode ?? "").trim(),
       makerCode: String(makerCode ?? "").trim(),
       name: String(name ?? "").trim(),
-      reqNo: String(reqNo ?? "").trim(), // ✅ 추가
+      reqNo: String(reqNo ?? "").trim(),
+      requestDate: String(requestDate ?? "").trim(),
+      productType: String(productType ?? "").trim(),
       qty: Math.abs(toInt(qty)),
       jobKind: kind || null,
     };

@@ -17,9 +17,11 @@ enum JobType {
 
 model Store {
   id        String     @id @default(cuid())
-  code      String     @unique
-  name      String?
+  code      String     @unique  // 매장코드 (HQ, 4000, 4100...)
+  name      String?              // 매장명
+  isHq      Boolean    @default(false)  // 본사 창고 여부
   locations Location[]
+  jobs      Job[]
 }
 
 model Location {
@@ -41,19 +43,15 @@ model Location {
 model Sku {
   id          String  @id @default(cuid())
   sku         String  @unique // SKU 코드
-  makerCode   String?
+  makerCode   String? // 바코드/메이커코드 (통합)
   name        String?
   productType String  @default("SHOES")
-
-  // ✅ [추가] 별도 바코드 (포장지 바코드 등)
-  barcode String?
 
   inventories  Inventory[]
   inventoryTxs InventoryTx[]
   jobItems     JobItem[]
 
   @@index([makerCode], map: "Sku_makerCode_idx")
-  @@index([barcode], map: "Sku_barcode_idx")
 }
 
 model Inventory {
@@ -126,7 +124,8 @@ model InventoryTx {
 
 model Job {
   id            String  @id @default(cuid())
-  storeCode     String // 매장코드(숫자) 그대로 저장
+  storeId       String  // 매장 FK
+  store         Store   @relation(fields: [storeId], references: [id])
   allowOverpick Boolean @default(false)
   title         String?
   memo          String?
@@ -147,6 +146,18 @@ model Job {
   // ✅ [추가] 판매채널 ("STORE" | "ONLINE" | "COUPANG" 등)
   channel String?
 
+  // ✅ [추가] 의뢰요청일
+  requestDate DateTime?
+
+  // ✅ [추가] 배치(묶음) Job 관계 - 택배 작업용
+  parentId String?
+  parent   Job?  @relation("JobHierarchy", fields: [parentId], references: [id], onDelete: Cascade)
+  children Job[] @relation("JobHierarchy")
+
+  // ✅ [추가] 택배 작업용 - 단포/합포 구분 및 정렬
+  packType  String? // "single" | "multi" (null이면 배치 Job)
+  sortOrder Int     @default(0) // 단포=1, 합포=2 (스캔 우선순위)
+
   createdAt DateTime  @default(now())
   updatedAt DateTime  @updatedAt
   doneAt    DateTime?
@@ -158,12 +169,15 @@ model Job {
   parcel JobParcel?
   txs    InventoryTx[]
 
-  @@index([storeCode], map: "Job_storeCode_idx")
+  @@index([storeId], map: "Job_storeId_idx")
   @@index([doneAt], map: "Job_doneAt_idx")
   @@index([type], map: "Job_type_idx")
   @@index([operatorId], map: "Job_operatorId_idx")
   @@index([priority], map: "Job_priority_idx")
   @@index([channel], map: "Job_channel_idx")
+  @@index([parentId], map: "Job_parentId_idx")
+  @@index([packType], map: "Job_packType_idx")
+  @@index([sortOrder], map: "Job_sortOrder_idx")
 }
 
 model JobItem {

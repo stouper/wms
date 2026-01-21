@@ -2,30 +2,33 @@ import { PrismaClient } from '@prisma/client';
 
 const prisma = new PrismaClient();
 
+// 시스템 필수 Location (삭제 불가)
+const SYSTEM_LOCATIONS = [
+  { code: 'RET-01', name: '반품' },
+  { code: 'UNASSIGNED', name: '미지정' },
+  { code: 'DEFECT', name: '불량' },
+  { code: 'HOLD', name: '출고금지' },
+];
+
 async function main() {
-  // 1) 기본 Store (HQ) 보장
+  // 1) 기본 Store (HQ) 보장 - 본사 창고
   const store = await prisma.store.upsert({
     where: { code: 'HQ' },
-    update: {},
-    create: { code: 'HQ', name: 'Head Office' },
+    update: { isHq: true },
+    create: { code: 'HQ', name: '본사 창고', isHq: true },
     select: { id: true },
   });
 
-  // 2) 반품 버킷: RET-01
-  await prisma.location.upsert({
-    where: { storeId_code: { storeId: store.id, code: 'RET-01' } } as any,
-    update: {},
-    create: { storeId: store.id, code: 'RET-01' } as any,
-  } as any);
+  // 2) 시스템 필수 Location 생성
+  for (const loc of SYSTEM_LOCATIONS) {
+    await prisma.location.upsert({
+      where: { storeId_code: { storeId: store.id, code: loc.code } } as any,
+      update: { name: loc.name },
+      create: { storeId: store.id, code: loc.code, name: loc.name } as any,
+    } as any);
+  }
 
-  // 3) 강제 출고 버킷: UNASSIGNED
-  await prisma.location.upsert({
-    where: { storeId_code: { storeId: store.id, code: 'UNASSIGNED' } } as any,
-    update: {},
-    create: { storeId: store.id, code: 'UNASSIGNED' } as any,
-  } as any);
-
-  console.log('seed done: store(HQ) + locations(RET-01, UNASSIGNED)');
+  console.log('seed done: store(HQ) + system locations:', SYSTEM_LOCATIONS.map(l => l.code).join(', '));
 }
 
 main()
