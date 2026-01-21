@@ -290,7 +290,7 @@ export class HqInventoryService {
           where: { locationId: (loc as any).id, qty: 0 } as any,
         } as any);
       }
-    });
+    }, { timeout: 60000 }); // 60초 타임아웃 (대량 데이터 처리용)
 
     return {
       ok: true,
