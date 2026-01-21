@@ -29,7 +29,9 @@
       "Bash(ping:*)",
       "Bash(node -pe:*)",
       "Bash(git add:*)",
-      "Bash(git cat-file:*)"
+      "Bash(git cat-file:*)",
+      "Bash(ls:*)",
+      "Bash(ssh:*)"
     ]
   }
 }

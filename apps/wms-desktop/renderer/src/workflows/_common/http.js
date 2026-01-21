@@ -54,4 +54,5 @@ export const http = {
   post: (path, body, opts) => request("POST", path, body, opts),
   patch: (path, body, opts) => request("PATCH", path, body, opts),
   del: (path, opts) => request("DELETE", path, undefined, opts),
+  delete: (path, opts) => request("DELETE", path, undefined, opts),
 };
