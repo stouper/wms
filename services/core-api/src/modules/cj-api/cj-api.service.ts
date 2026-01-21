@@ -267,8 +267,12 @@ export class CjApiService {
     const kstDate = new Date(today.getTime() + kstOffset);
     const rcptYmd = kstDate.toISOString().slice(0, 10).replace(/-/g, '');
 
-    // 묶음키 생성
-    const custUseNo = parcel.orderNo || job.id;
+    // ✅ 고유 식별자 생성 (중복 방지)
+    const uniqueSuffix = `${Date.now().toString(36)}${Math.random().toString(36).slice(2, 6)}`.toUpperCase();
+
+    // 묶음키 생성 - 고유 suffix 추가하여 ORA-00001 방지
+    const baseOrderNo = parcel.orderNo || job.id.slice(-8);
+    const custUseNo = `${baseOrderNo}_${uniqueSuffix}`;
     const mpckKey = `${rcptYmd}_${this.custId}_${custUseNo}`;
 
     const token = await this.getValidToken();

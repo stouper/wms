@@ -24,7 +24,12 @@
       "Bash(npx prisma:*)",
       "Bash(python3:*)",
       "Bash(cmd.exe //c \"taskkill /PID 29800 /F\")",
-      "Bash(tasklist:*)"
+      "Bash(tasklist:*)",
+      "Bash(node test-batch.js:*)",
+      "Bash(ping:*)",
+      "Bash(node -pe:*)",
+      "Bash(git add:*)",
+      "Bash(git cat-file:*)"
     ]
   }
 }

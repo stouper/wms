@@ -51,8 +51,7 @@ export default function WarehouseInboundPage({ pageTitle = "창고 입고(반품
   const [scanQty, setScanQty] = useState(1);
   const [scanLoc, setScanLoc] = useState(() => mode.defaultLocationCode || "RET-01");
 
-  const [lastScan, setLastScan] = useState(null);
-  const [showScanDebug, setShowScanDebug] = useState(false);
+  // lastScan 상태 제거 (디버그 영역 삭제됨)
 
   const [approvingExtra, setApprovingExtra] = useState(false);
 
@@ -336,9 +335,8 @@ export default function WarehouseInboundPage({ pageTitle = "창고 입고(반품
 
       triggerTotalsFlash();
       await loadJob(selectedJobId);
-      await loadTx(selectedJobId);
+      await loadTx(selectedJobId); // ✅ 서버에서 다시 로그 조회 (undoneAt: null 필터)
 
-      setLastScan(null);
       setTimeout(() => scanRef.current?.focus?.(), 50);
 
       playScanSuccessBeep();
@@ -394,7 +392,6 @@ export default function WarehouseInboundPage({ pageTitle = "창고 입고(반품
       playScanSuccessBeep();
       triggerTotalsFlash();
 
-      if (result.lastScan !== undefined) setLastScan(result.lastScan);
       if (result.toast) pushToast(result.toast);
 
       if (result.resetScan) {
@@ -558,46 +555,80 @@ export default function WarehouseInboundPage({ pageTitle = "창고 입고(반품
     if (!selectedJob) return null;
     const items = Array.isArray(selectedJob.items) ? selectedJob.items : [];
 
+    // 전체 진행률 계산
+    const totalPlanned = items.reduce((sum, it) => sum + (it.qtyPlanned || 0), 0);
+    const totalPicked = items.reduce((sum, it) => sum + (it.qtyPicked || 0), 0);
+    const overallProgress = totalPlanned > 0 ? Math.floor((totalPicked / totalPlanned) * 100) : 0;
+
     return (
       <div style={{ marginTop: 12, border: "1px solid #e5e7eb", borderRadius: 12, padding: 12, background: "#fff" }}>
         <div style={{ display: "flex", alignItems: "baseline", justifyContent: "space-between", gap: 10, flexWrap: "wrap" }}>
           <div style={{ fontWeight: 900 }}>선택된 Job 상세</div>
-          <div style={{ fontSize: 12, color: "#64748b" }}>
-            store: <b>{jobStoreLabel(selectedJob, defaultStoreCode)}</b> · status: <b>{selectedJob.status}</b> · id:{" "}
-            {selectedJob.id}
+          <div style={{ fontSize: 13, color: "#64748b", display: "flex", gap: 12, alignItems: "center" }}>
+            <span>store: <b>{jobStoreLabel(selectedJob, defaultStoreCode)}</b></span>
+            <span style={{
+              padding: "2px 8px",
+              borderRadius: 4,
+              background: selectedJob.status === "done" ? "#dcfce7" : "#fef3c7",
+              color: selectedJob.status === "done" ? "#059669" : "#d97706",
+              fontWeight: 700
+            }}>
+              {selectedJob.status === "done" ? "완료" : "진행중"}
+            </span>
+            <span style={{ fontWeight: 700, color: overallProgress >= 100 ? "#059669" : "#3b82f6" }}>
+              {overallProgress}%
+            </span>
           </div>
         </div>
 
         {items.length ? (
           <div style={{ marginTop: 10, maxHeight: 420, overflow: "auto", border: "1px solid #e5e7eb", borderRadius: 10 }}>
-            <table style={{ width: "100%", borderCollapse: "collapse" }}>
+            <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 15 }}>
               <thead>
-                <tr>
-                  <Th>sku</Th>
-                  <Th align="right">planned</Th>
-                  <Th align="right">received</Th>
-                  <Th align="right">extra</Th>
+                <tr style={{ background: "#f8fafc" }}>
+                  <Th style={{ width: 55 }}>상태</Th>
+                  <Th>상품</Th>
+                  <Th style={{ width: 130 }}>makerCode</Th>
+                  <Th align="center" style={{ width: 60 }}>목표</Th>
+                  <Th align="center" style={{ width: 60 }}>입고</Th>
+                  <Th align="center" style={{ width: 55 }}>진행</Th>
+                  <Th align="right" style={{ width: 100 }}>추가</Th>
                 </tr>
               </thead>
               <tbody>
                 {items.map((it) => {
-                  const remaining = Math.max(0, (it.qtyPlanned || 0) - (it.qtyPicked || 0));
-                  const canExtra = remaining === 0;
+                  const planned = it.qtyPlanned || 0;
+                  const picked = it.qtyPicked || 0;
+                  const isDone = picked >= planned;
+                  const canExtra = isDone;
                   const approved = getApprovedQty(it);
 
                   return (
-                    <tr key={it.id}>
-                      <Td>{it?.sku?.sku || it.skuCode || it.makerCodeSnapshot || it.id}</Td>
-                      <Td align="right">{it.qtyPlanned}</Td>
-                      <Td align="right">{it.qtyPicked}</Td>
-
+                    <tr key={it.id} style={{ background: isDone ? "#f0fdf4" : "transparent" }}>
+                      <Td>
+                        {isDone ? (
+                          <span style={{ color: "#059669", fontWeight: 700, fontSize: 15 }}>완료</span>
+                        ) : (
+                          <span style={{ color: "#f59e0b", fontWeight: 700, fontSize: 15 }}>대기</span>
+                        )}
+                      </Td>
+                      <Td style={{ fontSize: 15, fontWeight: 700, color: isDone ? "#059669" : "#1e293b" }}>
+                        {it?.sku?.name || it?.sku?.sku || it.skuCode || it.id}
+                      </Td>
+                      <Td style={{ fontSize: 14, fontWeight: 600, color: "#475569" }}>
+                        {it?.sku?.makerCode || it.makerCodeSnapshot || "-"}
+                      </Td>
+                      <Td align="center" style={{ fontSize: 15, fontWeight: 700, color: "#1e293b" }}>{planned}</Td>
+                      <Td align="center" style={{ fontSize: 15, fontWeight: 700, color: isDone ? "#059669" : "#1e293b" }}>{picked}</Td>
+                      <Td align="center">
+                        <span style={{ fontWeight: 700, fontSize: 15, color: isDone ? "#059669" : "#374151" }}>
+                          {isDone ? "✓" : `${picked}/${planned}`}
+                        </span>
+                      </Td>
                       <Td align="right">
                         {canExtra ? (
-                          <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 10, minWidth: 160 }}>
-                            <div style={{ fontSize: 12, color: "#64748b", textAlign: "left" }}>
-                              승인됨: <b>{approved}</b>
-                            </div>
-
+                          <div style={{ display: "flex", alignItems: "center", justifyContent: "flex-end", gap: 8 }}>
+                            <span style={{ fontSize: 12, color: "#64748b" }}>+{approved}</span>
                             <button
                               type="button"
                               disabled={approvingExtra}
@@ -612,12 +643,13 @@ export default function WarehouseInboundPage({ pageTitle = "창고 입고(반품
                                 }
                               }}
                               style={{
-                                padding: "6px 10px",
-                                borderRadius: 10,
+                                padding: "4px 10px",
+                                borderRadius: 6,
                                 border: "1px solid #e5e7eb",
                                 background: "#fff",
                                 cursor: "pointer",
-                                fontSize: 12,
+                                fontSize: 13,
+                                fontWeight: 600,
                                 whiteSpace: "nowrap",
                               }}
                             >
@@ -625,7 +657,7 @@ export default function WarehouseInboundPage({ pageTitle = "창고 입고(반품
                             </button>
                           </div>
                         ) : (
-                          <span style={{ opacity: 0.5 }}>-</span>
+                          <span style={{ color: "#cbd5e1" }}>-</span>
                         )}
                       </Td>
                     </tr>
@@ -686,7 +718,8 @@ export default function WarehouseInboundPage({ pageTitle = "창고 입고(반품
                   pushToast({ kind: "info", title: "UNDO ALL", message: "전체 취소 완료" });
                   triggerTotalsFlash();
                   await loadJob(selectedJobId);
-                  await loadTx(selectedJobId);
+                  await loadTx(selectedJobId); // ✅ 서버에서 다시 로그 조회
+
                   playScanSuccessBeep();
                 } catch (e) {
                   playScanErrorBeep();
@@ -720,83 +753,78 @@ export default function WarehouseInboundPage({ pageTitle = "창고 입고(반품
               <table style={{ width: "100%", borderCollapse: "collapse" }}>
                 <thead>
                   <tr>
-                    <Th>time</Th>
-                    <Th>type</Th>
-                    <Th align="right">qty</Th>
-                    <Th>location</Th>
+                    <Th style={{ width: 80 }}>time</Th>
+                    <Th style={{ width: 90 }}>location</Th>
                     <Th>sku</Th>
-                    <Th></Th>
+                    <Th style={{ width: 130 }}>makerCode</Th>
+                    <Th align="right" style={{ width: 60 }}>qty</Th>
+                    <Th style={{ width: 60 }}></Th>
                   </tr>
                 </thead>
                 <tbody>
                   {scanTxLogs.map((tx, idx) => {
                     const t = tx?.createdAt ? new Date(tx.createdAt) : null;
                     const time = t ? t.toLocaleTimeString() : "-";
-                    const type = tx?.type || tx?.kind || "-";
                     const qty = tx?.qty ?? tx?.deltaQty ?? "-";
                     const loc = tx?.locationCode || tx?.location?.code || tx?.locationId || "-";
-                    const sku = tx?.skuCode || tx?.sku?.sku || tx?.sku?.makerCode || tx?.makerCode || tx?.jobItemId || "-";
-                    const undoCount = idx + 1;
+                    // ✅ SKU 이름 우선, 없으면 바코드 값으로 대체
+                    const skuName = tx?.sku?.name || tx?.skuCode || tx?.sku?.sku || "-";
+                    const makerCode = tx?.sku?.makerCode || tx?.makerCode || "-";
+                    // ✅ 서버에서 desc 정렬 → idx=0이 최근 스캔
+                    const isLatest = idx === 0;
 
                     return (
                       <tr key={tx.id || idx}>
-                        <Td style={{ fontSize: 12, color: "#64748b" }}>{time}</Td>
-                        <Td style={{ fontSize: 12 }}>{type}</Td>
-                        <Td align="right" style={{ fontSize: 12 }}>
+                        <Td style={{ fontSize: 14, fontWeight: 600, color: "#475569" }}>{time}</Td>
+                        <Td style={{ fontSize: 14, fontWeight: 600, color: "#1e293b" }}>{loc}</Td>
+                        <Td style={{ fontSize: 14, fontWeight: 600, color: "#1e293b" }}>{skuName}</Td>
+                        <Td style={{ fontSize: 14, fontWeight: 600, color: "#1e293b" }}>{makerCode}</Td>
+                        <Td align="right" style={{ fontSize: 14, fontWeight: 700, color: "#1e293b" }}>
                           {qty}
                         </Td>
-                        <Td style={{ fontSize: 12 }}>{loc}</Td>
-                        <Td style={{ fontSize: 12 }}>{sku}</Td>
                         <Td align="right">
-                          <button
-                            type="button"
-                            disabled={undoing || loading || !selectedJobId}
-                            onClick={async () => {
-                              await warmUpAudioOnce();
-                              playScanWarnBeep();
+                          {/* ✅ 최근 스캔에만 취소 버튼 표시 */}
+                          {isLatest ? (
+                            <button
+                              type="button"
+                              disabled={undoing || loading || !selectedJobId}
+                              onClick={async () => {
+                                await warmUpAudioOnce();
+                                playScanWarnBeep();
 
-                              const msg =
-                                undoCount === 1
-                                  ? "직전 스캔 1건을 취소할까?"
-                                  : `최근 스캔 ${undoCount}건을 취소(여기까지 연속)할까?`;
+                                const ok = window.confirm("직전 스캔 1건을 취소할까?");
+                                if (!ok) return;
 
-                              const ok = window.confirm(msg);
-                              if (!ok) return;
-
-                              setUndoing(true);
-                              try {
-                                if (undoCount === 1) {
+                                setUndoing(true);
+                                try {
                                   await jobsFlow.undoLast({ jobId: selectedJobId });
-                                } else {
-                                  await jobsFlow.undoUntil({ jobId: selectedJobId, txId: tx.id });
-                                }
 
-                                pushToast({ kind: "info", title: "UNDO", message: `취소 완료 (${undoCount}건)` });
-                                triggerTotalsFlash();
-                                await loadJob(selectedJobId);
-                                await loadTx(selectedJobId);
-                                setLastScan(null);
-                                playScanSuccessBeep();
-                              } catch (e) {
-                                playScanErrorBeep();
-                                pushToast({ kind: "error", title: "UNDO 실패", message: e?.message || String(e) });
-                              } finally {
-                                setUndoing(false);
-                              }
-                            }}
-                            style={{
-                              padding: "6px 10px",
-                              borderRadius: 10,
-                              border: "1px solid #e5e7eb",
-                              background: "#fff",
-                              cursor: "pointer",
-                              fontSize: 12,
-                              whiteSpace: "nowrap",
-                            }}
-                            title={undoCount === 1 ? "직전취소" : "여기까지 연속취소"}
-                          >
-                            취소
-                          </button>
+                                  pushToast({ kind: "info", title: "UNDO", message: "취소 완료" });
+                                  triggerTotalsFlash();
+                                  await loadJob(selectedJobId);
+                                  await loadTx(selectedJobId); // ✅ 서버에서 다시 로그 조회 (undoneAt: null 필터)
+
+                                  playScanSuccessBeep();
+                                } catch (e) {
+                                  playScanErrorBeep();
+                                  pushToast({ kind: "error", title: "UNDO 실패", message: e?.message || String(e) });
+                                } finally {
+                                  setUndoing(false);
+                                }
+                              }}
+                              style={{
+                                padding: "6px 10px",
+                                borderRadius: 10,
+                                border: "1px solid #e5e7eb",
+                                background: "#fff",
+                                cursor: "pointer",
+                                fontSize: 12,
+                                whiteSpace: "nowrap",
+                              }}
+                            >
+                              취소
+                            </button>
+                          ) : null}
                         </Td>
                       </tr>
                     );
@@ -886,74 +914,6 @@ export default function WarehouseInboundPage({ pageTitle = "창고 입고(반품
           </div>
         </div>
 
-        <div style={{ marginTop: 10, fontSize: 13 }}>
-          {!lastScan ? (
-            <div style={{ fontSize: 12, color: "#64748b" }}>스캔 결과가 여기에 표시돼.</div>
-          ) : (
-            <>
-              <div style={{ display: "flex", gap: 10, alignItems: "center", flexWrap: "wrap" }}>
-                <span style={{ fontWeight: 900 }}>결과:</span>
-                <span style={{ padding: "2px 8px", border: "1px solid #e5e7eb", borderRadius: 999 }}>
-                  {lastScan.status || (lastScan.ok ? "OK" : "ERROR")}
-                </span>
-
-                <span style={{ color: "#64748b" }}>loc:</span> <b>{lastScan.usedLocationCode || scanLoc || "-"}</b>
-                <span style={{ color: "#64748b" }}>sku:</span> <b>{lastScan.sku?.sku || lastScan.sku?.makerCode || "-"}</b>
-
-                {Number.isFinite(lastScan.picked?.qtyPicked) && Number.isFinite(lastScan.picked?.qtyPlanned) ? (
-                  <>
-                    <span style={{ color: "#64748b" }}>received:</span>{" "}
-                    <b>
-                      {lastScan.picked.qtyPicked}/{lastScan.picked.qtyPlanned}
-                    </b>
-                  </>
-                ) : null}
-
-                {/* ✅ Outbound처럼 (직전취소) */}
-                <button
-                  type="button"
-                  onClick={doUndoLast}
-                  disabled={undoing || loading || !selectedJobId}
-                  style={{
-                    padding: "6px 10px",
-                    borderRadius: 10,
-                    border: "1px solid #e5e7eb",
-                    background: undoing ? "#f1f5f9" : "#fff",
-                    cursor: undoing ? "not-allowed" : "pointer",
-                    fontSize: 12,
-                    whiteSpace: "nowrap",
-                  }}
-                  title="마지막 스캔을 취소(UNDO)"
-                >
-                  (직전취소)
-                </button>
-
-                <button
-                  type="button"
-                  onClick={() => setShowScanDebug((v) => !v)}
-                  style={{
-                    marginLeft: "auto",
-                    padding: "6px 10px",
-                    borderRadius: 10,
-                    border: "1px solid #e5e7eb",
-                    background: "#fff",
-                    cursor: "pointer",
-                    fontSize: 12,
-                    whiteSpace: "nowrap",
-                  }}
-                >
-                  {showScanDebug ? "디버그 숨김" : "디버그 보기"}
-                </button>
-              </div>
-
-              {showScanDebug ? (
-                <pre style={{ marginTop: 8, marginBottom: 0, whiteSpace: "pre-wrap", fontSize: 12, color: "#64748b" }}>
-                  {JSON.stringify(lastScan, null, 2)}
-                </pre>
-              ) : null}
-            </>
-          )}
-        </div>
       </div>
 
       <JobDetail />

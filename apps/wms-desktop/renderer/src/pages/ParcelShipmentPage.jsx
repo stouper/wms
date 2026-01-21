@@ -620,74 +620,157 @@ export default function ParcelShipmentPage({ pageTitle = "택배 작업" }) {
 
           {/* 주문 리스트 */}
           <div style={{ maxHeight: 400, overflow: "auto", border: "1px solid #e5e7eb", borderRadius: 10 }}>
-            <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 12 }}>
+            <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 15 }}>
               <thead>
                 <tr style={{ background: "#f8fafc", position: "sticky", top: 0 }}>
-                  <th style={thStyle}>상태</th>
-                  <th style={thStyle}>수취인</th>
-                  <th style={thStyle}>지역</th>
-                  <th style={thStyle}>타입</th>
+                  <th style={{ ...thStyle, width: 55 }}>상태</th>
+                  <th style={{ ...thStyle, width: 90 }}>수취인</th>
+                  <th style={{ ...thStyle, width: 80 }}>지역</th>
+                  <th style={{ ...thStyle, width: 70 }}>타입</th>
+                  <th style={{ ...thStyle, width: 130 }}>makerCode</th>
                   <th style={thStyle}>상품</th>
-                  <th style={{ ...thStyle, textAlign: "right" }}>진행</th>
+                  <th style={{ ...thStyle, width: 120 }}>송장</th>
+                  <th style={{ ...thStyle, width: 45, textAlign: "center" }}>qty</th>
+                  <th style={{ ...thStyle, width: 55, textAlign: "center" }}>진행</th>
                 </tr>
               </thead>
               <tbody>
                 {childJobs.map((child) => {
                   const items = child.items || [];
-                  const totalPlanned = items.reduce((sum, it) => sum + (it.qtyPlanned || 0), 0);
-                  const totalPicked = items.reduce((sum, it) => sum + (it.qtyPicked || 0), 0);
                   const isDone = child.status === "done";
                   const parcel = child.parcel;
+                  const isMulti = child.packType === "multi";
+                  const itemCount = items.length;
+
+                  // 아이템 행 높이 고정
+                  const itemRowStyle = {
+                    height: 32,
+                    lineHeight: "32px",
+                    overflow: "hidden",
+                    textOverflow: "ellipsis",
+                    whiteSpace: "nowrap",
+                  };
 
                   return (
-                    <tr key={child.id} style={{ background: isDone ? "#f0fdf4" : "transparent" }}>
+                    <tr key={child.id} style={{ background: isDone ? "#f0fdf4" : "transparent", verticalAlign: "top" }}>
                       <td style={tdStyle}>
                         {isDone ? (
-                          <span style={{ color: "#059669", fontWeight: 700 }}>완료</span>
+                          <span style={{ color: "#059669", fontWeight: 700, fontSize: 15 }}>완료</span>
                         ) : (
-                          <span style={{ color: "#f59e0b" }}>대기</span>
+                          <span style={{ color: "#f59e0b", fontWeight: 700, fontSize: 15 }}>대기</span>
                         )}
                       </td>
                       <td style={tdStyle}>
-                        <div style={{ fontWeight: 600 }}>{parcel?.recipientName || "-"}</div>
-                        <div style={{ fontSize: 10, color: "#64748b" }}>{parcel?.phone || ""}</div>
+                        <span style={{ fontWeight: 700, fontSize: 15, color: "#1e293b" }}>{parcel?.recipientName || "-"}</span>
                       </td>
-                      <td style={tdStyle}>{child.title?.match(/\(([^)]+)\)/)?.[1] || "-"}</td>
+                      <td style={tdStyle}>
+                        <span style={{ fontWeight: 700, fontSize: 15, color: "#1e293b" }}>{child.title?.match(/\(([^)]+)\)/)?.[1] || "-"}</span>
+                      </td>
                       <td style={tdStyle}>
                         <span
                           style={{
-                            fontSize: 10,
+                            fontSize: 13,
                             fontWeight: 700,
-                            padding: "2px 6px",
+                            padding: "4px 8px",
                             borderRadius: 4,
-                            background: child.packType === "single" ? "#dbeafe" : "#fce7f3",
-                            color: child.packType === "single" ? "#1d4ed8" : "#be185d",
+                            background: isMulti ? "#fce7f3" : "#dbeafe",
+                            color: isMulti ? "#be185d" : "#1d4ed8",
+                            whiteSpace: "nowrap",
                           }}
                         >
-                          {child.packType === "single" ? "단포" : "합포"}
+                          {isMulti ? `합포(${itemCount})` : "단포"}
                         </span>
                       </td>
-                      <td style={tdStyle}>
-                        {items.slice(0, 2).map((it, idx) => (
-                          <div key={idx} style={{ fontSize: 10, color: "#64748b" }}>
-                            {it.sku?.makerCode || it.makerCodeSnapshot || "-"} x{it.qtyPlanned}
+                      {/* makerCode */}
+                      <td style={{ ...tdStyle, padding: 0 }}>
+                        {items.map((it, idx) => (
+                          <div
+                            key={idx}
+                            style={{
+                              ...itemRowStyle,
+                              fontSize: 14,
+                              fontWeight: 600,
+                              color: "#475569",
+                              padding: "0 10px",
+                              borderBottom: idx < items.length - 1 ? "2px solid #94a3b8" : "none",
+                            }}
+                          >
+                            {it.sku?.makerCode || it.makerCodeSnapshot || ""}
                           </div>
                         ))}
-                        {items.length > 2 && (
-                          <div style={{ fontSize: 10, color: "#9ca3af" }}>+{items.length - 2}개 더</div>
-                        )}
                       </td>
-                      <td style={{ ...tdStyle, textAlign: "right" }}>
-                        <span style={{ fontWeight: 600, color: isDone ? "#059669" : "#374151" }}>
-                          {totalPicked}/{totalPlanned}
+                      {/* 상품 */}
+                      <td style={{ ...tdStyle, padding: 0 }}>
+                        {items.map((it, idx) => {
+                          const itemDone = (it.qtyPicked || 0) >= (it.qtyPlanned || 0);
+                          return (
+                            <div
+                              key={idx}
+                              style={{
+                                ...itemRowStyle,
+                                fontSize: 15,
+                                fontWeight: 700,
+                                color: itemDone ? "#059669" : "#1e293b",
+                                padding: "0 10px 0 20px",
+                                borderBottom: idx < items.length - 1 ? "2px solid #94a3b8" : "none",
+                              }}
+                            >
+                              {it.sku?.name || it.nameSnapshot || "-"}
+                            </div>
+                          );
+                        })}
+                      </td>
+                      {/* 송장 */}
+                      <td style={tdStyle}>
+                        <span style={{ fontSize: 14, fontWeight: 600, color: parcel?.waybillNo ? "#1d4ed8" : "#9ca3af" }}>
+                          {parcel?.waybillNo || "-"}
                         </span>
+                      </td>
+                      {/* qty */}
+                      <td style={{ ...tdStyle, padding: 0, textAlign: "center" }}>
+                        {items.map((it, idx) => (
+                          <div
+                            key={idx}
+                            style={{
+                              ...itemRowStyle,
+                              fontWeight: 700,
+                              fontSize: 15,
+                              color: "#1e293b",
+                              borderBottom: idx < items.length - 1 ? "2px solid #94a3b8" : "none",
+                            }}
+                          >
+                            {it.qtyPlanned || 0}
+                          </div>
+                        ))}
+                      </td>
+                      {/* 진행 */}
+                      <td style={{ ...tdStyle, padding: 0, textAlign: "center" }}>
+                        {items.map((it, idx) => {
+                          const picked = it.qtyPicked || 0;
+                          const planned = it.qtyPlanned || 0;
+                          const itemDone = picked >= planned;
+                          return (
+                            <div
+                              key={idx}
+                              style={{
+                                ...itemRowStyle,
+                                fontWeight: 700,
+                                fontSize: 15,
+                                color: itemDone ? "#059669" : "#374151",
+                                borderBottom: idx < items.length - 1 ? "2px solid #94a3b8" : "none",
+                              }}
+                            >
+                              {itemDone ? "✓" : `${picked}/${planned}`}
+                            </div>
+                          );
+                        })}
                       </td>
                     </tr>
                   );
                 })}
                 {childJobs.length === 0 && (
                   <tr>
-                    <td colSpan={6} style={{ ...tdStyle, textAlign: "center", color: "#64748b", padding: 20 }}>
+                    <td colSpan={9} style={{ ...tdStyle, textAlign: "center", color: "#64748b", padding: 20 }}>
                       주문 없음
                     </td>
                   </tr>
@@ -702,14 +785,18 @@ export default function ParcelShipmentPage({ pageTitle = "택배 작업" }) {
 }
 
 const thStyle = {
-  padding: "8px 10px",
+  padding: "10px 12px",
   textAlign: "left",
-  fontWeight: 600,
-  color: "#64748b",
+  fontWeight: 700,
+  fontSize: 14,
+  color: "#475569",
   borderBottom: "1px solid #e5e7eb",
 };
 
 const tdStyle = {
-  padding: "8px 10px",
+  padding: "10px 12px",
+  fontSize: 14,
+  fontWeight: 600,
+  color: "#1e293b",
   borderBottom: "1px solid #f1f5f9",
 };

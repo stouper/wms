@@ -964,9 +964,9 @@ async addItems(jobId: string, dto: any) {
 
   async undoLastTx(jobId: string, operatorId?: string) {
   return this.prisma.$transaction(async (tx) => {
-    // 1) 아직 undo 안 된 마지막 InventoryTx (이 Job 기준)
+    // 1) 마지막 InventoryTx (이 Job 기준) - UNDO 시 삭제하므로 undoneAt 체크 불필요
     const lastTx = await (tx as any).inventoryTx.findFirst({
-      where: { jobId, undoneAt: null },
+      where: { jobId },
       orderBy: { createdAt: 'desc' },
     });
 
@@ -990,7 +990,6 @@ async addItems(jobId: string, dto: any) {
       where: {
         skuId: lastTx.skuId,
         locationId: lastTx.locationId,
-        undoneAt: null,
         createdAt: { gt: lastTx.createdAt },
       },
       select: { id: true, type: true, qty: true, createdAt: true },
@@ -1066,32 +1065,12 @@ async addItems(jobId: string, dto: any) {
       }
     }
 
-    // 4) undo용 InventoryTx 생성 (감사 로그)
-    const undoTx = await (tx as any).inventoryTx.create({
-      data: {
-        type: 'undo',
-        qty: delta,
-        skuId: lastTx.skuId,
-        locationId: lastTx.locationId,
-        jobId: lastTx.jobId,
-        jobItemId: lastTx.jobItemId,
-        isForced: true,
-        beforeQty: before,
-        afterQty: after,
-        operatorId: this.norm(operatorId) || null,
-      },
-    });
-
-    // 5) 원본 tx에 undone 표시
-    await (tx as any).inventoryTx.update({
+    // 4) 원본 tx 삭제 (undo 로그 생성 대신 깔끔하게 삭제)
+    await (tx as any).inventoryTx.delete({
       where: { id: lastTx.id },
-      data: {
-        undoneAt: new Date(),
-        undoneTxId: undoTx.id,
-      },
     });
 
-    // 6) job done 상태 되돌리기(필요 시)
+    // 5) job done 상태 되돌리기(필요 시)
     const job = await (tx as any).job.findUnique({
       where: { id: jobId },
       select: { status: true },
@@ -1117,8 +1096,7 @@ async addItems(jobId: string, dto: any) {
 
     return {
       ok: true,
-      undoneTxId: lastTx.id,
-      undoAppliedTxId: undoTx.id,
+      deletedTxId: lastTx.id,
       delta,
     };
   });
@@ -1127,18 +1105,22 @@ async addItems(jobId: string, dto: any) {
   // 🔽 UNDO 확장 (추가)
   // ================================
 
-  // job 기준 InventoryTx 목록
+  // job 기준 InventoryTx 목록 (UNDO 시 삭제되므로 활성 로그만 조회됨)
   async listInventoryTx(jobId: string) {
     return (this.prisma as any).inventoryTx.findMany({
-      where: { jobId, undoneAt: null },
+      where: { jobId },
       orderBy: { createdAt: 'desc' },
+      include: {
+        sku: { select: { id: true, sku: true, makerCode: true, name: true } },
+        location: { select: { id: true, code: true, name: true } },
+      },
     });
   }
 
   // 최근 tx부터 특정 tx까지 연속 undo
   async undoUntilTx(jobId: string, targetTxId: string, operatorId?: string) {
     const txs = await (this.prisma as any).inventoryTx.findMany({
-      where: { jobId, undoneAt: null },
+      where: { jobId },
       orderBy: { createdAt: 'desc' },
       select: { id: true } as any,
     });
@@ -1163,7 +1145,7 @@ async addItems(jobId: string, dto: any) {
 
     while (true) {
       const last = await (this.prisma as any).inventoryTx.findFirst({
-        where: { jobId, undoneAt: null },
+        where: { jobId },
         orderBy: { createdAt: 'desc' },
         select: { id: true } as any,
       });
