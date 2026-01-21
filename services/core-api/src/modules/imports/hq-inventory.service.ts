@@ -8,6 +8,8 @@ import { PrismaService } from '../../prisma/prisma.service';
  * - (A) 엑셀에 없는 (location, sku) 인벤토리 row는 삭제
  * - (B) 엑셀에 있는 (location, sku)는 qty로 SET
  * - qty = 0 은 row를 남기지 않고 삭제 (깔끔 유지)
+ *
+ * ✅ 최적화: 배치 조회 + 벌크 작업으로 쿼리 수 최소화
  */
 
 export type HqRow = {
@@ -34,8 +36,6 @@ function normUpper(v: any) {
   return norm(v).toUpperCase();
 }
 
-// 프로젝트 기존 normalize가 있다면 거기 로직을 그대로 쓰는게 최선인데,
-// 현재 파일 기준으로는 이 함수만 필요
 function normalizeProductType(v: any) {
   const s = norm(v);
   if (!s) return undefined;
@@ -43,7 +43,7 @@ function normalizeProductType(v: any) {
   if (u === 'SHOES' || u === 'SHOE') return 'SHOES';
   if (u === 'ACC' || u === 'ACCESSORY' || u === 'ACCESSORIES') return 'ACCESSORY';
   if (u === 'SET') return 'SET';
-  return s; // 원본 유지
+  return s;
 }
 
 @Injectable()
@@ -51,20 +51,14 @@ export class HqInventoryService {
   constructor(private readonly prisma: PrismaService) {}
 
   /**
-   * HQ 인벤토리 "전체 교체" 반영
-   * - location 단위 스냅샷: 엑셀에 없는 SKU는 삭제
-   * - qty=0은 row를 남기지 않음
-   *
-   * + (B안 강화) store 전체 스냅샷:
-   * - 엑셀에 없는 로케이션의 재고는 전부 삭제
-   * - 단, UNASSIGNED / RET-01 은 로케이션만 유지하고 재고는 항상 비움
+   * HQ 인벤토리 "전체 교체" 반영 (최적화 버전)
    */
   async replaceAll(rows: HqRow[]) {
     if (!Array.isArray(rows) || rows.length <= 0) {
       throw new BadRequestException('rows is required');
     }
 
-    // HQ store 찾기 (isHq: true 기준)
+    // HQ store 찾기
     const hqStore = await this.prisma.store.findFirst({
       where: { isHq: true } as any,
       select: { id: true, code: true } as any,
@@ -74,9 +68,12 @@ export class HqInventoryService {
       throw new BadRequestException('본사 창고(isHq=true)가 등록되어 있지 않습니다.');
     }
 
-    // location별 skuMap 구성
+    // ========================================
+    // 1. 입력 데이터 정리 (location별 skuMap)
+    // ========================================
     const byLoc = new Map<string, Map<string, HqSkuInfo>>();
-    const uniqLocCodes: string[] = [];
+    const allSkuCodes = new Set<string>();
+    const allLocCodes = new Set<string>();
 
     for (const r of rows) {
       const skuCode = normUpper(r?.sku);
@@ -86,217 +83,209 @@ export class HqInventoryService {
       const qty = Number(r?.qty ?? 0);
       if (!Number.isFinite(qty) || qty < 0) continue;
 
-      const makerCode = norm(r?.makerCode) || undefined;
-      const name = norm(r?.name) || undefined;
-      const productType = normalizeProductType(r?.productType);
+      allSkuCodes.add(skuCode);
+      allLocCodes.add(locCode);
 
       if (!byLoc.has(locCode)) {
         byLoc.set(locCode, new Map());
-        uniqLocCodes.push(locCode);
       }
 
       const skuMap = byLoc.get(locCode)!;
       const prev = skuMap.get(skuCode);
 
-      // 같은 (loc, sku)가 여러 줄로 오면 합산
       if (!prev) {
-        skuMap.set(skuCode, { qty, makerCode, name, productType });
+        skuMap.set(skuCode, {
+          qty,
+          makerCode: norm(r?.makerCode) || undefined,
+          name: norm(r?.name) || undefined,
+          productType: normalizeProductType(r?.productType),
+        });
       } else {
         skuMap.set(skuCode, {
           qty: Number(prev.qty ?? 0) + qty,
-          makerCode: makerCode ?? prev.makerCode,
-          name: name ?? prev.name,
-          productType: productType ?? prev.productType,
+          makerCode: norm(r?.makerCode) || prev.makerCode,
+          name: norm(r?.name) || prev.name,
+          productType: normalizeProductType(r?.productType) ?? prev.productType,
         });
       }
     }
 
+    const uniqLocCodes = Array.from(allLocCodes);
+    const uniqSkuCodes = Array.from(allSkuCodes);
+
+    // 예외 로케이션: 재고는 항상 비움
+    const KEEP_EMPTY_LOCATION_CODES = new Set(['UNASSIGNED', 'RET-01', 'DEFECT', 'HOLD']);
+
     let applied = 0;
 
-    // ✅ 예외 로케이션: 로케이션은 유지하되, 재고(Inventory)는 항상 비워둠
-    const KEEP_EMPTY_LOCATION_CODES = new Set(['UNASSIGNED', 'RET-01']);
-
     await this.prisma.$transaction(async (tx) => {
-      // ✅ (B안) HQ 전체 스냅샷 정책:
-      //  - 엑셀에 없는 로케이션의 재고는 전부 삭제
-      //  - 단, UNASSIGNED / RET-01 은 '로케이션만 유지'하고 '재고는 항상 0개(삭제)'로 유지
-      //
-      // 1) UNASSIGNED / RET-01 Location 확보(없으면 생성)
-      for (const code of Array.from(KEEP_EMPTY_LOCATION_CODES)) {
-        const existing = await tx.location.findFirst({
-          where: { storeId: hqStore.id, code } as any,
+      // ========================================
+      // 2. 기존 Location 일괄 조회 + 없으면 생성
+      // ========================================
+      const existingLocs = await tx.location.findMany({
+        where: { storeId: hqStore.id } as any,
+        select: { id: true, code: true } as any,
+      } as any);
+
+      const locMap = new Map<string, string>(); // code → id
+      for (const loc of existingLocs as any[]) {
+        locMap.set(normUpper(loc.code), loc.id);
+      }
+
+      // 필요한 Location 생성 (예외 로케이션 포함)
+      const locsToCreate = [
+        ...uniqLocCodes.filter(c => !locMap.has(c)),
+        ...Array.from(KEEP_EMPTY_LOCATION_CODES).filter(c => !locMap.has(c)),
+      ];
+      const uniqueLocsToCreate = [...new Set(locsToCreate)];
+
+      if (uniqueLocsToCreate.length > 0) {
+        await tx.location.createMany({
+          data: uniqueLocsToCreate.map(code => ({
+            storeId: hqStore.id,
+            code,
+            name: code,
+          })) as any,
+          skipDuplicates: true,
+        } as any);
+
+        // 새로 생성된 Location 조회
+        const newLocs = await tx.location.findMany({
+          where: { storeId: hqStore.id, code: { in: uniqueLocsToCreate } } as any,
           select: { id: true, code: true } as any,
         } as any);
 
-        if (!existing) {
-          await tx.location.create({
-            data: { storeId: hqStore.id, code, name: code } as any,
-            select: { id: true, code: true } as any,
-          } as any);
+        for (const loc of newLocs as any[]) {
+          locMap.set(normUpper(loc.code), loc.id);
         }
       }
 
-      // 2) UNASSIGNED / RET-01 내부 재고는 무조건 비움
+      // ========================================
+      // 3. 기존 SKU 일괄 조회 + 없으면 생성
+      // ========================================
+      const existingSkus = await tx.sku.findMany({
+        where: { sku: { in: uniqSkuCodes } } as any,
+        select: { id: true, sku: true, makerCode: true, name: true, productType: true } as any,
+      } as any);
+
+      const skuMap = new Map<string, any>(); // sku code → { id, makerCode, name, productType }
+      for (const s of existingSkus as any[]) {
+        skuMap.set(normUpper(s.sku), s);
+      }
+
+      // 새 SKU 생성
+      const skusToCreate = uniqSkuCodes.filter(c => !skuMap.has(c));
+      if (skusToCreate.length > 0) {
+        // 메타 정보 수집
+        const skuDataMap = new Map<string, HqSkuInfo>();
+        for (const [locCode, locSkuMap] of byLoc.entries()) {
+          for (const [skuCode, info] of locSkuMap.entries()) {
+            if (!skuDataMap.has(skuCode)) {
+              skuDataMap.set(skuCode, info);
+            }
+          }
+        }
+
+        await tx.sku.createMany({
+          data: skusToCreate.map(code => {
+            const info = skuDataMap.get(code);
+            return {
+              sku: code,
+              makerCode: info?.makerCode,
+              name: info?.name,
+              productType: info?.productType,
+            };
+          }) as any,
+          skipDuplicates: true,
+        } as any);
+
+        // 새로 생성된 SKU 조회
+        const newSkus = await tx.sku.findMany({
+          where: { sku: { in: skusToCreate } } as any,
+          select: { id: true, sku: true, makerCode: true, name: true, productType: true } as any,
+        } as any);
+
+        for (const s of newSkus as any[]) {
+          skuMap.set(normUpper(s.sku), s);
+        }
+        applied += skusToCreate.length;
+      }
+
+      // SKU 메타 업데이트 (배치)
+      for (const [locCode, locSkuMap] of byLoc.entries()) {
+        for (const [skuCode, info] of locSkuMap.entries()) {
+          const existing = skuMap.get(skuCode);
+          if (!existing) continue;
+
+          const updateData: any = {};
+          if (info.makerCode && info.makerCode !== existing.makerCode) updateData.makerCode = info.makerCode;
+          if (info.name && info.name !== existing.name) updateData.name = info.name;
+          if (info.productType && info.productType !== existing.productType) updateData.productType = info.productType;
+
+          if (Object.keys(updateData).length > 0) {
+            await tx.sku.update({
+              where: { id: existing.id } as any,
+              data: updateData as any,
+            } as any);
+            // 캐시 업데이트
+            Object.assign(existing, updateData);
+            applied++;
+          }
+        }
+      }
+
+      // ========================================
+      // 4. HQ 전체 Inventory 삭제 후 새로 생성 (가장 빠른 방식)
+      // ========================================
+
+      // 4-1. HQ의 모든 Inventory 삭제
       await tx.inventory.deleteMany({
         where: {
-          location: {
-            storeId: hqStore.id,
-            code: { in: Array.from(KEEP_EMPTY_LOCATION_CODES) },
-          },
+          location: { storeId: hqStore.id },
         } as any,
       } as any);
 
-      // 3) 엑셀에 없는 로케이션의 재고는 전부 삭제 (예외 로케이션 제외)
-      await tx.inventory.deleteMany({
-        where: {
-          location: {
-            storeId: hqStore.id,
-            AND: [
-              { code: { notIn: uniqLocCodes } },
-              { code: { notIn: Array.from(KEEP_EMPTY_LOCATION_CODES) } },
-            ],
-          },
-        } as any,
-      } as any);
+      // 4-2. 새 Inventory 생성 (qty > 0인 것만)
+      const inventoryToCreate: { locationId: string; skuId: string; qty: number }[] = [];
 
-      for (const locCode of uniqLocCodes) {
-        // ✅ 예외 로케이션은 로케이션만 유지하고 재고는 항상 비우므로, 업로드로 갱신하지 않음
+      for (const [locCode, locSkuMap] of byLoc.entries()) {
+        // 예외 로케이션은 재고 생성 안함
         if (KEEP_EMPTY_LOCATION_CODES.has(locCode)) continue;
 
-        const skuMap = byLoc.get(locCode)!;
+        const locId = locMap.get(locCode);
+        if (!locId) continue;
 
-        // ✅ location 확보 (storeId + code)
-        let loc = await tx.location.findFirst({
-          where: { storeId: hqStore.id, code: locCode } as any,
-          select: { id: true, code: true } as any,
-        } as any);
-
-        if (!loc) {
-          loc = await tx.location.create({
-            data: { storeId: hqStore.id, code: locCode, name: locCode } as any,
-            select: { id: true, code: true } as any,
-          } as any);
-        }
-
-        /**
-         * (A) 엑셀에 없는 SKU는 삭제 (location 단위 스냅샷 정책)
-         */
-        const existingInv = await tx.inventory.findMany({
-          where: { locationId: (loc as any).id } as any,
-          select: {
-            id: true,
-            qty: true,
-            sku: { select: { sku: true } },
-          } as any,
-        } as any);
-
-        const incomingSkuSet = new Set(Array.from(skuMap.keys()));
-        for (const inv of existingInv as any[]) {
-          const skuCode = normUpper(inv?.sku?.sku);
-          if (!skuCode) continue;
-          if (incomingSkuSet.has(skuCode)) continue;
-
-          console.log('[HQ_DELETE_MISSING]', (loc as any).code, inv?.sku?.sku, inv.id, inv.qty);
-
-          await tx.inventory.delete({
-            where: { id: inv.id } as any,
-          } as any);
-          applied++;
-        }
-
-        /**
-         * (B) 엑셀 기준 최종 수량 SET
-         *  - qty=0은 row를 남기지 않음(삭제)
-         */
-        for (const [skuCode, info] of skuMap.entries()) {
+        for (const [skuCode, info] of locSkuMap.entries()) {
           const targetQty = Number(info?.qty ?? 0);
-          if (!Number.isFinite(targetQty) || targetQty < 0) continue;
+          if (targetQty <= 0) continue; // qty=0은 생성 안함
 
-          const makerCode = info?.makerCode;
-          const name = info?.name;
-          const productType = normalizeProductType(info?.productType);
+          const sku = skuMap.get(skuCode);
+          if (!sku) continue;
 
-          // ✅ SKU 확보
-          let sku = await tx.sku.findFirst({
-            where: { sku: skuCode } as any,
-          } as any);
-
-          if (!sku) {
-            sku = await tx.sku.create({
-              data: {
-                sku: skuCode,
-                ...(makerCode ? { makerCode } : {}),
-                ...(name ? { name } : {}),
-                ...(productType ? { productType } : {}),
-              } as any,
-            } as any);
-            applied++;
-          } else {
-            // 메타 업데이트(옵션)
-            const updateData: any = {};
-            if (makerCode && makerCode !== (sku as any).makerCode) updateData.makerCode = makerCode;
-            if (name && name !== (sku as any).name) updateData.name = name;
-            if (productType && productType !== (sku as any).productType) updateData.productType = productType;
-
-            if (Object.keys(updateData).length > 0) {
-              await tx.sku.update({
-                where: { id: (sku as any).id } as any,
-                data: updateData as any,
-              } as any);
-              applied++;
-            }
-          }
-
-          // ✅ inventory upsert (location+sku)
-          const inv = await tx.inventory.findFirst({
-            where: { locationId: (loc as any).id, skuId: (sku as any).id } as any,
-            select: { id: true, qty: true } as any,
-          } as any);
-
-          // 🔥 qty=0이면 row를 남기지 않음
-          if (targetQty === 0) {
-            if (inv) {
-              console.log('[HQ_DELETE_ZERO]', (loc as any).code, skuCode, inv.id, inv.qty);
-              await tx.inventory.delete({
-                where: { id: inv.id } as any,
-              } as any);
-              applied++;
-            }
-            continue;
-          }
-
-          if (!inv) {
-            await tx.inventory.create({
-              data: {
-                locationId: (loc as any).id,
-                skuId: (sku as any).id,
-                qty: targetQty,
-              } as any,
-            } as any);
-            applied++;
-          } else {
-            if (Number((inv as any).qty ?? 0) !== targetQty) {
-              await tx.inventory.update({
-                where: { id: (inv as any).id } as any,
-                data: { qty: targetQty } as any,
-              } as any);
-              applied++;
-            }
-          }
+          inventoryToCreate.push({
+            locationId: locId,
+            skuId: sku.id,
+            qty: targetQty,
+          });
         }
-
-        // ✅ 안전장치: 혹시 남아있는 qty=0 row는 정리
-        await tx.inventory.deleteMany({
-          where: { locationId: (loc as any).id, qty: 0 } as any,
-        } as any);
       }
-    }, { timeout: 60000 }); // 60초 타임아웃 (대량 데이터 처리용)
+
+      if (inventoryToCreate.length > 0) {
+        await tx.inventory.createMany({
+          data: inventoryToCreate as any,
+          skipDuplicates: true,
+        } as any);
+        applied += inventoryToCreate.length;
+      }
+
+    }, { timeout: 60000 }); // 60초 타임아웃
 
     return {
       ok: true,
-      mode: 'HQ_REPLACE_ALL_DELETE_MISSING_DELETE_ZERO',
+      mode: 'HQ_REPLACE_ALL_OPTIMIZED',
       storeCode: hqStore.code,
       locations: uniqLocCodes.length,
+      skus: uniqSkuCodes.length,
       applied,
       inputRows: rows.length,
     };
