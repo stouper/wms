@@ -2,6 +2,7 @@ import { Body, Controller, Get, Post, Query } from '@nestjs/common';
 import { InventoryService } from './inventory.service';
 import { InventoryOutDto } from './dto/inventory-out.dto';
 import { InventoryInDto } from './dto/inventory-in.dto';
+import { InventoryBulkSetDto } from './dto/inventory-bulk-set.dto';
 
 @Controller('inventory')
 export class InventoryController {
@@ -59,5 +60,14 @@ export class InventoryController {
   @Post('out')
   async out(@Body() dto: InventoryOutDto) {
     return this.inventory.out(dto);
+  }
+
+  // ✅ 재고 일괄 설정 (Excel 업로드용)
+  @Post('bulk-set')
+  async bulkSet(@Body() dto: InventoryBulkSetDto) {
+    return this.inventory.bulkSet({
+      items: dto.items,
+      sourceKey: dto.sourceKey,
+    });
   }
 }

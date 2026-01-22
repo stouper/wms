@@ -292,4 +292,133 @@ export class InventoryService {
     const onHand = await this.getOnHand(sku.id, loc.id);
     return { ok: true, skuCode, locationCode, onHand };
   }
+
+  /**
+   * 재고 일괄 설정 (Excel 업로드용)
+   * - 기존 재고와 비교하여 차이만큼 조정 (type: 'set')
+   */
+  async bulkSet(params: {
+    items: Array<{ skuCode: string; locationCode: string; qty: number; memo?: string }>;
+    sourceKey?: string;
+  }) {
+    const { items, sourceKey } = params;
+    const results: Array<{
+      skuCode: string;
+      locationCode: string;
+      status: 'ok' | 'error' | 'skipped';
+      message?: string;
+      beforeQty?: number;
+      afterQty?: number;
+    }> = [];
+
+    let successCount = 0;
+    let errorCount = 0;
+    let skippedCount = 0;
+
+    for (const item of items) {
+      const skuCode = this.normUpper(item.skuCode);
+      const locationCode = this.norm(item.locationCode);
+      const targetQty = Number(item.qty ?? 0);
+      const memo = this.norm(item.memo || sourceKey || 'bulk-set');
+
+      if (!skuCode || !locationCode) {
+        results.push({
+          skuCode: item.skuCode,
+          locationCode: item.locationCode,
+          status: 'error',
+          message: 'skuCode and locationCode are required',
+        });
+        errorCount++;
+        continue;
+      }
+
+      if (!Number.isFinite(targetQty) || targetQty < 0) {
+        results.push({
+          skuCode,
+          locationCode,
+          status: 'error',
+          message: 'qty must be >= 0',
+        });
+        errorCount++;
+        continue;
+      }
+
+      try {
+        // SKU 조회
+        const sku = await this.prisma.sku.findFirst({
+          where: { sku: skuCode } as any,
+          select: { id: true } as any,
+        });
+
+        if (!sku) {
+          results.push({
+            skuCode,
+            locationCode,
+            status: 'error',
+            message: `SKU not found: ${skuCode}`,
+          });
+          errorCount++;
+          continue;
+        }
+
+        // Location 조회/생성
+        const loc = await this.resolveOrCreateLocationByCode(locationCode);
+
+        // 현재 재고 조회
+        const currentQty = await this.getOnHand(sku.id, loc.id);
+
+        // 변동량 계산
+        const delta = targetQty - currentQty;
+
+        if (delta === 0) {
+          results.push({
+            skuCode,
+            locationCode,
+            status: 'skipped',
+            message: 'no change needed',
+            beforeQty: currentQty,
+            afterQty: currentQty,
+          });
+          skippedCount++;
+          continue;
+        }
+
+        // 재고 조정 적용
+        const { beforeQty, afterQty } = await this.applyInventoryTx({
+          skuId: sku.id,
+          locationId: loc.id,
+          qty: delta,
+          type: 'set',
+          memo: `${memo} (${currentQty} -> ${targetQty})`,
+          isForced: false,
+        });
+
+        results.push({
+          skuCode,
+          locationCode,
+          status: 'ok',
+          beforeQty,
+          afterQty,
+        });
+        successCount++;
+      } catch (e: any) {
+        results.push({
+          skuCode,
+          locationCode,
+          status: 'error',
+          message: e?.message || String(e),
+        });
+        errorCount++;
+      }
+    }
+
+    return {
+      ok: true,
+      total: items.length,
+      success: successCount,
+      error: errorCount,
+      skipped: skippedCount,
+      results,
+    };
+  }
 }

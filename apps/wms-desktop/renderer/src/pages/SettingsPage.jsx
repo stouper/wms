@@ -1,6 +1,7 @@
 import React, { useState } from "react";
 import { inputStyle, primaryBtn } from "../ui/styles";
 import { http } from "../workflows/_common/http";
+import { parseInventoryBulkSetFile } from "../workflows/_common/excel/parseInventoryBulkSet";
 
 export default function SettingsPage() {
   // 매장 관리
@@ -20,6 +21,13 @@ export default function SettingsPage() {
   const [newLocName, setNewLocName] = useState("");
   const [locError, setLocError] = useState("");
   const [editingLoc, setEditingLoc] = useState(null);
+
+  // 재고관리 (Excel 업로드)
+  const [invFile, setInvFile] = useState(null);
+  const [invUploading, setInvUploading] = useState(false);
+  const [invResult, setInvResult] = useState(null);
+  const [invPreview, setInvPreview] = useState(null);
+  const [invError, setInvError] = useState("");
 
   // 매장 목록 로드
   async function loadStores() {
@@ -166,6 +174,62 @@ export default function SettingsPage() {
       await loadLocations();
     } catch (e) {
       alert(e?.message || "Location 삭제 실패");
+    }
+  }
+
+  // 재고 엑셀 파일 선택
+  async function handleInvFileSelect(e) {
+    const file = e.target.files?.[0];
+    if (!file) return;
+
+    setInvFile(file);
+    setInvResult(null);
+    setInvPreview(null);
+    setInvError("");
+
+    try {
+      const arrayBuffer = await file.arrayBuffer();
+      const parsed = await parseInventoryBulkSetFile(arrayBuffer, file.name);
+
+      if (parsed.errors?.length > 0) {
+        setInvError(`파싱 오류 ${parsed.errors.length}건: ${parsed.errors.slice(0, 3).join(", ")}`);
+      }
+
+      setInvPreview(parsed);
+    } catch (err) {
+      setInvError(err?.message || "엑셀 파싱 실패");
+      setInvPreview(null);
+    }
+  }
+
+  // 재고 업로드 실행
+  async function handleInvUpload() {
+    if (!invPreview?.items?.length) {
+      setInvError("업로드할 데이터가 없습니다.");
+      return;
+    }
+
+    setInvUploading(true);
+    setInvResult(null);
+    setInvError("");
+
+    try {
+      const res = await http.post("/inventory/bulk-set", {
+        items: invPreview.items,
+        sourceKey: invFile?.name || "excel-upload",
+      });
+
+      setInvResult(res);
+
+      if (res?.success > 0) {
+        alert(`재고 설정 완료: ${res.success}건 성공, ${res.skipped || 0}건 스킵, ${res.error || 0}건 오류`);
+      } else {
+        alert(`업로드 결과: 성공 0건 (스킵: ${res?.skipped || 0}, 오류: ${res?.error || 0})`);
+      }
+    } catch (err) {
+      setInvError(err?.message || "업로드 실패");
+    } finally {
+      setInvUploading(false);
     }
   }
 
@@ -484,6 +548,94 @@ export default function SettingsPage() {
               </table>
             )}
           </>
+        )}
+      </div>
+
+      {/* 재고관리 (Excel 업로드) */}
+      <div style={cardStyle}>
+        <div style={{ fontSize: 13, fontWeight: 700, marginBottom: 10 }}>재고관리 (Excel 업로드)</div>
+        <div style={{ fontSize: 11, color: "#64748b", marginBottom: 10 }}>
+          필수 헤더: <b>단품코드</b>, <b>Location</b>, <b>수량</b> | 선택: 메모
+        </div>
+
+        <div style={{ display: "flex", gap: 6, alignItems: "center", flexWrap: "wrap" }}>
+          <input
+            type="file"
+            accept=".xlsx,.xls"
+            onChange={handleInvFileSelect}
+            disabled={invUploading}
+            style={{ fontSize: 12 }}
+          />
+          <button
+            type="button"
+            onClick={handleInvUpload}
+            disabled={invUploading || !invPreview?.items?.length}
+            style={{ ...primaryBtn, padding: "6px 12px", fontSize: 12 }}
+          >
+            {invUploading ? "업로드 중..." : "업로드"}
+          </button>
+        </div>
+
+        {invError && (
+          <div style={{ marginTop: 8, fontSize: 11, color: "#ef4444" }}>
+            {invError}
+          </div>
+        )}
+
+        {/* 미리보기 */}
+        {invPreview && (
+          <div style={{ marginTop: 10 }}>
+            <div style={{ fontSize: 12, color: "#374151", marginBottom: 6 }}>
+              파싱 결과: <b>{invPreview.items?.length || 0}</b>건
+              {invPreview.errors?.length > 0 && (
+                <span style={{ color: "#ef4444", marginLeft: 8 }}>
+                  (오류: {invPreview.errors.length}건)
+                </span>
+              )}
+            </div>
+
+            {invPreview.sample?.length > 0 && (
+              <div style={{ maxHeight: 200, overflow: "auto", border: "1px solid #e5e7eb", borderRadius: 6 }}>
+                <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 11 }}>
+                  <thead>
+                    <tr style={{ background: "#f8fafc" }}>
+                      <th style={thStyle}>단품코드</th>
+                      <th style={thStyle}>Location</th>
+                      <th style={{ ...thStyle, textAlign: "right" }}>수량</th>
+                      <th style={thStyle}>메모</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {invPreview.sample.map((item, idx) => (
+                      <tr key={idx}>
+                        <td style={tdStyle}>{item.skuCode}</td>
+                        <td style={tdStyle}>{item.locationCode}</td>
+                        <td style={{ ...tdStyle, textAlign: "right" }}>{item.qty?.toLocaleString()}</td>
+                        <td style={tdStyle}>{item.memo || "-"}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            )}
+          </div>
+        )}
+
+        {/* 업로드 결과 */}
+        {invResult && (
+          <div style={{ marginTop: 10, padding: 10, background: "#f0fdf4", borderRadius: 8, fontSize: 12 }}>
+            <div>
+              총: <b>{invResult.total}</b>건 |
+              성공: <b style={{ color: "#16a34a" }}>{invResult.success}</b>건 |
+              스킵: <b>{invResult.skipped}</b>건 |
+              오류: <b style={{ color: "#dc2626" }}>{invResult.error}</b>건
+            </div>
+            {invResult.results?.filter(r => r.status === "error").slice(0, 5).map((r, i) => (
+              <div key={i} style={{ marginTop: 4, color: "#dc2626", fontSize: 11 }}>
+                {r.skuCode} @ {r.locationCode}: {r.message}
+              </div>
+            ))}
+          </div>
         )}
       </div>
     </div>
