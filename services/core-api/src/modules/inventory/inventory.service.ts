@@ -345,12 +345,12 @@ export class InventoryService {
 
       try {
         // SKU 조회
-        const sku = await this.prisma.sku.findFirst({
+        const skuRow = await this.prisma.sku.findFirst({
           where: { sku: skuCode } as any,
           select: { id: true } as any,
-        });
+        }) as any;
 
-        if (!sku) {
+        if (!skuRow) {
           results.push({
             skuCode,
             locationCode,
@@ -361,11 +361,14 @@ export class InventoryService {
           continue;
         }
 
+        const skuId = String(skuRow.id);
+
         // Location 조회/생성
         const loc = await this.resolveOrCreateLocationByCode(locationCode);
+        const locId = String(loc.id);
 
         // 현재 재고 조회
-        const currentQty = await this.getOnHand(sku.id, loc.id);
+        const currentQty = await this.getOnHand(skuId, locId);
 
         // 변동량 계산
         const delta = targetQty - currentQty;
@@ -385,8 +388,8 @@ export class InventoryService {
 
         // 재고 조정 적용
         const { beforeQty, afterQty } = await this.applyInventoryTx({
-          skuId: sku.id,
-          locationId: loc.id,
+          skuId,
+          locationId: locId,
           qty: delta,
           type: 'set',
           memo: `${memo} (${currentQty} -> ${targetQty})`,
