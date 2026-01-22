@@ -3,6 +3,7 @@ import { InventoryService } from './inventory.service';
 import { InventoryOutDto } from './dto/inventory-out.dto';
 import { InventoryInDto } from './dto/inventory-in.dto';
 import { InventoryBulkSetDto } from './dto/inventory-bulk-set.dto';
+import { InventoryResetDto } from './dto/inventory-reset.dto';
 
 @Controller('inventory')
 export class InventoryController {
@@ -10,10 +11,15 @@ export class InventoryController {
 
   // ✅ (호환) Desktop이 /inventory/summary 를 부르는 경우가 많음
   @Get('summary')
-  async summary(@Query('q') q?: string, @Query('limit') limit?: string) {
+  async summary(
+    @Query('q') q?: string,
+    @Query('limit') limit?: string,
+    @Query('storeId') storeId?: string,
+  ) {
     return this.inventory.summary({
       q,
       limit: limit ? Number(limit) : undefined,
+      storeId,
     });
   }
 
@@ -50,6 +56,15 @@ export class InventoryController {
     return this.inventory.onHandByCodes({ skuCode, locationCode });
   }
 
+  // ✅ 재고 검색 (매장별 SKU/MakerCode 검색)
+  @Get('search')
+  async search(
+    @Query('storeCode') storeCode: string,
+    @Query('q') q: string,
+  ) {
+    return this.inventory.searchByCode({ storeCode, q });
+  }
+
   // ✅ 창고입고 (IN)
   @Post('in')
   async inbound(@Body() dto: InventoryInDto) {
@@ -62,12 +77,21 @@ export class InventoryController {
     return this.inventory.out(dto);
   }
 
-  // ✅ 재고 일괄 설정 (Excel 업로드용)
+  // ✅ 재고 일괄 설정 (Excel 업로드용) - 재고 조정 (부분 수정)
   @Post('bulk-set')
   async bulkSet(@Body() dto: InventoryBulkSetDto) {
     return this.inventory.bulkSet({
       items: dto.items,
       sourceKey: dto.sourceKey,
+    });
+  }
+
+  // ✅ 재고 초기화 (전체 교체) - 엑셀 기준으로 해당 매장 재고 전체 교체
+  @Post('reset')
+  async reset(@Body() dto: InventoryResetDto) {
+    return this.inventory.reset({
+      storeCode: dto.storeCode,
+      rows: dto.rows,
     });
   }
 }

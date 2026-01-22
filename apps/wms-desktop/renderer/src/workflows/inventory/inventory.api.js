@@ -2,8 +2,10 @@
 import { http } from "../_common/http";
 
 export const inventoryApi = {
-  summary: async ({ limit = 50000 } = {}) => {
-    const q = `?limit=${encodeURIComponent(String(limit))}`;
-    return http.get(`/inventory/summary${q}`);
+  summary: async ({ limit = 50000, storeId } = {}) => {
+    const params = new URLSearchParams();
+    params.set("limit", String(limit));
+    if (storeId) params.set("storeId", storeId);
+    return http.get(`/inventory/summary?${params.toString()}`);
   },
 };

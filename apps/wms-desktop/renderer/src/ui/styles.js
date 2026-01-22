@@ -38,11 +38,12 @@ export const inputStyle = {
 export const navBtnStyle = (active) => ({
   width: "100%",
   textAlign: "left",
-  padding: "10px 12px",
-  marginBottom: 8,
+  padding: "12px 12px",
+  marginBottom: 6,
   cursor: "pointer",
-  borderRadius: 10,
+  borderRadius: 8,
   border: "1px solid #e5e7eb",
   background: active ? "#eef2ff" : "#fff",
   fontWeight: active ? 700 : 500,
+  fontSize: 15,
 });

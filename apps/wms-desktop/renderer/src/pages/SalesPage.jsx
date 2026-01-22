@@ -216,7 +216,7 @@ export default function SalesPage({ pageTitle = "매출 관리" }) {
   // 렌더링
   // ========================================
   return (
-    <div style={{ padding: 16 }}>
+    <div style={{ display: "grid", gap: 12, width: "100%" }}>
       <ToastHost />
 
       {/* ========== 헤더 ========== */}
@@ -231,13 +231,13 @@ export default function SalesPage({ pageTitle = "매출 관리" }) {
         </button>
       </div>
 
-      <div style={{ fontSize: 12, color: "#64748b", marginTop: 6 }}>
+      <div style={{ fontSize: 12, color: "#64748b" }}>
         필수 헤더: <b>매장명</b>, <b>매출일</b>, <b>매출금액</b> | 선택: 수량, 구분, 단품코드, 코드명
       </div>
 
       {/* ========== 엑셀 업로드 (접이식) ========== */}
       {showUpload && (
-        <div style={{ ...cardStyle, marginTop: 12, background: "#fffbeb" }}>
+        <div style={{ ...cardStyle, background: "#fffbeb" }}>
           <div style={{ fontWeight: 700, marginBottom: 10 }}>매출 데이터 업로드</div>
 
           <div style={{ display: "flex", gap: 12, alignItems: "flex-end", flexWrap: "wrap" }}>
@@ -299,7 +299,7 @@ export default function SalesPage({ pageTitle = "매출 관리" }) {
       )}
 
       {/* ========== 조회 영역 ========== */}
-      <div style={{ ...cardStyle, marginTop: 12 }}>
+      <div style={cardStyle}>
         <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 10, flexWrap: "wrap" }}>
           <div style={{ fontWeight: 900 }}>매장별 매출 조회</div>
           {summary && (
@@ -397,7 +397,7 @@ export default function SalesPage({ pageTitle = "매출 관리" }) {
 
       {/* ========== 결과 테이블 ========== */}
       {filteredItems.length > 0 && (
-        <div style={{ ...cardStyle, marginTop: 12 }}>
+        <div style={cardStyle}>
           <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 10 }}>
             <div style={{ fontWeight: 900 }}>조회 결과</div>
             <div style={{ fontSize: 12, color: "#64748b" }}>
@@ -441,7 +441,7 @@ export default function SalesPage({ pageTitle = "매출 관리" }) {
 
       {/* 조회 결과 없음 */}
       {summary && filteredItems.length === 0 && (
-        <div style={{ ...cardStyle, marginTop: 12, textAlign: "center", color: "#64748b", padding: 20 }}>
+        <div style={{ ...cardStyle, textAlign: "center", color: "#64748b", padding: 20 }}>
           조회 결과가 없습니다 (필터 조건 확인)
         </div>
       )}

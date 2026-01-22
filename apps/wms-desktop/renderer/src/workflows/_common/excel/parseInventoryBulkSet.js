@@ -1,16 +1,17 @@
 // apps/wms-desktop/renderer/src/workflows/_common/excel/parseInventoryBulkSet.js
 
 /**
- * 재고 일괄 설정용 엑셀 파서
+ * 재고 조정용 엑셀 파서
  *
  * 필수 헤더:
- * - 매장코드 (storeCode): 매장 코드 (App 연동용)
  * - 단품코드 (skuCode): SKU 코드
  * - Location (locationCode): 창고 위치 코드
  * - 수량 (qty): 설정할 재고 수량
  *
  * 선택 헤더:
  * - 메모 (memo): 조정 사유
+ *
+ * 주의: storeCode는 엑셀에 포함하지 않음 (UI에서 별도 선택)
  */
 
 export async function parseInventoryBulkSetFile(arrayBuffer, fileName = "") {
@@ -53,18 +54,12 @@ export async function parseInventoryBulkSetFile(arrayBuffer, fileName = "") {
       obj[headerKeys[j]] = r[j] ?? "";
     }
 
-    const storeCode = pick(obj, ["매장코드", "storeCode", "StoreCode", "store", "Store", "매장"]);
-    const skuCode = pick(obj, ["단품코드", "SKU", "skuCode", "sku", "SKU코드", "품번"]);
+    const skuCode = pick(obj, ["단품코드", "SKU", "skuCode", "sku", "SKU코드", "품번", "코드"]);
     const locationCode = pick(obj, ["Location", "location", "locationCode", "로케이션", "창고", "위치"]);
     const qtyRaw = pick(obj, ["수량", "qty", "Qty", "QTY", "재고", "재고수량"]);
     const memo = pick(obj, ["메모", "memo", "Memo", "비고", "사유"]);
 
     const rowNum = headerRowIndex + 2 + i; // 엑셀 행 번호 (1-based)
-
-    if (!storeCode) {
-      errors.push(`행 ${rowNum}: 매장코드가 없습니다.`);
-      continue;
-    }
 
     if (!skuCode) {
       errors.push(`행 ${rowNum}: 단품코드가 없습니다.`);
@@ -83,7 +78,6 @@ export async function parseInventoryBulkSetFile(arrayBuffer, fileName = "") {
     }
 
     items.push({
-      storeCode: String(storeCode).trim(),
       skuCode: String(skuCode).trim().toUpperCase(),
       locationCode: String(locationCode).trim(),
       qty,
@@ -104,14 +98,13 @@ export async function parseInventoryBulkSetFile(arrayBuffer, fileName = "") {
 
 /** 헤더 행 탐지 */
 function detectHeaderRow(grid) {
-  // 헤더 후보: '매장코드', '단품코드', 'Location', '수량' 중 2개 이상 포함된 행
+  // 헤더 후보: '단품코드', 'Location', '수량' 중 2개 이상 포함된 행
   for (let i = 0; i < Math.min(grid.length, 20); i++) {
     const r = grid[i];
     if (!Array.isArray(r)) continue;
     const joined = r.map((x) => String(x ?? "").trim().toLowerCase()).join(" | ");
     const hit =
-      (joined.includes("매장코드") || joined.includes("storecode") || joined.includes("매장") ? 1 : 0) +
-      (joined.includes("단품코드") || joined.includes("sku") || joined.includes("품번") ? 1 : 0) +
+      (joined.includes("단품코드") || joined.includes("sku") || joined.includes("품번") || joined.includes("코드") ? 1 : 0) +
       (joined.includes("location") || joined.includes("로케이션") || joined.includes("창고") || joined.includes("위치") ? 1 : 0) +
       (joined.includes("수량") || joined.includes("qty") || joined.includes("재고") ? 1 : 0);
     if (hit >= 2) {

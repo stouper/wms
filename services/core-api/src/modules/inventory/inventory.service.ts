@@ -226,13 +226,20 @@ export class InventoryService {
    * - 기본: 강제출고(isForced) 포함 (현장/실재고 관점에서 음수도 보여야 함)
    * - 필요하면 excludeForced=true 로 제외 가능
    */
-  async summary(params: { q?: string; limit?: number; excludeForced?: boolean }) {
+  async summary(params: { q?: string; limit?: number; excludeForced?: boolean; storeId?: string }) {
     const q = this.norm(params.q ?? '');
     const take = this.clampLimit(params.limit ?? 200, 1, 50000);
+    const storeId = this.norm(params.storeId ?? '');
     // excludeForced는 InventoryTx 기반 집계에서 쓰던 옵션. Inventory 스냅샷 기반에서는 무시.
     // const excludeForced = Boolean((params as any).excludeForced);
 
     const where: any = {};
+
+    // ✅ storeId 필터 (매장별 재고 조회)
+    if (storeId) {
+      where.location = { storeId };
+    }
+
     if (q) {
       where.OR = [
         { sku: { sku: { contains: q, mode: 'insensitive' } } as any },
@@ -252,7 +259,7 @@ export class InventoryService {
         locationId: true,
         qty: true,
         sku: { select: { sku: true, makerCode: true, name: true, productType: true } } as any,
-        location: { select: { code: true } } as any,
+        location: { select: { code: true, storeId: true } } as any,
       },
     } as any);
 
@@ -291,6 +298,59 @@ export class InventoryService {
 
     const onHand = await this.getOnHand(sku.id, loc.id);
     return { ok: true, skuCode, locationCode, onHand };
+  }
+
+  /**
+   * 재고 검색 (매장별 SKU/MakerCode 검색)
+   * - 단건 조정용 검색
+   */
+  async searchByCode(params: { storeCode: string; q: string }) {
+    const storeCode = this.norm(params.storeCode);
+    const q = this.norm(params.q);
+
+    if (!storeCode) throw new BadRequestException('storeCode is required');
+    if (!q) throw new BadRequestException('q (SKU or MakerCode) is required');
+
+    // Store 조회
+    const store = await this.prisma.store.findFirst({
+      where: { code: storeCode } as any,
+      select: { id: true, code: true } as any,
+    }) as any;
+
+    if (!store) throw new BadRequestException(`Store not found: ${storeCode}`);
+
+    // SKU 검색 (SKU 코드 또는 MakerCode로)
+    const qUpper = q.toUpperCase();
+    const invRows = await this.prisma.inventory.findMany({
+      where: {
+        location: { storeId: store.id },
+        OR: [
+          { sku: { sku: { equals: qUpper, mode: 'insensitive' } } as any },
+          { sku: { makerCode: { equals: q, mode: 'insensitive' } } as any },
+        ],
+      } as any,
+      take: 10,
+      select: {
+        id: true,
+        skuId: true,
+        locationId: true,
+        qty: true,
+        sku: { select: { sku: true, makerCode: true, name: true } } as any,
+        location: { select: { code: true } } as any,
+      },
+    } as any);
+
+    const items = invRows.map((r: any) => ({
+      skuId: r.skuId,
+      locationId: r.locationId,
+      skuCode: r?.sku?.sku ?? null,
+      makerCode: r?.sku?.makerCode ?? null,
+      skuName: r?.sku?.name ?? null,
+      locationCode: r?.location?.code ?? null,
+      onHand: Number(r?.qty ?? 0),
+    }));
+
+    return { ok: true, storeCode, q, items };
   }
 
   /**
@@ -460,5 +520,283 @@ export class InventoryService {
       skipped: skippedCount,
       results,
     };
+  }
+
+  /**
+   * 재고 초기화 (전체 교체)
+   * - 엑셀 기준으로 해당 매장의 재고를 전체 교체
+   * - 엑셀에 없는 재고는 삭제
+   * - qty = 0은 row 삭제
+   * - storeCode로 모든 매장 지원 (HQ 포함)
+   */
+  async reset(params: {
+    storeCode: string;
+    rows: Array<{
+      sku: string;
+      qty: number;
+      location?: string;
+      makerCode?: string;
+      name?: string;
+      productType?: string;
+    }>;
+  }) {
+    const { storeCode, rows } = params;
+    const storeCodeNorm = this.norm(storeCode);
+
+    if (!storeCodeNorm) {
+      throw new BadRequestException('storeCode is required');
+    }
+    if (!Array.isArray(rows) || rows.length <= 0) {
+      throw new BadRequestException('rows is required');
+    }
+
+    // Store 찾기
+    const store = await this.prisma.store.findFirst({
+      where: { code: storeCodeNorm } as any,
+      select: { id: true, code: true, isHq: true } as any,
+    } as any) as any;
+
+    if (!store) {
+      throw new BadRequestException(`매장을 찾을 수 없습니다: ${storeCodeNorm}`);
+    }
+
+    // ========================================
+    // 1. 입력 데이터 정리 (location별 skuMap)
+    // ========================================
+    type SkuInfo = {
+      qty: number;
+      makerCode?: string;
+      name?: string;
+      productType?: string;
+    };
+
+    const byLoc = new Map<string, Map<string, SkuInfo>>();
+    const allSkuCodes = new Set<string>();
+    const allLocCodes = new Set<string>();
+
+    for (const r of rows) {
+      const skuCode = this.normUpper(r?.sku);
+      if (!skuCode) continue;
+
+      const locCode = this.normUpper(r?.location) || 'UNASSIGNED';
+      const qty = Number(r?.qty ?? 0);
+      if (!Number.isFinite(qty) || qty < 0) continue;
+
+      allSkuCodes.add(skuCode);
+      allLocCodes.add(locCode);
+
+      if (!byLoc.has(locCode)) {
+        byLoc.set(locCode, new Map());
+      }
+
+      const skuMap = byLoc.get(locCode)!;
+      const prev = skuMap.get(skuCode);
+
+      if (!prev) {
+        skuMap.set(skuCode, {
+          qty,
+          makerCode: this.norm(r?.makerCode) || undefined,
+          name: this.norm(r?.name) || undefined,
+          productType: this.normalizeProductType(r?.productType),
+        });
+      } else {
+        skuMap.set(skuCode, {
+          qty: Number(prev.qty ?? 0) + qty,
+          makerCode: this.norm(r?.makerCode) || prev.makerCode,
+          name: this.norm(r?.name) || prev.name,
+          productType: this.normalizeProductType(r?.productType) ?? prev.productType,
+        });
+      }
+    }
+
+    const uniqLocCodes = Array.from(allLocCodes);
+    const uniqSkuCodes = Array.from(allSkuCodes);
+
+    // 예외 로케이션: 재고는 항상 비움
+    const KEEP_EMPTY_LOCATION_CODES = new Set(['UNASSIGNED', 'RET-01', 'DEFECT', 'HOLD']);
+
+    let applied = 0;
+
+    await this.prisma.$transaction(async (tx) => {
+      // ========================================
+      // 2. 기존 Location 일괄 조회 + 없으면 생성
+      // ========================================
+      const existingLocs = await tx.location.findMany({
+        where: { storeId: store.id } as any,
+        select: { id: true, code: true } as any,
+      } as any);
+
+      const locMap = new Map<string, string>(); // code → id
+      for (const loc of existingLocs as any[]) {
+        locMap.set(this.normUpper(loc.code), loc.id);
+      }
+
+      // 필요한 Location 생성 (예외 로케이션 포함)
+      const locsToCreate = [
+        ...uniqLocCodes.filter(c => !locMap.has(c)),
+        ...Array.from(KEEP_EMPTY_LOCATION_CODES).filter(c => !locMap.has(c)),
+      ];
+      const uniqueLocsToCreate = [...new Set(locsToCreate)];
+
+      if (uniqueLocsToCreate.length > 0) {
+        await tx.location.createMany({
+          data: uniqueLocsToCreate.map(code => ({
+            storeId: store.id,
+            code,
+            name: code,
+          })) as any,
+          skipDuplicates: true,
+        } as any);
+
+        // 새로 생성된 Location 조회
+        const newLocs = await tx.location.findMany({
+          where: { storeId: store.id, code: { in: uniqueLocsToCreate } } as any,
+          select: { id: true, code: true } as any,
+        } as any);
+
+        for (const loc of newLocs as any[]) {
+          locMap.set(this.normUpper(loc.code), loc.id);
+        }
+      }
+
+      // ========================================
+      // 3. 기존 SKU 일괄 조회 + 없으면 생성
+      // ========================================
+      const existingSkus = await tx.sku.findMany({
+        where: { sku: { in: uniqSkuCodes } } as any,
+        select: { id: true, sku: true, makerCode: true, name: true, productType: true } as any,
+      } as any);
+
+      const skuMap = new Map<string, any>(); // sku code → { id, makerCode, name, productType }
+      for (const s of existingSkus as any[]) {
+        skuMap.set(this.normUpper(s.sku), s);
+      }
+
+      // 새 SKU 생성
+      const skusToCreate = uniqSkuCodes.filter(c => !skuMap.has(c));
+      if (skusToCreate.length > 0) {
+        // 메타 정보 수집
+        const skuDataMap = new Map<string, SkuInfo>();
+        for (const [locCode, locSkuMap] of byLoc.entries()) {
+          for (const [skuCode, info] of locSkuMap.entries()) {
+            if (!skuDataMap.has(skuCode)) {
+              skuDataMap.set(skuCode, info);
+            }
+          }
+        }
+
+        await tx.sku.createMany({
+          data: skusToCreate.map(code => {
+            const info = skuDataMap.get(code);
+            return {
+              sku: code,
+              makerCode: info?.makerCode,
+              name: info?.name,
+              productType: info?.productType,
+            };
+          }) as any,
+          skipDuplicates: true,
+        } as any);
+
+        // 새로 생성된 SKU 조회
+        const newSkus = await tx.sku.findMany({
+          where: { sku: { in: skusToCreate } } as any,
+          select: { id: true, sku: true, makerCode: true, name: true, productType: true } as any,
+        } as any);
+
+        for (const s of newSkus as any[]) {
+          skuMap.set(this.normUpper(s.sku), s);
+        }
+        applied += skusToCreate.length;
+      }
+
+      // SKU 메타 업데이트 (배치)
+      for (const [locCode, locSkuMap] of byLoc.entries()) {
+        for (const [skuCode, info] of locSkuMap.entries()) {
+          const existing = skuMap.get(skuCode);
+          if (!existing) continue;
+
+          const updateData: any = {};
+          if (info.makerCode && info.makerCode !== existing.makerCode) updateData.makerCode = info.makerCode;
+          if (info.name && info.name !== existing.name) updateData.name = info.name;
+          if (info.productType && info.productType !== existing.productType) updateData.productType = info.productType;
+
+          if (Object.keys(updateData).length > 0) {
+            await tx.sku.update({
+              where: { id: existing.id } as any,
+              data: updateData as any,
+            } as any);
+            // 캐시 업데이트
+            Object.assign(existing, updateData);
+            applied++;
+          }
+        }
+      }
+
+      // ========================================
+      // 4. 해당 매장 전체 Inventory 삭제 후 새로 생성 (가장 빠른 방식)
+      // ========================================
+
+      // 4-1. 해당 매장의 모든 Inventory 삭제
+      await tx.inventory.deleteMany({
+        where: {
+          location: { storeId: store.id },
+        } as any,
+      } as any);
+
+      // 4-2. 새 Inventory 생성 (qty > 0인 것만)
+      const inventoryToCreate: { locationId: string; skuId: string; qty: number }[] = [];
+
+      for (const [locCode, locSkuMap] of byLoc.entries()) {
+        // 예외 로케이션은 재고 생성 안함
+        if (KEEP_EMPTY_LOCATION_CODES.has(locCode)) continue;
+
+        const locId = locMap.get(locCode);
+        if (!locId) continue;
+
+        for (const [skuCode, info] of locSkuMap.entries()) {
+          const targetQty = Number(info?.qty ?? 0);
+          if (targetQty <= 0) continue; // qty=0은 생성 안함
+
+          const sku = skuMap.get(skuCode);
+          if (!sku) continue;
+
+          inventoryToCreate.push({
+            locationId: locId,
+            skuId: sku.id,
+            qty: targetQty,
+          });
+        }
+      }
+
+      if (inventoryToCreate.length > 0) {
+        await tx.inventory.createMany({
+          data: inventoryToCreate as any,
+          skipDuplicates: true,
+        } as any);
+        applied += inventoryToCreate.length;
+      }
+
+    }, { timeout: 60000 }); // 60초 타임아웃
+
+    return {
+      ok: true,
+      mode: 'INVENTORY_RESET',
+      storeCode: store.code,
+      locations: uniqLocCodes.length,
+      skus: uniqSkuCodes.length,
+      applied,
+      inputRows: rows.length,
+    };
+  }
+
+  private normalizeProductType(v: any): string | undefined {
+    const s = this.norm(v);
+    if (!s) return undefined;
+    const u = s.toUpperCase();
+    if (u === 'SHOES' || u === 'SHOE') return 'SHOES';
+    if (u === 'ACC' || u === 'ACCESSORY' || u === 'ACCESSORIES') return 'ACCESSORY';
+    if (u === 'SET') return 'SET';
+    return s;
   }
 }

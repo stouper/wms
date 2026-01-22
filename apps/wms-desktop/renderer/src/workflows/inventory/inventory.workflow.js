@@ -10,8 +10,8 @@ function normalizeList(data) {
 }
 
 export const inventoryFlow = {
-  loadSummary: async ({ limit = 50000 } = {}) => {
-    const data = await inventoryApi.summary({ limit });
+  loadSummary: async ({ limit = 50000, storeId } = {}) => {
+    const data = await inventoryApi.summary({ limit, storeId });
     return normalizeList(data);
   },
 };

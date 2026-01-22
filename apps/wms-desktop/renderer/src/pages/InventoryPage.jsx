@@ -5,7 +5,6 @@ import { inputStyle, primaryBtn } from "../ui/styles";
 
 // ✅ 정석: Page는 workflow만 호출
 import { inventoryFlow } from "../workflows/inventory/inventory.workflow";
-import { importsFlow } from "../workflows/imports/imports.workflow";
 
 export default function InventoryPage() {
   const { push, ToastHost } = useToasts();
@@ -15,10 +14,6 @@ export default function InventoryPage() {
 
   // ✅ 상단 검색(전체 검색)
   const [q, setQ] = useState("");
-
-  // ✅ HQ 업로드 상태
-  const [hqFile, setHqFile] = useState(null);
-  const [uploading, setUploading] = useState(false);
 
   // ✅ 빠른 필터(토글)
   const [onlyExceptions, setOnlyExceptions] = useState(false); // RET-01 + UNASSIGNED만
@@ -78,27 +73,6 @@ export default function InventoryPage() {
       setRows([]);
     } finally {
       setLoading(false);
-    }
-  }
-
-  async function uploadHqInventory() {
-    if (!hqFile) {
-      push({ kind: "error", title: "파일 없음", message: "업로드할 HQ 재고 엑셀을 선택해줘." });
-      return;
-    }
-
-    setUploading(true);
-    try {
-      await importsFlow.uploadHqInventory({ file: hqFile });
-
-      push({ kind: "success", title: "업로드 완료", message: "HQ 재고 업로드 완료. 새로고침할게." });
-
-      setHqFile(null);
-      await load();
-    } catch (e) {
-      push({ kind: "error", title: "업로드 실패", message: e?.message || String(e) });
-    } finally {
-      setUploading(false);
     }
   }
 
@@ -221,6 +195,19 @@ export default function InventoryPage() {
         <div style={{ fontWeight: 900 }}>창고 재고</div>
 
         <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
+          <div
+            style={{
+              padding: "7px 12px",
+              borderRadius: 8,
+              background: "#dbeafe",
+              color: "#1e40af",
+              fontWeight: 800,
+              fontSize: 13,
+            }}
+          >
+            본사 창고
+          </div>
+
           <input
             value={q}
             onChange={(e) => setQ(e.target.value)}
@@ -230,103 +217,6 @@ export default function InventoryPage() {
 
           <button type="button" style={primaryBtn} onClick={load} disabled={loading}>
             새로고침
-          </button>
-        </div>
-      </div>
-
-      {/* Controls */}
-      <div
-        style={{
-          border: "1px solid #e5e7eb",
-          borderRadius: 12,
-          padding: 12,
-          background: "#fff",
-          display: "flex",
-          gap: 10,
-          alignItems: "center",
-          flexWrap: "wrap",
-          justifyContent: "space-between",
-        }}
-      >
-        <div style={{ display: "flex", gap: 10, alignItems: "center", flexWrap: "wrap" }}>
-          <button
-            type="button"
-            style={pillBtn(onlyExceptions)}
-            onClick={() => setOnlyExceptions((v) => !v)}
-            title="RET-01 / UNASSIGNED만 보기"
-          >
-            RET/UNASSIGNED
-          </button>
-
-          <button type="button" style={pillBtn(hideZero)} onClick={() => setHideZero((v) => !v)} title="OnHand=0 숨김">
-            0 숨김
-          </button>
-
-          <select
-            value={sortKey}
-            onChange={(e) => setSortKey(e.target.value)}
-            style={{ ...inputStyle, padding: "8px 10px", minWidth: 160 }}
-            title="정렬 기준"
-          >
-            <option value="LOC">정렬: Location</option>
-            <option value="SKU">정렬: SKU</option>
-            <option value="QTY">정렬: OnHand</option>
-          </select>
-
-          <select
-            value={sortDir}
-            onChange={(e) => setSortDir(e.target.value)}
-            style={{ ...inputStyle, padding: "8px 10px", minWidth: 120 }}
-            title="정렬 방향"
-          >
-            <option value="ASC">오름차순</option>
-            <option value="DESC">내림차순</option>
-          </select>
-
-          <button
-            type="button"
-            style={{ ...primaryBtn, background: "#fff", color: "#0f172a", border: "1px solid #e5e7eb" }}
-            onClick={resetFilters}
-          >
-            필터 초기화
-          </button>
-        </div>
-
-        <div style={{ fontSize: 12, color: "#64748b" }}>
-          rows: <b>{filtered.length.toLocaleString()}</b>
-        </div>
-      </div>
-
-      {/* HQ 업로드 */}
-      <div
-        style={{
-          border: "1px solid #e5e7eb",
-          borderRadius: 12,
-          padding: 12,
-          background: "#fff",
-          display: "flex",
-          gap: 10,
-          alignItems: "center",
-          flexWrap: "wrap",
-          justifyContent: "space-between",
-        }}
-      >
-        <div style={{ display: "grid", gap: 4 }}>
-          <div style={{ fontWeight: 800 }}>HQ 재고 업로드</div>
-          <div style={{ fontSize: 12, color: "#94a3b8" }}>엑셀 선택 → 업로드 → 자동 새로고침 (POST /imports/hq-inventory)</div>
-        </div>
-
-        <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
-          <input
-            type="file"
-            accept=".xlsx,.xls"
-            onChange={(e) => setHqFile(e.target.files?.[0] || null)}
-            disabled={uploading}
-            style={{ ...inputStyle, padding: 8 }}
-          />
-
-          <button type="button" style={primaryBtn} onClick={uploadHqInventory} disabled={uploading || !hqFile}>
-            {uploading ? "업로드중..." : "업로드"}
           </button>
         </div>
       </div>

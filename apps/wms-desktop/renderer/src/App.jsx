@@ -3,9 +3,11 @@ import { layoutStyle, asideStyle, mainStyle, navBtnStyle, primaryBtn, inputStyle
 
 import DashboardPage from "./pages/DashboardPage";
 import InventoryPage from "./pages/InventoryPage";
+import StoreInventoryPage from "./pages/StoreInventoryPage";
 import SalesPage from "./pages/SalesPage";
 
-import WarehouseInboundPage from "./pages/WarehouseInboundPage";
+import ExternalInboundPage from "./pages/ExternalInboundPage";
+import StoreReturnPage from "./pages/StoreReturnPage";
 import StoreOutboundPage from "./pages/StoreOutboundPage";
 import ParcelShipmentPage from "./pages/ParcelShipmentPage";
 import SettingsPage from "./pages/SettingsPage";
@@ -14,15 +16,14 @@ import SettingsPage from "./pages/SettingsPage";
 import { getOperatorId, setOperatorId } from "./workflows/_common/operator";
 
 const MENUS = [
-  { key: "dashboard", label: "대시보드" },
-  { key: "inventory", label: "창고 재고" },
-  { key: "whInbound", label: "창고 입고" },
-
-  // ✅ 매출 업로드 전용 메뉴로 분리
-  { key: "salesImport", label: "매출" },
-
+  { key: "dashboard", label: "대시 보드" },
   { key: "storeShip", label: "매장 출고" },
+  { key: "storeReturn", label: "매장 반품" },
   { key: "delivery", label: "택배 작업" },
+  { key: "externalInbound", label: "외부 입고" },
+  { key: "inventory", label: "창고 재고" },
+  { key: "storeInventory", label: "매장 재고" },
+  { key: "salesImport", label: "매출" },
   { key: "settings", label: "설정" },
 ];
 
@@ -71,8 +72,12 @@ export default function App() {
         return DashboardPage;
       case "inventory":
         return InventoryPage;
-      case "whInbound":
-        return WarehouseInboundPage;
+      case "storeInventory":
+        return StoreInventoryPage;
+      case "externalInbound":
+        return ExternalInboundPage;
+      case "storeReturn":
+        return StoreReturnPage;
       case "salesImport":
         return SalesPage;
       case "storeShip":
@@ -176,7 +181,7 @@ export default function App() {
 
       <aside style={asideStyle}>
         <div style={{ fontWeight: 800, marginBottom: 12 }}>
-          ESKA WMS Desktop
+          ESKA WMS
         </div>
 
         <nav>
@@ -191,19 +196,6 @@ export default function App() {
             </button>
           ))}
         </nav>
-
-        <div
-          style={{
-            marginTop: 12,
-            fontSize: 12,
-            color: "#94a3b8",
-            lineHeight: 1.5,
-          }}
-        >
-          ✅ 매출 엑셀 업로드 → DB 적재
-          <br />
-          ✅ API Base는 화면에 숨김 (localStorage: wms.apiBase)
-        </div>
 
         {/* ✅ 작업자 정보 (하단) */}
         <div

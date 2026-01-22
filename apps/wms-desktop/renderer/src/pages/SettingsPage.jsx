@@ -1,7 +1,7 @@
-import React, { useState } from "react";
+import React, { useState, useEffect } from "react";
 import { inputStyle, primaryBtn } from "../ui/styles";
 import { http } from "../workflows/_common/http";
-import { parseInventoryBulkSetFile } from "../workflows/_common/excel/parseInventoryBulkSet";
+import { parseInventoryResetFile } from "../workflows/_common/excel/parseInventoryReset";
 import { parseStoreBulkUpsertFile } from "../workflows/_common/excel/parseStoreBulkUpsert";
 
 export default function SettingsPage() {
@@ -30,12 +30,27 @@ export default function SettingsPage() {
   const [locError, setLocError] = useState("");
   const [editingLoc, setEditingLoc] = useState(null);
 
-  // 재고관리 (Excel 업로드)
-  const [invFile, setInvFile] = useState(null);
-  const [invUploading, setInvUploading] = useState(false);
-  const [invResult, setInvResult] = useState(null);
-  const [invPreview, setInvPreview] = useState(null);
+  // 재고 초기화 (전체 교체)
+  const [resetStoreCode, setResetStoreCode] = useState("");
+  const [resetFile, setResetFile] = useState(null);
+  const [resetUploading, setResetUploading] = useState(false);
+  const [resetResult, setResetResult] = useState(null);
+  const [resetPreview, setResetPreview] = useState(null);
+  const [resetError, setResetError] = useState("");
+
+  // 재고 조정 (단건)
+  const [invStoreCode, setInvStoreCode] = useState("");
   const [invError, setInvError] = useState("");
+
+  // 단건 재고 조정
+  const [quickQuery, setQuickQuery] = useState(""); // SKU 또는 MakerCode 입력
+  const [quickSearching, setQuickSearching] = useState(false);
+  const [quickStock, setQuickStock] = useState(null); // 조회된 현재 재고 정보
+  const [quickNewQty, setQuickNewQty] = useState("");
+  const [quickAdjusting, setQuickAdjusting] = useState(false);
+
+  // 재고관리용 매장 목록
+  const [invStores, setInvStores] = useState([]);
 
   // 매장 목록 로드
   async function loadStores() {
@@ -241,59 +256,163 @@ export default function SettingsPage() {
     }
   }
 
-  // 재고 엑셀 파일 선택
-  async function handleInvFileSelect(e) {
-    const file = e.target.files?.[0];
-    if (!file) return;
-
-    setInvFile(file);
-    setInvResult(null);
-    setInvPreview(null);
-    setInvError("");
-
+  // 재고관리용 매장 목록 로드
+  async function loadInvStores() {
     try {
-      const arrayBuffer = await file.arrayBuffer();
-      const parsed = await parseInventoryBulkSetFile(arrayBuffer, file.name);
-
-      if (parsed.errors?.length > 0) {
-        setInvError(`파싱 오류 ${parsed.errors.length}건: ${parsed.errors.slice(0, 3).join(", ")}`);
-      }
-
-      setInvPreview(parsed);
-    } catch (err) {
-      setInvError(err?.message || "엑셀 파싱 실패");
-      setInvPreview(null);
+      const res = await http.get("/stores");
+      setInvStores(res?.rows || []);
+    } catch (e) {
+      console.error("매장 목록 로드 실패:", e);
     }
   }
 
-  // 재고 업로드 실행
-  async function handleInvUpload() {
-    if (!invPreview?.items?.length) {
-      setInvError("업로드할 데이터가 없습니다.");
+  // 컴포넌트 마운트 시 매장 목록 로드
+  useEffect(() => {
+    loadInvStores();
+  }, []);
+
+  // 재고 초기화 파일 선택
+  async function handleResetFileSelect(e) {
+    const file = e.target.files?.[0];
+    if (!file) return;
+
+    setResetFile(file);
+    setResetResult(null);
+    setResetPreview(null);
+    setResetError("");
+
+    try {
+      const arrayBuffer = await file.arrayBuffer();
+      const parsed = await parseInventoryResetFile(arrayBuffer, file.name);
+
+      if (parsed.errors?.length > 0) {
+        setResetError(`파싱 오류 ${parsed.errors.length}건: ${parsed.errors.slice(0, 3).join(", ")}`);
+      }
+
+      setResetPreview(parsed);
+    } catch (err) {
+      setResetError(err?.message || "엑셀 파싱 실패");
+      setResetPreview(null);
+    }
+  }
+
+  // 재고 초기화 실행
+  async function handleResetUpload() {
+    if (!resetStoreCode) {
+      setResetError("매장을 선택해주세요.");
+      return;
+    }
+    if (!resetPreview?.rows?.length) {
+      setResetError("업로드할 데이터가 없습니다.");
       return;
     }
 
-    setInvUploading(true);
-    setInvResult(null);
+    const storeName = invStores.find(s => s.code === resetStoreCode)?.name || resetStoreCode;
+    if (!confirm(`[${storeName}] 매장의 재고를 엑셀 기준으로 전체 교체합니다.\n\n⚠️ 주의: 엑셀에 없는 재고는 삭제됩니다.\n\n계속하시겠습니까?`)) {
+      return;
+    }
+
+    setResetUploading(true);
+    setResetResult(null);
+    setResetError("");
+
+    try {
+      const res = await http.post("/inventory/reset", {
+        storeCode: resetStoreCode,
+        rows: resetPreview.rows,
+      });
+
+      setResetResult(res);
+
+      if (res?.ok) {
+        alert(`재고 초기화 완료!\n\n매장: ${res.storeCode}\nLocation: ${res.locations}개\nSKU: ${res.skus}개\n적용: ${res.applied}건`);
+      }
+    } catch (err) {
+      setResetError(err?.message || "업로드 실패");
+    } finally {
+      setResetUploading(false);
+    }
+  }
+
+  // 단건 재고 조회 (SKU 또는 MakerCode로 검색)
+  async function handleQuickSearch() {
+    const query = (quickQuery || "").trim();
+    if (!invStoreCode) {
+      setInvError("매장을 먼저 선택해주세요.");
+      return;
+    }
+    if (!query) {
+      setInvError("SKU 또는 MakerCode를 입력해주세요.");
+      return;
+    }
+
+    setQuickSearching(true);
+    setQuickStock(null);
+    setQuickNewQty("");
+    setInvError("");
+
+    try {
+      // 재고 조회 API 호출 (SKU 또는 MakerCode로 검색)
+      const res = await http.get(`/inventory/search?storeCode=${encodeURIComponent(invStoreCode)}&q=${encodeURIComponent(query)}`);
+
+      if (res?.items?.length > 0) {
+        // 첫 번째 결과 사용
+        const item = res.items[0];
+        setQuickStock(item);
+        setQuickNewQty(String(item.onHand ?? 0));
+      } else {
+        setInvError(`"${query}" 검색 결과가 없습니다.`);
+      }
+    } catch (err) {
+      setInvError(err?.message || "재고 조회 실패");
+    } finally {
+      setQuickSearching(false);
+    }
+  }
+
+  // 단건 재고 조정 실행
+  async function handleQuickAdjust() {
+    if (!invStoreCode) {
+      setInvError("매장을 선택해주세요.");
+      return;
+    }
+    if (!quickStock) {
+      setInvError("먼저 재고를 검색해주세요.");
+      return;
+    }
+
+    const newQty = parseInt(quickNewQty, 10);
+    if (!Number.isFinite(newQty) || newQty < 0) {
+      setInvError("유효한 수량을 입력해주세요. (0 이상)");
+      return;
+    }
+
+    setQuickAdjusting(true);
     setInvError("");
 
     try {
       const res = await http.post("/inventory/bulk-set", {
-        items: invPreview.items,
-        sourceKey: invFile?.name || "excel-upload",
+        items: [{
+          storeCode: invStoreCode,
+          skuCode: quickStock.skuCode,
+          locationCode: quickStock.locationCode,
+          qty: newQty,
+          memo: "단건 조정",
+        }],
+        sourceKey: "quick-adjust",
       });
 
-      setInvResult(res);
-
       if (res?.success > 0) {
-        alert(`재고 설정 완료: ${res.success}건 성공, ${res.skipped || 0}건 스킵, ${res.error || 0}건 오류`);
+        alert(`재고 조정 완료: ${quickStock.skuCode} @ ${quickStock.locationCode} → ${newQty}개`);
+        // 조회 결과 업데이트
+        setQuickStock({ ...quickStock, onHand: newQty });
       } else {
-        alert(`업로드 결과: 성공 0건 (스킵: ${res?.skipped || 0}, 오류: ${res?.error || 0})`);
+        setInvError(`조정 실패: ${res?.results?.[0]?.message || "알 수 없는 오류"}`);
       }
     } catch (err) {
-      setInvError(err?.message || "업로드 실패");
+      setInvError(err?.message || "재고 조정 실패");
     } finally {
-      setInvUploading(false);
+      setQuickAdjusting(false);
     }
   }
 
@@ -301,7 +420,6 @@ export default function SettingsPage() {
     background: "#fff",
     borderRadius: 8,
     padding: 14,
-    marginBottom: 12,
     border: "1px solid #e5e7eb",
   };
 
@@ -337,43 +455,67 @@ export default function SettingsPage() {
   };
 
   return (
-    <div style={{ padding: 20, maxWidth: 800 }}>
-      <h1 style={{ fontSize: 20, fontWeight: 800, marginBottom: 16 }}>설정</h1>
+    <div style={{ display: "grid", gap: 12, width: "100%" }}>
+      <h1 style={{ fontSize: 20, fontWeight: 800 }}>설정</h1>
 
       {/* 매장 관리 */}
       <div style={cardStyle}>
-        <div style={{ fontSize: 13, fontWeight: 700, marginBottom: 10 }}>매장 관리</div>
-        <div style={{ display: "flex", gap: 6, marginBottom: storeError ? 8 : 0 }}>
-          <input
-            type="text"
-            value={newStoreCode}
-            onChange={(e) => setNewStoreCode(e.target.value)}
-            placeholder="매장코드"
-            style={{ ...inputSmall, width: 100 }}
-          />
-          <input
-            type="text"
-            value={newStoreName}
-            onChange={(e) => setNewStoreName(e.target.value)}
-            placeholder="매장명"
-            style={{ ...inputSmall, flex: 1 }}
-            onKeyDown={(e) => e.key === "Enter" && handleAddStore()}
-          />
-          <button
-            type="button"
-            onClick={handleAddStore}
-            style={{ ...primaryBtn, padding: "6px 12px", fontSize: 12 }}
-          >
-            추가
-          </button>
-          <button
-            type="button"
-            onClick={loadStores}
-            disabled={storesLoading}
-            style={{ ...smallBtnStyle, background: "#3b82f6", color: "#fff", border: "none" }}
-          >
-            {storesLoading ? "..." : "조회"}
-          </button>
+        <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 10 }}>
+          <span style={{ fontSize: 13, fontWeight: 700 }}>매장 관리</span>
+          <span style={{ fontSize: 11, color: "#64748b" }}>
+            Excel 일괄 등록 - 필수: <b>매장코드</b> | 선택: 매장명
+          </span>
+        </div>
+        <div style={{ display: "flex", gap: 6, alignItems: "center", justifyContent: "space-between", marginBottom: storeError ? 8 : 0 }}>
+          <div style={{ display: "flex", gap: 6, alignItems: "center" }}>
+            <input
+              type="text"
+              value={newStoreCode}
+              onChange={(e) => setNewStoreCode(e.target.value)}
+              placeholder="매장코드"
+              style={{ ...inputSmall, width: 100 }}
+            />
+            <input
+              type="text"
+              value={newStoreName}
+              onChange={(e) => setNewStoreName(e.target.value)}
+              placeholder="매장명"
+              style={{ ...inputSmall, width: 120 }}
+              onKeyDown={(e) => e.key === "Enter" && handleAddStore()}
+            />
+            <input
+              type="file"
+              accept=".xlsx,.xls"
+              onChange={handleStoreFileSelect}
+              disabled={storeUploading}
+              style={{ fontSize: 12 }}
+            />
+            <button
+              type="button"
+              onClick={handleStoreUpload}
+              disabled={storeUploading || !storePreview?.items?.length}
+              style={{ ...primaryBtn, padding: "6px 12px", fontSize: 12 }}
+            >
+              {storeUploading ? "..." : "업로드"}
+            </button>
+          </div>
+          <div style={{ display: "flex", gap: 6, alignItems: "center" }}>
+            <button
+              type="button"
+              onClick={handleAddStore}
+              style={{ ...primaryBtn, padding: "6px 12px", fontSize: 12 }}
+            >
+              추가
+            </button>
+            <button
+              type="button"
+              onClick={loadStores}
+              disabled={storesLoading}
+              style={{ ...smallBtnStyle, background: "#3b82f6", color: "#fff", border: "none" }}
+            >
+              {storesLoading ? "..." : "조회"}
+            </button>
+          </div>
         </div>
 
         {storeError && (
@@ -480,128 +622,103 @@ export default function SettingsPage() {
           </>
         )}
 
-        {/* 매장 Excel 업로드 */}
-        <div style={{ marginTop: 16, paddingTop: 12, borderTop: "1px dashed #e5e7eb" }}>
-          <div style={{ fontSize: 12, fontWeight: 600, marginBottom: 8, color: "#374151" }}>
-            Excel 일괄 등록
+        {/* Excel 업로드 에러/미리보기/결과 */}
+        {storeUploadError && (
+          <div style={{ marginTop: 8, fontSize: 11, color: "#ef4444" }}>
+            {storeUploadError}
           </div>
-          <div style={{ fontSize: 11, color: "#64748b", marginBottom: 8 }}>
-            2행: 헤더 / 3행~: 데이터 | 필수: <b>매장코드</b> | 선택: <b>매장명</b>
-          </div>
+        )}
 
-          <div style={{ display: "flex", gap: 6, alignItems: "center", flexWrap: "wrap" }}>
-            <input
-              type="file"
-              accept=".xlsx,.xls"
-              onChange={handleStoreFileSelect}
-              disabled={storeUploading}
-              style={{ fontSize: 12 }}
-            />
-            <button
-              type="button"
-              onClick={handleStoreUpload}
-              disabled={storeUploading || !storePreview?.items?.length}
-              style={{ ...primaryBtn, padding: "6px 12px", fontSize: 12 }}
-            >
-              {storeUploading ? "업로드 중..." : "업로드"}
-            </button>
-          </div>
-
-          {storeUploadError && (
-            <div style={{ marginTop: 8, fontSize: 11, color: "#ef4444" }}>
-              {storeUploadError}
-            </div>
-          )}
-
-          {/* 미리보기 */}
-          {storePreview && (
-            <div style={{ marginTop: 10 }}>
-              <div style={{ fontSize: 12, color: "#374151", marginBottom: 6 }}>
-                파싱 결과: <b>{storePreview.items?.length || 0}</b>건
-                {storePreview.errors?.length > 0 && (
-                  <span style={{ color: "#ef4444", marginLeft: 8 }}>
-                    (오류: {storePreview.errors.length}건)
-                  </span>
-                )}
-              </div>
-
-              {storePreview.sample?.length > 0 && (
-                <div style={{ maxHeight: 180, overflow: "auto", border: "1px solid #e5e7eb", borderRadius: 6 }}>
-                  <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 11 }}>
-                    <thead>
-                      <tr style={{ background: "#f8fafc" }}>
-                        <th style={thStyle}>매장코드</th>
-                        <th style={thStyle}>매장명</th>
-                      </tr>
-                    </thead>
-                    <tbody>
-                      {storePreview.sample.map((item, idx) => (
-                        <tr key={idx}>
-                          <td style={tdStyle}><b>{item.code}</b></td>
-                          <td style={tdStyle}>{item.name || "-"}</td>
-                        </tr>
-                      ))}
-                    </tbody>
-                  </table>
-                </div>
+        {storePreview && (
+          <div style={{ marginTop: 10 }}>
+            <div style={{ fontSize: 12, color: "#374151", marginBottom: 6 }}>
+              파싱 결과: <b>{storePreview.items?.length || 0}</b>건
+              {storePreview.errors?.length > 0 && (
+                <span style={{ color: "#ef4444", marginLeft: 8 }}>
+                  (오류: {storePreview.errors.length}건)
+                </span>
               )}
             </div>
-          )}
 
-          {/* 업로드 결과 */}
-          {storeUploadResult && (
-            <div style={{ marginTop: 10, padding: 10, background: "#f0fdf4", borderRadius: 8, fontSize: 12 }}>
-              <div>
-                총: <b>{storeUploadResult.total}</b>건 |
-                생성: <b style={{ color: "#16a34a" }}>{storeUploadResult.created}</b>건 |
-                수정: <b style={{ color: "#0ea5e9" }}>{storeUploadResult.updated}</b>건 |
-                스킵: <b>{storeUploadResult.skipped}</b>건 |
-                오류: <b style={{ color: "#dc2626" }}>{storeUploadResult.error}</b>건
+            {storePreview.sample?.length > 0 && (
+              <div style={{ maxHeight: 120, overflow: "auto", border: "1px solid #e5e7eb", borderRadius: 6 }}>
+                <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 11 }}>
+                  <thead>
+                    <tr style={{ background: "#f8fafc" }}>
+                      <th style={thStyle}>매장코드</th>
+                      <th style={thStyle}>매장명</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {storePreview.sample.map((item, idx) => (
+                      <tr key={idx}>
+                        <td style={tdStyle}><b>{item.code}</b></td>
+                        <td style={tdStyle}>{item.name || "-"}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
               </div>
-              {storeUploadResult.results?.filter(r => r.status === "error").slice(0, 5).map((r, i) => (
-                <div key={i} style={{ marginTop: 4, color: "#dc2626", fontSize: 11 }}>
-                  [{r.code}] {r.name || "(이름없음)"}: {r.message}
-                </div>
-              ))}
+            )}
+          </div>
+        )}
+
+        {storeUploadResult && (
+          <div style={{ marginTop: 10, padding: 10, background: "#f0fdf4", borderRadius: 8, fontSize: 12 }}>
+            <div>
+              총: <b>{storeUploadResult.total}</b>건 |
+              생성: <b style={{ color: "#16a34a" }}>{storeUploadResult.created}</b>건 |
+              수정: <b style={{ color: "#0ea5e9" }}>{storeUploadResult.updated}</b>건 |
+              스킵: <b>{storeUploadResult.skipped}</b>건 |
+              오류: <b style={{ color: "#dc2626" }}>{storeUploadResult.error}</b>건
             </div>
-          )}
-        </div>
+            {storeUploadResult.results?.filter(r => r.status === "error").slice(0, 5).map((r, i) => (
+              <div key={i} style={{ marginTop: 4, color: "#dc2626", fontSize: 11 }}>
+                [{r.code}] {r.name || "(이름없음)"}: {r.message}
+              </div>
+            ))}
+          </div>
+        )}
       </div>
 
       {/* Location 관리 */}
       <div style={cardStyle}>
-        <div style={{ fontSize: 13, fontWeight: 700, marginBottom: 10 }}>창고/Location 관리</div>
-        <div style={{ display: "flex", gap: 6, marginBottom: locError ? 8 : 0 }}>
-          <input
-            type="text"
-            value={newLocCode}
-            onChange={(e) => setNewLocCode(e.target.value)}
-            placeholder="Location 코드"
-            style={{ ...inputSmall, width: 130 }}
-          />
-          <input
-            type="text"
-            value={newLocName}
-            onChange={(e) => setNewLocName(e.target.value)}
-            placeholder="명칭"
-            style={{ ...inputSmall, flex: 1 }}
-            onKeyDown={(e) => e.key === "Enter" && handleAddLoc()}
-          />
-          <button
-            type="button"
-            onClick={handleAddLoc}
-            style={{ ...primaryBtn, padding: "6px 12px", fontSize: 12 }}
-          >
-            추가
-          </button>
-          <button
-            type="button"
-            onClick={loadLocations}
-            disabled={locationsLoading}
-            style={{ ...smallBtnStyle, background: "#3b82f6", color: "#fff", border: "none" }}
-          >
-            {locationsLoading ? "..." : "조회"}
-          </button>
+        <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 10 }}>
+          <div style={{ display: "flex", gap: 6, alignItems: "center" }}>
+            <span style={{ fontSize: 13, fontWeight: 700 }}>창고/Location 관리</span>
+            <input
+              type="text"
+              value={newLocCode}
+              onChange={(e) => setNewLocCode(e.target.value)}
+              placeholder="Location 코드"
+              style={{ ...inputSmall, width: 130 }}
+            />
+            <input
+              type="text"
+              value={newLocName}
+              onChange={(e) => setNewLocName(e.target.value)}
+              placeholder="명칭"
+              style={{ ...inputSmall, width: 120 }}
+              onKeyDown={(e) => e.key === "Enter" && handleAddLoc()}
+            />
+          </div>
+          <div style={{ display: "flex", gap: 6, alignItems: "center" }}>
+            <button
+              type="button"
+              onClick={handleAddLoc}
+              style={{ ...primaryBtn, padding: "6px 12px", fontSize: 12 }}
+            >
+              추가
+            </button>
+            <button
+              type="button"
+              onClick={loadLocations}
+              disabled={locationsLoading}
+              style={{ ...smallBtnStyle, background: "#3b82f6", color: "#fff", border: "none" }}
+            >
+              {locationsLoading ? "..." : "조회"}
+            </button>
+          </div>
         </div>
 
         {locError && (
@@ -702,69 +819,87 @@ export default function SettingsPage() {
         )}
       </div>
 
-      {/* 재고관리 (Excel 업로드) */}
+      {/* 재고 초기화 (전체 교체) */}
       <div style={cardStyle}>
-        <div style={{ fontSize: 13, fontWeight: 700, marginBottom: 10 }}>재고관리 (Excel 업로드)</div>
-        <div style={{ fontSize: 11, color: "#64748b", marginBottom: 10 }}>
-          필수 헤더: <b>매장코드</b>, <b>단품코드</b>, <b>Location</b>, <b>수량</b> | 선택: 메모
+        <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 6 }}>
+          <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+            <span style={{ fontSize: 13, fontWeight: 700 }}>재고 초기화</span>
+            <span style={{ fontSize: 11, color: "#dc2626" }}>전체 교체 (엑셀에 없는 재고 삭제)</span>
+          </div>
+          <span style={{ fontSize: 11, color: "#64748b" }}>
+            필수: <b>SKU</b>, <b>수량</b>, <b>Location</b>, <b>MakerCode</b>, <b>상품명</b> | 선택: 상품구분
+          </span>
         </div>
-
-        <div style={{ display: "flex", gap: 6, alignItems: "center", flexWrap: "wrap" }}>
-          <input
-            type="file"
-            accept=".xlsx,.xls"
-            onChange={handleInvFileSelect}
-            disabled={invUploading}
-            style={{ fontSize: 12 }}
-          />
+        <div style={{ display: "flex", gap: 6, alignItems: "center", justifyContent: "space-between", marginBottom: 10 }}>
+          <div style={{ display: "flex", gap: 6, alignItems: "center" }}>
+            <select
+              value={resetStoreCode}
+              onChange={(e) => setResetStoreCode(e.target.value)}
+              style={{ ...inputSmall, minWidth: 180 }}
+            >
+              <option value="">-- 매장 선택 --</option>
+              {invStores.map((s) => (
+                <option key={s.id} value={s.code}>
+                  {s.name} ({s.code}) {s.isHq ? "[본사]" : ""}
+                </option>
+              ))}
+            </select>
+            <input
+              type="file"
+              accept=".xlsx,.xls"
+              onChange={handleResetFileSelect}
+              disabled={resetUploading}
+              style={{ fontSize: 12 }}
+            />
+          </div>
           <button
             type="button"
-            onClick={handleInvUpload}
-            disabled={invUploading || !invPreview?.items?.length}
-            style={{ ...primaryBtn, padding: "6px 12px", fontSize: 12 }}
+            onClick={handleResetUpload}
+            disabled={resetUploading || !resetStoreCode || !resetPreview?.rows?.length}
+            style={{ ...primaryBtn, padding: "6px 12px", fontSize: 12, background: "#fef2f2", border: "1px solid #fecaca", color: "#dc2626" }}
           >
-            {invUploading ? "업로드 중..." : "업로드"}
+            {resetUploading ? "..." : "초기화 실행"}
           </button>
         </div>
 
-        {invError && (
+        {resetError && (
           <div style={{ marginTop: 8, fontSize: 11, color: "#ef4444" }}>
-            {invError}
+            {resetError}
           </div>
         )}
 
         {/* 미리보기 */}
-        {invPreview && (
+        {resetPreview && (
           <div style={{ marginTop: 10 }}>
             <div style={{ fontSize: 12, color: "#374151", marginBottom: 6 }}>
-              파싱 결과: <b>{invPreview.items?.length || 0}</b>건
-              {invPreview.errors?.length > 0 && (
+              파싱 결과: <b>{resetPreview.rows?.length || 0}</b>건
+              {resetPreview.errors?.length > 0 && (
                 <span style={{ color: "#ef4444", marginLeft: 8 }}>
-                  (오류: {invPreview.errors.length}건)
+                  (오류: {resetPreview.errors.length}건)
                 </span>
               )}
             </div>
 
-            {invPreview.sample?.length > 0 && (
-              <div style={{ maxHeight: 200, overflow: "auto", border: "1px solid #e5e7eb", borderRadius: 6 }}>
+            {resetPreview.sample?.length > 0 && (
+              <div style={{ maxHeight: 180, overflow: "auto", border: "1px solid #e5e7eb", borderRadius: 6 }}>
                 <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 11 }}>
                   <thead>
                     <tr style={{ background: "#f8fafc" }}>
-                      <th style={thStyle}>매장코드</th>
-                      <th style={thStyle}>단품코드</th>
-                      <th style={thStyle}>Location</th>
+                      <th style={thStyle}>SKU</th>
                       <th style={{ ...thStyle, textAlign: "right" }}>수량</th>
-                      <th style={thStyle}>메모</th>
+                      <th style={thStyle}>Location</th>
+                      <th style={thStyle}>MakerCode</th>
+                      <th style={thStyle}>상품명</th>
                     </tr>
                   </thead>
                   <tbody>
-                    {invPreview.sample.map((item, idx) => (
+                    {resetPreview.sample.map((item, idx) => (
                       <tr key={idx}>
-                        <td style={tdStyle}><b>{item.storeCode}</b></td>
-                        <td style={tdStyle}>{item.skuCode}</td>
-                        <td style={tdStyle}>{item.locationCode}</td>
+                        <td style={tdStyle}><b>{item.sku}</b></td>
                         <td style={{ ...tdStyle, textAlign: "right" }}>{item.qty?.toLocaleString()}</td>
-                        <td style={tdStyle}>{item.memo || "-"}</td>
+                        <td style={tdStyle}>{item.location || "-"}</td>
+                        <td style={tdStyle}>{item.makerCode || "-"}</td>
+                        <td style={tdStyle}>{item.name || "-"}</td>
                       </tr>
                     ))}
                   </tbody>
@@ -775,19 +910,95 @@ export default function SettingsPage() {
         )}
 
         {/* 업로드 결과 */}
-        {invResult && (
+        {resetResult && (
           <div style={{ marginTop: 10, padding: 10, background: "#f0fdf4", borderRadius: 8, fontSize: 12 }}>
             <div>
-              총: <b>{invResult.total}</b>건 |
-              성공: <b style={{ color: "#16a34a" }}>{invResult.success}</b>건 |
-              스킵: <b>{invResult.skipped}</b>건 |
-              오류: <b style={{ color: "#dc2626" }}>{invResult.error}</b>건
+              매장: <b>{resetResult.storeCode}</b> |
+              Location: <b>{resetResult.locations}</b>개 |
+              SKU: <b>{resetResult.skus}</b>개 |
+              적용: <b style={{ color: "#16a34a" }}>{resetResult.applied}</b>건
             </div>
-            {invResult.results?.filter(r => r.status === "error").slice(0, 5).map((r, i) => (
-              <div key={i} style={{ marginTop: 4, color: "#dc2626", fontSize: 11 }}>
-                [{r.storeCode}] {r.skuCode} @ {r.locationCode}: {r.message}
-              </div>
-            ))}
+          </div>
+        )}
+      </div>
+
+      {/* 재고 조정 */}
+      <div style={cardStyle}>
+        <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 10 }}>
+          <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+            <span style={{ fontSize: 13, fontWeight: 700 }}>재고 조정</span>
+            <span style={{ fontSize: 11, color: "#16a34a" }}>기존 재고 유지, 단건 수정</span>
+          </div>
+        </div>
+
+        <div style={{ display: "flex", gap: 6, alignItems: "center", justifyContent: "space-between" }}>
+          <div style={{ display: "flex", gap: 6, alignItems: "center", flexWrap: "wrap" }}>
+            <select
+              value={invStoreCode}
+              onChange={(e) => {
+                setInvStoreCode(e.target.value);
+                setQuickStock(null);
+                setQuickQuery("");
+                setQuickNewQty("");
+              }}
+              style={{ ...inputSmall, minWidth: 180 }}
+            >
+              <option value="">-- 매장 선택 --</option>
+              {invStores.map((s) => (
+                <option key={s.id} value={s.code}>
+                  {s.name} ({s.code}) {s.isHq ? "[본사]" : ""}
+                </option>
+              ))}
+            </select>
+            <input
+              type="text"
+              value={quickQuery}
+              onChange={(e) => setQuickQuery(e.target.value)}
+              onKeyDown={(e) => e.key === "Enter" && handleQuickSearch()}
+              placeholder="SKU 또는 MakerCode"
+              style={{ ...inputSmall, width: 140 }}
+              disabled={!invStoreCode || quickSearching}
+            />
+            <button
+              type="button"
+              onClick={handleQuickSearch}
+              disabled={!invStoreCode || !quickQuery.trim() || quickSearching}
+              style={{ ...smallBtnStyle, background: "#3b82f6", color: "#fff", border: "none" }}
+            >
+              {quickSearching ? "..." : "검색"}
+            </button>
+            {quickStock && (
+              <>
+                <span style={{ fontSize: 12, color: "#64748b", borderLeft: "1px solid #e5e7eb", paddingLeft: 8 }}>
+                  <b>{quickStock.skuCode}</b> @ {quickStock.locationCode} | 현재: <b style={{ color: "#0ea5e9" }}>{quickStock.onHand ?? 0}</b>
+                </span>
+                <input
+                  type="number"
+                  value={quickNewQty}
+                  onChange={(e) => setQuickNewQty(e.target.value)}
+                  placeholder="새 수량"
+                  style={{ ...inputSmall, width: 70, textAlign: "right" }}
+                  min="0"
+                  disabled={quickAdjusting}
+                />
+              </>
+            )}
+          </div>
+          {quickStock && (
+            <button
+              type="button"
+              onClick={handleQuickAdjust}
+              disabled={quickAdjusting || quickNewQty === ""}
+              style={{ ...primaryBtn, padding: "6px 12px", fontSize: 12 }}
+            >
+              {quickAdjusting ? "..." : "조정"}
+            </button>
+          )}
+        </div>
+
+        {invError && (
+          <div style={{ marginTop: 8, fontSize: 11, color: "#ef4444" }}>
+            {invError}
           </div>
         )}
       </div>

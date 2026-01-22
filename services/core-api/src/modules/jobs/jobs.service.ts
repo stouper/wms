@@ -438,7 +438,7 @@ async addItems(jobId: string, dto: any) {
   return { ok: true };
 }
   /**
-   * 출고 스캔(피킹)
+   * 출고 스캔(피킹) - 창고 재고 감소 + 매장 재고 증가 (양방향 처리)
    */
   async scan(
     jobId: string,
@@ -454,7 +454,7 @@ async addItems(jobId: string, dto: any) {
   ) {
     const job = await this.prisma.job.findUnique({
       where: { id: jobId } as any,
-      include: { items: true } as any,
+      include: { items: true, store: true } as any,
     } as any);
     if (!job) throw new NotFoundException(`Job not found: ${jobId}`);
 
@@ -464,6 +464,7 @@ async addItems(jobId: string, dto: any) {
     }
 
     const allowOverpick = Boolean((job as any).allowOverpick);
+    const destStoreId = (job as any).storeId; // 목적지 매장
 
     const raw = this.norm(dto.value || dto.skuCode);
     if (!raw) throw new BadRequestException('value/skuCode is required');
@@ -590,21 +591,37 @@ async addItems(jobId: string, dto: any) {
         }
       }
 
-      // 4-1) location 결정: scannedLocation 있으면 사용, 아니면 자동
-      let loc: any = scannedLocation;
-      if (!loc) {
+      // 4-1) 출발지(창고) location 결정: scannedLocation 있으면 사용, 아니면 자동
+      let srcLoc: any = scannedLocation;
+      if (!srcLoc) {
         // 가장 qty 큰 로케이션 우선
         const best = await (tx.inventory as any).findFirst({
           where: { skuId: sku.id, qty: { gt: 0 } } as any,
           orderBy: { qty: 'desc' } as any,
           include: { location: true } as any,
         });
-        if (best?.location?.id) loc = best.location;
+        if (best?.location?.id) srcLoc = best.location;
 
         // fallback: UNASSIGNED
-        if (!loc) {
-          loc = await tx.location.findFirst({ where: { code: 'UNASSIGNED' } as any } as any);
-          if (!loc) throw new NotFoundException('UNASSIGNED location not found');
+        if (!srcLoc) {
+          srcLoc = await tx.location.findFirst({ where: { code: 'UNASSIGNED' } as any } as any);
+          if (!srcLoc) throw new NotFoundException('UNASSIGNED location not found');
+        }
+      }
+
+      // ✅ 4-2) 도착지(매장) location 결정: 매장의 기본 location (FLOOR)
+      let destLoc: any = null;
+      if (destStoreId) {
+        // 매장의 FLOOR location 찾기/생성
+        destLoc = await tx.location.findFirst({
+          where: { storeId: destStoreId, code: 'FLOOR' } as any,
+        } as any);
+
+        if (!destLoc) {
+          // 매장에 FLOOR location 자동 생성
+          destLoc = await tx.location.create({
+            data: { storeId: destStoreId, code: 'FLOOR' } as any,
+          } as any);
         }
       }
 
@@ -621,13 +638,13 @@ async addItems(jobId: string, dto: any) {
         include: { sku: true } as any,
       } as any);
 
-      // 6) inventoryTx 기록 (out)
+      // 6) inventoryTx 기록 (out - 창고에서 출고)
       await (tx as any).inventoryTx.create({
         data: {
           type: 'out',
           qty: -qty,
           skuId: sku.id,
-          locationId: loc.id,
+          locationId: srcLoc.id,
           jobId,
           jobItemId: item.id,
           isForced: force,
@@ -636,18 +653,49 @@ async addItems(jobId: string, dto: any) {
         } as any,
       });
 
-      // 7) inventory snapshot 갱신 (row 없으면 upsert로 생성)
-      const invRow = await (tx as any).inventory.findUnique({
-        where: { skuId_locationId: { skuId: sku.id, locationId: loc.id } } as any,
+      // 7) 창고 inventory snapshot 갱신 (감소)
+      const srcInvRow = await (tx as any).inventory.findUnique({
+        where: { skuId_locationId: { skuId: sku.id, locationId: srcLoc.id } } as any,
         select: { qty: true } as any,
       } as any);
-      const before = Number(invRow?.qty ?? 0);
+      const srcBefore = Number(srcInvRow?.qty ?? 0);
 
       await (tx as any).inventory.upsert({
-        where: { skuId_locationId: { skuId: sku.id, locationId: loc.id } } as any,
-        create: { skuId: sku.id, locationId: loc.id, qty: before - qty } as any,
+        where: { skuId_locationId: { skuId: sku.id, locationId: srcLoc.id } } as any,
+        create: { skuId: sku.id, locationId: srcLoc.id, qty: srcBefore - qty } as any,
         update: { qty: { decrement: qty } as any } as any,
       } as any);
+
+      // ✅ 8) 매장 재고 증가 (도착지가 있을 때만)
+      if (destLoc) {
+        // inventoryTx 기록 (in - 매장으로 입고)
+        await (tx as any).inventoryTx.create({
+          data: {
+            type: 'in',
+            qty: +qty,
+            skuId: sku.id,
+            locationId: destLoc.id,
+            jobId,
+            jobItemId: item.id,
+            isForced: false,
+            operatorId: this.norm(dto.operatorId) || null,
+            note: `창고출고→매장입고 (from: ${srcLoc.code})`,
+          } as any,
+        });
+
+        // 매장 inventory snapshot 갱신 (증가)
+        const destInvRow = await (tx as any).inventory.findUnique({
+          where: { skuId_locationId: { skuId: sku.id, locationId: destLoc.id } } as any,
+          select: { qty: true } as any,
+        } as any);
+        const destBefore = Number(destInvRow?.qty ?? 0);
+
+        await (tx as any).inventory.upsert({
+          where: { skuId_locationId: { skuId: sku.id, locationId: destLoc.id } } as any,
+          create: { skuId: sku.id, locationId: destLoc.id, qty: destBefore + qty } as any,
+          update: { qty: { increment: qty } as any } as any,
+        } as any);
+      }
 
       // 9) ✅ 스캔 결과로 job 완료 여부 자동 반영 (백엔드가 진실)
       const items = await tx.jobItem.findMany({
@@ -671,7 +719,8 @@ async addItems(jobId: string, dto: any) {
 
       return {
         ok: true,
-        usedLocationCode: loc.code,
+        usedLocationCode: srcLoc.code,
+        destLocationCode: destLoc?.code || null,
         sku: { id: sku.id, sku: sku.sku, makerCode: sku.makerCode, name: sku.name },
         picked: {
           id: updatedItem.id,
@@ -731,7 +780,9 @@ async addItems(jobId: string, dto: any) {
   }
 
   /**
-   * 입고/반품 receive (qtyPicked 카운팅)
+   * 입고/반품 receive (qtyPicked 카운팅) - 양방향 처리
+   * - INBOUND: 외부에서 창고로 입고 (창고 재고만 증가)
+   * - RETURN: 매장에서 창고로 반품 (매장 재고 감소 + 창고 재고 증가)
    * - locationCode 없으면 AUTO 추천: 재고 있는 로케이션 > 없으면 RET-01
    */
   async receive(
@@ -746,7 +797,7 @@ async addItems(jobId: string, dto: any) {
   ) {
     const job = await this.prisma.job.findUnique({
       where: { id: jobId } as any,
-      include: { items: true } as any,
+      include: { items: true, store: true } as any,
     } as any);
     if (!job) throw new NotFoundException(`Job not found: ${jobId}`);
 
@@ -755,6 +806,9 @@ async addItems(jobId: string, dto: any) {
     if (jobType !== JobType.INBOUND && jobType !== JobType.RETURN) {
       throw new ConflictException(`Job type mismatch: expected INBOUND/RETURN, got ${jobType}`);
     }
+
+    const isReturn = jobType === JobType.RETURN;
+    const srcStoreId = (job as any).storeId; // 반품 시 출발지 매장
 
     const raw = this.norm(dto?.value || dto?.skuCode);
     if (!raw) throw new BadRequestException('value/skuCode is required');
@@ -825,13 +879,13 @@ async addItems(jobId: string, dto: any) {
 
       if (!item) throw new NotFoundException('jobItem not found (ensured)');
 
-      // ✅ location 결정
+      // ✅ 도착지(창고) location 결정
       const wantAuto = !inputLocationCode || inputLocationCode.toUpperCase() === 'AUTO';
 
-      let loc: any = null;
+      let destLoc: any = null;
       if (!wantAuto) {
-        loc = await tx.location.findFirst({ where: { code: inputLocationCode } as any } as any);
-        if (!loc) throw new NotFoundException(`Location not found: ${inputLocationCode}`);
+        destLoc = await tx.location.findFirst({ where: { code: inputLocationCode } as any } as any);
+        if (!destLoc) throw new NotFoundException(`Location not found: ${inputLocationCode}`);
       } else {
         // 1) 기존 재고가 있는 로케이션 중 qty가 가장 큰 곳
         const best = await (tx.inventory as any).findFirst({
@@ -840,12 +894,56 @@ async addItems(jobId: string, dto: any) {
           include: { location: true } as any,
         });
         if (best?.location?.id) {
-          loc = best.location;
+          destLoc = best.location;
         } else {
           // 2) 없으면 기본 반품 위치
-          loc = await tx.location.findFirst({ where: { code: 'RET-01' } as any } as any);
-          if (!loc) throw new NotFoundException('RET-01 location not found');
+          destLoc = await tx.location.findFirst({ where: { code: 'RET-01' } as any } as any);
+          if (!destLoc) throw new NotFoundException('RET-01 location not found');
         }
+      }
+
+      // ✅ RETURN일 때: 출발지(매장) location 결정
+      let srcLoc: any = null;
+      if (isReturn && srcStoreId) {
+        // 매장의 FLOOR location 찾기
+        srcLoc = await tx.location.findFirst({
+          where: { storeId: srcStoreId, code: 'FLOOR' } as any,
+        } as any);
+
+        if (!srcLoc) {
+          // 매장에 FLOOR location 자동 생성
+          srcLoc = await tx.location.create({
+            data: { storeId: srcStoreId, code: 'FLOOR' } as any,
+          } as any);
+        }
+
+        // ✅ 매장 재고 감소 (출발지)
+        await (tx as any).inventoryTx.create({
+          data: {
+            type: 'out',
+            qty: -qty,
+            skuId: sku.id,
+            locationId: srcLoc.id,
+            jobId,
+            jobItemId: item.id,
+            isForced: false,
+            operatorId: this.norm(dto?.operatorId) || null,
+            note: `매장반품→창고입고 (to: ${destLoc.code})`,
+          } as any,
+        });
+
+        // 매장 inventory snapshot 감소
+        const srcInvRow = await (tx as any).inventory.findUnique({
+          where: { skuId_locationId: { skuId: sku.id, locationId: srcLoc.id } } as any,
+          select: { qty: true } as any,
+        } as any);
+        const srcBefore = Number(srcInvRow?.qty ?? 0);
+
+        await (tx as any).inventory.upsert({
+          where: { skuId_locationId: { skuId: sku.id, locationId: srcLoc.id } } as any,
+          create: { skuId: sku.id, locationId: srcLoc.id, qty: srcBefore - qty } as any,
+          update: { qty: { decrement: qty } as any } as any,
+        } as any);
       }
 
       // 카운팅 증가 (입고도 qtyPicked로 카운팅)
@@ -855,30 +953,31 @@ async addItems(jobId: string, dto: any) {
         include: { sku: true } as any,
       } as any);
 
-      // 재고 + 기록
+      // ✅ 창고 재고 증가 (도착지)
       await (tx as any).inventoryTx.create({
         data: {
           type: 'in',
           qty: +qty,
           skuId: sku.id,
-          locationId: loc.id,
+          locationId: destLoc.id,
           jobId,
           jobItemId: item.id,
           isForced: false,
           operatorId: this.norm(dto?.operatorId) || null,
+          note: isReturn ? `매장반품→창고입고 (from: ${srcLoc?.code || 'N/A'})` : null,
         } as any,
       });
 
-      // ✅ Inventory 스냅샷 갱신 (로우 없으면 자동 생성)
-      const invRow = await (tx as any).inventory.findUnique({
-        where: { skuId_locationId: { skuId: sku.id, locationId: loc.id } } as any,
+      // ✅ 창고 Inventory 스냅샷 갱신 (증가)
+      const destInvRow = await (tx as any).inventory.findUnique({
+        where: { skuId_locationId: { skuId: sku.id, locationId: destLoc.id } } as any,
         select: { qty: true } as any,
       } as any);
-      const before = Number(invRow?.qty ?? 0);
+      const destBefore = Number(destInvRow?.qty ?? 0);
 
       await (tx as any).inventory.upsert({
-        where: { skuId_locationId: { skuId: sku.id, locationId: loc.id } } as any,
-        create: { skuId: sku.id, locationId: loc.id, qty: before + qty } as any,
+        where: { skuId_locationId: { skuId: sku.id, locationId: destLoc.id } } as any,
+        create: { skuId: sku.id, locationId: destLoc.id, qty: destBefore + qty } as any,
         update: { qty: { increment: qty } as any } as any,
       } as any);
 
@@ -904,7 +1003,8 @@ async addItems(jobId: string, dto: any) {
 
       return {
         ok: true,
-        usedLocationCode: loc.code,
+        usedLocationCode: destLoc.code,
+        srcLocationCode: srcLoc?.code || null,
         sku: { id: sku.id, sku: sku.sku, makerCode: sku.makerCode, name: sku.name },
         picked: {
           id: updatedItem.id,
@@ -962,9 +1062,14 @@ async addItems(jobId: string, dto: any) {
     
   }
 
+  /**
+   * ✅ undoLastTx - 양방향 처리 지원
+   * - 출고/입고 시 창고+매장 양쪽에 tx가 생성되므로, 연관된 tx들을 함께 삭제
+   * - 같은 jobItemId + 1초 이내에 생성된 tx들을 쌍으로 처리
+   */
   async undoLastTx(jobId: string, operatorId?: string) {
   return this.prisma.$transaction(async (tx) => {
-    // 1) 마지막 InventoryTx (이 Job 기준) - UNDO 시 삭제하므로 undoneAt 체크 불필요
+    // 1) 마지막 InventoryTx (이 Job 기준)
     const lastTx = await (tx as any).inventoryTx.findFirst({
       where: { jobId },
       orderBy: { createdAt: 'desc' },
@@ -983,68 +1088,95 @@ async addItems(jobId: string, dto: any) {
       throw new BadRequestException('location 없는 트랜잭션은 undo 불가');
     }
 
-    // ✅ 1-1) "스캔 취소(UNDO)" 정석 규칙:
-    // 같은 SKU+Location에 대해 lastTx 이후(createdAt 더 큰) 트랜잭션이 하나라도 있으면
-    // 순서가 깨지므로 undo 불가 (시간 역순 undo 강제)
-    const newerTx = await (tx as any).inventoryTx.findFirst({
+    // ✅ 1-1) 양방향 처리된 연관 tx 찾기
+    // 같은 jobItemId + 1초 이내에 생성된 tx들 (out/in 쌍)
+    const lastCreatedAt = new Date(lastTx.createdAt);
+    const oneSecondBefore = new Date(lastCreatedAt.getTime() - 1000);
+
+    const relatedTxs = await (tx as any).inventoryTx.findMany({
       where: {
-        skuId: lastTx.skuId,
-        locationId: lastTx.locationId,
-        createdAt: { gt: lastTx.createdAt },
+        jobId,
+        jobItemId: lastTx.jobItemId,
+        createdAt: { gte: oneSecondBefore },
       },
-      select: { id: true, type: true, qty: true, createdAt: true },
-      orderBy: { createdAt: 'asc' },
+      orderBy: { createdAt: 'desc' },
     });
 
-    if (newerTx) {
-      throw new BadRequestException(
-        '이 스캔 이후 동일 SKU/로케이션에서 다른 작업이 진행되어 취소할 수 없어. (최근 작업부터 먼저 취소해야 함)',
-      );
+    // 처리할 tx 목록 (연관된 것들 모두)
+    const txsToUndo = relatedTxs.length > 0 ? relatedTxs : [lastTx];
+
+    // ✅ 1-2) 각 tx에 대해 순서 검증 (이후 작업이 있으면 undo 불가)
+    for (const txItem of txsToUndo) {
+      const newerTx = await (tx as any).inventoryTx.findFirst({
+        where: {
+          skuId: txItem.skuId,
+          locationId: txItem.locationId,
+          createdAt: { gt: txItem.createdAt },
+        },
+        select: { id: true, type: true, qty: true, createdAt: true },
+        orderBy: { createdAt: 'asc' },
+      });
+
+      if (newerTx) {
+        throw new BadRequestException(
+          '이 스캔 이후 동일 SKU/로케이션에서 다른 작업이 진행되어 취소할 수 없어. (최근 작업부터 먼저 취소해야 함)',
+        );
+      }
     }
 
-    // 2) 재고 반대로 복구
-    // out(-qty) → +absQty / in(+qty) → -absQty
-    const delta = lastTx.qty < 0 ? +absQty : -absQty;
+    // 2) 각 tx에 대해 재고 복구
+    const deletedTxIds: string[] = [];
+    for (const txItem of txsToUndo) {
+      const txAbsQty = Math.abs(Number(txItem.qty || 0));
+      const delta = txItem.qty < 0 ? +txAbsQty : -txAbsQty;
 
-    // inventory 현재값
-    const invRow = await (tx as any).inventory.findUnique({
-      where: {
-        skuId_locationId: {
-          skuId: lastTx.skuId,
-          locationId: lastTx.locationId,
+      // inventory 현재값
+      const invRow = await (tx as any).inventory.findUnique({
+        where: {
+          skuId_locationId: {
+            skuId: txItem.skuId,
+            locationId: txItem.locationId,
+          },
         },
-      },
-      select: { qty: true },
-    });
+        select: { qty: true },
+      });
 
-    const before = Number(invRow?.qty ?? 0);
-    const after = before + delta;
+      const before = Number(invRow?.qty ?? 0);
+      const after = before + delta;
 
-    // ✅ 음수 방어는 유지하되, 메시지를 더 명확하게
-    if (after < 0) {
-      throw new BadRequestException(
-        '재고가 이미 다른 작업으로 사용되어 취소할 수 없어. (해당 SKU/로케이션 재고 부족)',
-      );
+      // ✅ 음수 방어
+      if (after < 0) {
+        throw new BadRequestException(
+          `재고가 이미 다른 작업으로 사용되어 취소할 수 없어. (location: ${txItem.locationId}, 재고 부족)`,
+        );
+      }
+
+      await (tx as any).inventory.upsert({
+        where: {
+          skuId_locationId: {
+            skuId: txItem.skuId,
+            locationId: txItem.locationId,
+          },
+        },
+        create: {
+          skuId: txItem.skuId,
+          locationId: txItem.locationId,
+          qty: after,
+        },
+        update: {
+          qty: { increment: delta },
+        },
+      });
+
+      // tx 삭제
+      await (tx as any).inventoryTx.delete({
+        where: { id: txItem.id },
+      });
+
+      deletedTxIds.push(txItem.id);
     }
 
-    await (tx as any).inventory.upsert({
-      where: {
-        skuId_locationId: {
-          skuId: lastTx.skuId,
-          locationId: lastTx.locationId,
-        },
-      },
-      create: {
-        skuId: lastTx.skuId,
-        locationId: lastTx.locationId,
-        qty: after,
-      },
-      update: {
-        qty: { increment: delta },
-      },
-    });
-
-    // 3) jobItem.qtyPicked 되돌리기
+    // 3) jobItem.qtyPicked 되돌리기 (한 번만 - 연관 tx들이 같은 수량을 처리했으므로)
     if (lastTx.jobItemId) {
       const item = await (tx as any).jobItem.findUnique({
         where: { id: lastTx.jobItemId },
@@ -1065,12 +1197,7 @@ async addItems(jobId: string, dto: any) {
       }
     }
 
-    // 4) 원본 tx 삭제 (undo 로그 생성 대신 깔끔하게 삭제)
-    await (tx as any).inventoryTx.delete({
-      where: { id: lastTx.id },
-    });
-
-    // 5) job done 상태 되돌리기(필요 시)
+    // 4) job done 상태 되돌리기(필요 시)
     const job = await (tx as any).job.findUnique({
       where: { id: jobId },
       select: { status: true },
@@ -1096,8 +1223,8 @@ async addItems(jobId: string, dto: any) {
 
     return {
       ok: true,
-      deletedTxId: lastTx.id,
-      delta,
+      deletedTxIds,
+      undoneCount: deletedTxIds.length,
     };
   });
 }
