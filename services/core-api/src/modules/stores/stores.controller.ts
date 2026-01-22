@@ -20,6 +20,11 @@ export class StoresController {
     return this.stores.getByCode(code);
   }
 
+  @Post('bulk-upsert')
+  bulkUpsert(@Body() dto: { items: Array<{ code: string; name?: string }> }) {
+    return this.stores.bulkUpsert(dto.items);
+  }
+
   @Post()
   create(@Body() dto: { code: string; name?: string; isHq?: boolean }) {
     return this.stores.create(dto);

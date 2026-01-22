@@ -2,6 +2,7 @@ import React, { useState } from "react";
 import { inputStyle, primaryBtn } from "../ui/styles";
 import { http } from "../workflows/_common/http";
 import { parseInventoryBulkSetFile } from "../workflows/_common/excel/parseInventoryBulkSet";
+import { parseStoreBulkUpsertFile } from "../workflows/_common/excel/parseStoreBulkUpsert";
 
 export default function SettingsPage() {
   // 매장 관리
@@ -12,6 +13,13 @@ export default function SettingsPage() {
   const [newStoreName, setNewStoreName] = useState("");
   const [storeError, setStoreError] = useState("");
   const [editingStore, setEditingStore] = useState(null);
+
+  // 매장 Excel 업로드
+  const [storeFile, setStoreFile] = useState(null);
+  const [storeUploading, setStoreUploading] = useState(false);
+  const [storeUploadResult, setStoreUploadResult] = useState(null);
+  const [storePreview, setStorePreview] = useState(null);
+  const [storeUploadError, setStoreUploadError] = useState("");
 
   // Location 관리
   const [locations, setLocations] = useState([]);
@@ -114,6 +122,62 @@ export default function SettingsPage() {
       await loadStores();
     } catch (e) {
       alert(e?.message || "매장 삭제 실패");
+    }
+  }
+
+  // 매장 엑셀 파일 선택
+  async function handleStoreFileSelect(e) {
+    const file = e.target.files?.[0];
+    if (!file) return;
+
+    setStoreFile(file);
+    setStoreUploadResult(null);
+    setStorePreview(null);
+    setStoreUploadError("");
+
+    try {
+      const arrayBuffer = await file.arrayBuffer();
+      const parsed = await parseStoreBulkUpsertFile(arrayBuffer, file.name);
+
+      if (parsed.errors?.length > 0) {
+        setStoreUploadError(`파싱 오류 ${parsed.errors.length}건: ${parsed.errors.slice(0, 3).join(", ")}`);
+      }
+
+      setStorePreview(parsed);
+    } catch (err) {
+      setStoreUploadError(err?.message || "엑셀 파싱 실패");
+      setStorePreview(null);
+    }
+  }
+
+  // 매장 업로드 실행
+  async function handleStoreUpload() {
+    if (!storePreview?.items?.length) {
+      setStoreUploadError("업로드할 데이터가 없습니다.");
+      return;
+    }
+
+    setStoreUploading(true);
+    setStoreUploadResult(null);
+    setStoreUploadError("");
+
+    try {
+      const res = await http.post("/stores/bulk-upsert", {
+        items: storePreview.items,
+      });
+
+      setStoreUploadResult(res);
+      await loadStores(); // 목록 갱신
+
+      if (res?.created > 0 || res?.updated > 0) {
+        alert(`매장 등록 완료: 생성 ${res.created}건, 수정 ${res.updated}건, 스킵 ${res.skipped}건`);
+      } else {
+        alert(`업로드 결과: 변경 없음 (스킵: ${res?.skipped || 0}건)`);
+      }
+    } catch (err) {
+      setStoreUploadError(err?.message || "업로드 실패");
+    } finally {
+      setStoreUploading(false);
     }
   }
 
@@ -415,6 +479,93 @@ export default function SettingsPage() {
             )}
           </>
         )}
+
+        {/* 매장 Excel 업로드 */}
+        <div style={{ marginTop: 16, paddingTop: 12, borderTop: "1px dashed #e5e7eb" }}>
+          <div style={{ fontSize: 12, fontWeight: 600, marginBottom: 8, color: "#374151" }}>
+            Excel 일괄 등록
+          </div>
+          <div style={{ fontSize: 11, color: "#64748b", marginBottom: 8 }}>
+            2행: 헤더 / 3행~: 데이터 | 필수: <b>매장코드</b> | 선택: <b>매장명</b>
+          </div>
+
+          <div style={{ display: "flex", gap: 6, alignItems: "center", flexWrap: "wrap" }}>
+            <input
+              type="file"
+              accept=".xlsx,.xls"
+              onChange={handleStoreFileSelect}
+              disabled={storeUploading}
+              style={{ fontSize: 12 }}
+            />
+            <button
+              type="button"
+              onClick={handleStoreUpload}
+              disabled={storeUploading || !storePreview?.items?.length}
+              style={{ ...primaryBtn, padding: "6px 12px", fontSize: 12 }}
+            >
+              {storeUploading ? "업로드 중..." : "업로드"}
+            </button>
+          </div>
+
+          {storeUploadError && (
+            <div style={{ marginTop: 8, fontSize: 11, color: "#ef4444" }}>
+              {storeUploadError}
+            </div>
+          )}
+
+          {/* 미리보기 */}
+          {storePreview && (
+            <div style={{ marginTop: 10 }}>
+              <div style={{ fontSize: 12, color: "#374151", marginBottom: 6 }}>
+                파싱 결과: <b>{storePreview.items?.length || 0}</b>건
+                {storePreview.errors?.length > 0 && (
+                  <span style={{ color: "#ef4444", marginLeft: 8 }}>
+                    (오류: {storePreview.errors.length}건)
+                  </span>
+                )}
+              </div>
+
+              {storePreview.sample?.length > 0 && (
+                <div style={{ maxHeight: 180, overflow: "auto", border: "1px solid #e5e7eb", borderRadius: 6 }}>
+                  <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 11 }}>
+                    <thead>
+                      <tr style={{ background: "#f8fafc" }}>
+                        <th style={thStyle}>매장코드</th>
+                        <th style={thStyle}>매장명</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {storePreview.sample.map((item, idx) => (
+                        <tr key={idx}>
+                          <td style={tdStyle}><b>{item.code}</b></td>
+                          <td style={tdStyle}>{item.name || "-"}</td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              )}
+            </div>
+          )}
+
+          {/* 업로드 결과 */}
+          {storeUploadResult && (
+            <div style={{ marginTop: 10, padding: 10, background: "#f0fdf4", borderRadius: 8, fontSize: 12 }}>
+              <div>
+                총: <b>{storeUploadResult.total}</b>건 |
+                생성: <b style={{ color: "#16a34a" }}>{storeUploadResult.created}</b>건 |
+                수정: <b style={{ color: "#0ea5e9" }}>{storeUploadResult.updated}</b>건 |
+                스킵: <b>{storeUploadResult.skipped}</b>건 |
+                오류: <b style={{ color: "#dc2626" }}>{storeUploadResult.error}</b>건
+              </div>
+              {storeUploadResult.results?.filter(r => r.status === "error").slice(0, 5).map((r, i) => (
+                <div key={i} style={{ marginTop: 4, color: "#dc2626", fontSize: 11 }}>
+                  [{r.code}] {r.name || "(이름없음)"}: {r.message}
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
       </div>
 
       {/* Location 관리 */}

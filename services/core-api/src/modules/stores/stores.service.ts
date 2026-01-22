@@ -135,4 +135,94 @@ export class StoresService {
     await this.prisma.store.delete({ where: { id } });
     return { ok: true };
   }
+
+  // 일괄 생성/수정 (Excel 업로드용)
+  async bulkUpsert(items: Array<{ code: string; name?: string }>) {
+    const results: Array<{
+      code: string;
+      name?: string;
+      status: 'created' | 'updated' | 'skipped' | 'error';
+      message?: string;
+    }> = [];
+
+    let createdCount = 0;
+    let updatedCount = 0;
+    let skippedCount = 0;
+    let errorCount = 0;
+
+    for (const item of items) {
+      const code = this.norm(item.code);
+      const name = this.norm(item.name) || null;
+
+      if (!code) {
+        results.push({
+          code: item.code,
+          name: item.name,
+          status: 'error',
+          message: '매장코드가 없습니다.',
+        });
+        errorCount++;
+        continue;
+      }
+
+      try {
+        // 기존 매장 조회
+        const existing = await this.prisma.store.findUnique({ where: { code } });
+
+        if (existing) {
+          // 이름이 같으면 스킵
+          if (existing.name === name) {
+            results.push({
+              code,
+              name,
+              status: 'skipped',
+              message: '변경 없음',
+            });
+            skippedCount++;
+          } else {
+            // 이름 업데이트
+            await this.prisma.store.update({
+              where: { code },
+              data: { name },
+            });
+            results.push({
+              code,
+              name,
+              status: 'updated',
+            });
+            updatedCount++;
+          }
+        } else {
+          // 신규 생성
+          await this.prisma.store.create({
+            data: { code, name, isHq: false },
+          });
+          results.push({
+            code,
+            name,
+            status: 'created',
+          });
+          createdCount++;
+        }
+      } catch (e: any) {
+        results.push({
+          code,
+          name,
+          status: 'error',
+          message: e?.message || String(e),
+        });
+        errorCount++;
+      }
+    }
+
+    return {
+      ok: true,
+      total: items.length,
+      created: createdCount,
+      updated: updatedCount,
+      skipped: skippedCount,
+      error: errorCount,
+      results,
+    };
+  }
 }
