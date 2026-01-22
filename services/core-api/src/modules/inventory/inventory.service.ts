@@ -77,11 +77,11 @@ export class InventoryService {
     locationId: string;
     qty: number;
     type: 'in' | 'out' | 'set';
-    memo?: string;
+    note?: string;
     isForced?: boolean;
   }) {
     const { skuId, locationId, qty, type } = params;
-    const memo = this.norm(params.memo ?? '');
+    const note = this.norm(params.note ?? '');
     const isForced = Boolean(params.isForced);
 
     // ✅ inventory upsert
@@ -102,7 +102,7 @@ export class InventoryService {
         locationId,
         qty,
         type,
-        memo: memo || null,
+        note: note || null,
         beforeQty,
         afterQty,
         isForced,
@@ -130,7 +130,7 @@ export class InventoryService {
       locationId: loc.id,
       qty,
       type: 'in',
-      memo: (dto as any).memo,
+      note: (dto as any).memo,
       isForced: false,
     });
 
@@ -169,7 +169,7 @@ export class InventoryService {
       locationId: loc.id,
       qty: -Math.abs(qty),
       type: 'out',
-      memo: force ? (forceReason || 'forced out') : (dto as any).memo,
+      note: force ? (forceReason || 'forced out') : (dto as any).memo,
       isForced: force,
     });
 
@@ -196,7 +196,7 @@ export class InventoryService {
         { sku: { sku: { contains: q, mode: 'insensitive' } } as any },
         { sku: { makerCode: { contains: q, mode: 'insensitive' } } as any },
         { location: { code: { contains: q, mode: 'insensitive' } } as any },
-        { memo: { contains: q, mode: 'insensitive' } } as any,
+        { note: { contains: q, mode: 'insensitive' } } as any,
       ];
     }
 
@@ -210,7 +210,7 @@ export class InventoryService {
         locationId: true,
         qty: true,
         type: true,
-        memo: true,
+        note: true,
         isForced: true,
         beforeQty: true,
         afterQty: true,
@@ -487,7 +487,7 @@ export class InventoryService {
           locationId: locId,
           qty: delta,
           type: 'set',
-          memo: `[${storeCode}] ${memo} (${currentQty} -> ${targetQty})`,
+          note: `[${storeCode}] ${memo} (${currentQty} -> ${targetQty})`,
           isForced: false,
         });
 
