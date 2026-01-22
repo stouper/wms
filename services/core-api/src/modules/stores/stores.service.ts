@@ -174,7 +174,7 @@ export class StoresService {
           if (existing.name === name) {
             results.push({
               code,
-              name,
+              name: name ?? undefined,
               status: 'skipped',
               message: '변경 없음',
             });
@@ -187,7 +187,7 @@ export class StoresService {
             });
             results.push({
               code,
-              name,
+              name: name ?? undefined,
               status: 'updated',
             });
             updatedCount++;
@@ -199,7 +199,7 @@ export class StoresService {
           });
           results.push({
             code,
-            name,
+            name: name ?? undefined,
             status: 'created',
           });
           createdCount++;
@@ -207,7 +207,7 @@ export class StoresService {
       } catch (e: any) {
         results.push({
           code,
-          name,
+          name: name ?? undefined,
           status: 'error',
           message: e?.message || String(e),
         });
