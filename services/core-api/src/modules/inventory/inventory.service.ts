@@ -297,12 +297,42 @@ export class InventoryService {
    * 재고 일괄 설정 (Excel 업로드용)
    * - 기존 재고와 비교하여 차이만큼 조정 (type: 'set')
    */
+  /**
+   * 매장코드로 Location 조회/생성
+   */
+  private async resolveOrCreateLocationByStoreCode(storeCode: string, locationCode: string) {
+    const storeCodeNorm = this.norm(storeCode);
+    const locationCodeNorm = this.norm(locationCode);
+
+    if (!storeCodeNorm) throw new BadRequestException('storeCode is required');
+    if (!locationCodeNorm) throw new BadRequestException('locationCode is required');
+
+    // Store 조회
+    const store = await this.prisma.store.findFirst({
+      where: { code: storeCodeNorm } as any,
+      select: { id: true, code: true } as any,
+    }) as any;
+
+    if (!store) throw new BadRequestException(`Store not found: ${storeCodeNorm}`);
+
+    // Location upsert
+    const loc = await this.prisma.location.upsert({
+      where: { storeId_code: { storeId: store.id, code: locationCodeNorm } } as any,
+      update: {} as any,
+      create: { storeId: store.id, code: locationCodeNorm } as any,
+      select: { id: true, code: true } as any,
+    } as any);
+
+    return loc as any;
+  }
+
   async bulkSet(params: {
-    items: Array<{ skuCode: string; locationCode: string; qty: number; memo?: string }>;
+    items: Array<{ storeCode: string; skuCode: string; locationCode: string; qty: number; memo?: string }>;
     sourceKey?: string;
   }) {
     const { items, sourceKey } = params;
     const results: Array<{
+      storeCode: string;
       skuCode: string;
       locationCode: string;
       status: 'ok' | 'error' | 'skipped';
@@ -316,17 +346,19 @@ export class InventoryService {
     let skippedCount = 0;
 
     for (const item of items) {
+      const storeCode = this.norm(item.storeCode);
       const skuCode = this.normUpper(item.skuCode);
       const locationCode = this.norm(item.locationCode);
       const targetQty = Number(item.qty ?? 0);
       const memo = this.norm(item.memo || sourceKey || 'bulk-set');
 
-      if (!skuCode || !locationCode) {
+      if (!storeCode || !skuCode || !locationCode) {
         results.push({
+          storeCode: item.storeCode,
           skuCode: item.skuCode,
           locationCode: item.locationCode,
           status: 'error',
-          message: 'skuCode and locationCode are required',
+          message: 'storeCode, skuCode, locationCode are required',
         });
         errorCount++;
         continue;
@@ -334,6 +366,7 @@ export class InventoryService {
 
       if (!Number.isFinite(targetQty) || targetQty < 0) {
         results.push({
+          storeCode,
           skuCode,
           locationCode,
           status: 'error',
@@ -352,6 +385,7 @@ export class InventoryService {
 
         if (!skuRow) {
           results.push({
+            storeCode,
             skuCode,
             locationCode,
             status: 'error',
@@ -363,8 +397,8 @@ export class InventoryService {
 
         const skuId = String(skuRow.id);
 
-        // Location 조회/생성
-        const loc = await this.resolveOrCreateLocationByCode(locationCode);
+        // 매장코드로 Location 조회/생성
+        const loc = await this.resolveOrCreateLocationByStoreCode(storeCode, locationCode);
         const locId = String(loc.id);
 
         // 현재 재고 조회
@@ -375,6 +409,7 @@ export class InventoryService {
 
         if (delta === 0) {
           results.push({
+            storeCode,
             skuCode,
             locationCode,
             status: 'skipped',
@@ -392,11 +427,12 @@ export class InventoryService {
           locationId: locId,
           qty: delta,
           type: 'set',
-          memo: `${memo} (${currentQty} -> ${targetQty})`,
+          memo: `[${storeCode}] ${memo} (${currentQty} -> ${targetQty})`,
           isForced: false,
         });
 
         results.push({
+          storeCode,
           skuCode,
           locationCode,
           status: 'ok',
@@ -406,6 +442,7 @@ export class InventoryService {
         successCount++;
       } catch (e: any) {
         results.push({
+          storeCode,
           skuCode,
           locationCode,
           status: 'error',

@@ -4,20 +4,24 @@ import { Type } from 'class-transformer';
 export class InventoryBulkSetItemDto {
   @IsString()
   @IsNotEmpty()
-  skuCode!: string;
+  storeCode!: string;      // 매장코드 (필수)
 
   @IsString()
   @IsNotEmpty()
-  locationCode!: string;
+  skuCode!: string;        // 단품코드 (필수)
+
+  @IsString()
+  @IsNotEmpty()
+  locationCode!: string;   // Location 코드 (필수)
 
   @Type(() => Number)
   @IsInt()
   @Min(0)
-  qty!: number;
+  qty!: number;            // 수량 (필수)
 
   @IsOptional()
   @IsString()
-  memo?: string;
+  memo?: string;           // 메모 (선택)
 }
 
 export class InventoryBulkSetDto {

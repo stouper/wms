@@ -555,7 +555,7 @@ export default function SettingsPage() {
       <div style={cardStyle}>
         <div style={{ fontSize: 13, fontWeight: 700, marginBottom: 10 }}>재고관리 (Excel 업로드)</div>
         <div style={{ fontSize: 11, color: "#64748b", marginBottom: 10 }}>
-          필수 헤더: <b>단품코드</b>, <b>Location</b>, <b>수량</b> | 선택: 메모
+          필수 헤더: <b>매장코드</b>, <b>단품코드</b>, <b>Location</b>, <b>수량</b> | 선택: 메모
         </div>
 
         <div style={{ display: "flex", gap: 6, alignItems: "center", flexWrap: "wrap" }}>
@@ -599,6 +599,7 @@ export default function SettingsPage() {
                 <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 11 }}>
                   <thead>
                     <tr style={{ background: "#f8fafc" }}>
+                      <th style={thStyle}>매장코드</th>
                       <th style={thStyle}>단품코드</th>
                       <th style={thStyle}>Location</th>
                       <th style={{ ...thStyle, textAlign: "right" }}>수량</th>
@@ -608,6 +609,7 @@ export default function SettingsPage() {
                   <tbody>
                     {invPreview.sample.map((item, idx) => (
                       <tr key={idx}>
+                        <td style={tdStyle}><b>{item.storeCode}</b></td>
                         <td style={tdStyle}>{item.skuCode}</td>
                         <td style={tdStyle}>{item.locationCode}</td>
                         <td style={{ ...tdStyle, textAlign: "right" }}>{item.qty?.toLocaleString()}</td>
@@ -632,7 +634,7 @@ export default function SettingsPage() {
             </div>
             {invResult.results?.filter(r => r.status === "error").slice(0, 5).map((r, i) => (
               <div key={i} style={{ marginTop: 4, color: "#dc2626", fontSize: 11 }}>
-                {r.skuCode} @ {r.locationCode}: {r.message}
+                [{r.storeCode}] {r.skuCode} @ {r.locationCode}: {r.message}
               </div>
             ))}
           </div>
