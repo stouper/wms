@@ -27,7 +27,7 @@ import {
 } from "firebase/firestore";
 import { auth, db } from "../../../firebaseConfig";
 import Card from "../../../components/ui/Card";
-import { approveEmployee, rejectEmployee, getEmployees } from "../../../lib/authApi";
+import { approveEmployee, rejectEmployee, getEmployees, getStores, StoreInfo } from "../../../lib/authApi";
 
 interface Member {
   id: string;
@@ -57,6 +57,14 @@ export default function MembersManagement() {
   const [editPhone, setEditPhone] = useState("");
   const [editDepartment, setEditDepartment] = useState("");
   const [saving, setSaving] = useState(false);
+
+  // 승인 모달 (매장 선택)
+  const [approveModalOpen, setApproveModalOpen] = useState(false);
+  const [approvingMember, setApprovingMember] = useState<Member | null>(null);
+  const [stores, setStores] = useState<StoreInfo[]>([]);
+  const [selectedStoreId, setSelectedStoreId] = useState<string | null>(null);
+  const [storesLoading, setStoresLoading] = useState(false);
+  const [approving, setApproving] = useState(false);
 
   // 내 companyId 가져오기 + pendingCount
   useEffect(() => {
@@ -141,39 +149,57 @@ export default function MembersManagement() {
     setExpandedMemberId(expandedMemberId === memberId ? null : memberId);
   };
 
-  // 승인
-  const handleApprove = (member: Member) => {
-    Alert.alert(
-      "승인 확인",
-      `"${member.name}" 회원을 승인하시겠습니까?`,
-      [
-        { text: "취소", style: "cancel" },
-        {
-          text: "승인",
-          onPress: async () => {
-            try {
-              // 1. Firestore 업데이트
-              await updateDoc(doc(db, "users", member.id), {
-                status: "ACTIVE",
-              });
+  // 승인 모달 열기 (매장 선택)
+  const handleApprove = async (member: Member) => {
+    setApprovingMember(member);
+    setSelectedStoreId(null);
+    setApproveModalOpen(true);
 
-              // 2. core-api Employee 업데이트 (firebaseUid = member.id)
-              const employees = await getEmployees("PENDING");
-              const employee = employees.find((e) => e.firebaseUid === member.id);
-              if (employee) {
-                await approveEmployee(employee.id);
-              }
+    // Store 목록 로드
+    setStoresLoading(true);
+    try {
+      const storeList = await getStores();
+      setStores(storeList);
+    } catch (error) {
+      console.error("매장 목록 로드 실패:", error);
+    } finally {
+      setStoresLoading(false);
+    }
+  };
 
-              Alert.alert("완료", "회원이 승인되었습니다.");
-              loadMembers();
-            } catch (error) {
-              console.error("승인 실패:", error);
-              Alert.alert("오류", "회원 승인에 실패했습니다.");
-            }
-          },
-        },
-      ]
-    );
+  // 승인 실행 (매장 선택 후)
+  const handleApproveConfirm = async () => {
+    if (!approvingMember) return;
+
+    if (!selectedStoreId) {
+      Alert.alert("확인", "소속 매장을 선택해주세요.");
+      return;
+    }
+
+    setApproving(true);
+    try {
+      // 1. Firestore 업데이트
+      await updateDoc(doc(db, "users", approvingMember.id), {
+        status: "ACTIVE",
+        storeId: selectedStoreId,
+      });
+
+      // 2. core-api Employee 업데이트 (firebaseUid = member.id)
+      const employees = await getEmployees("PENDING");
+      const employee = employees.find((e) => e.firebaseUid === approvingMember.id);
+      if (employee) {
+        await approveEmployee(employee.id, undefined, selectedStoreId);
+      }
+
+      Alert.alert("완료", "회원이 승인되었습니다.");
+      setApproveModalOpen(false);
+      loadMembers();
+    } catch (error) {
+      console.error("승인 실패:", error);
+      Alert.alert("오류", "회원 승인에 실패했습니다.");
+    } finally {
+      setApproving(false);
+    }
   };
 
   // 거부
@@ -491,6 +517,91 @@ export default function MembersManagement() {
         </SafeAreaView>
       </Modal>
 
+      {/* 승인 모달 (매장 선택) */}
+      <Modal
+        visible={approveModalOpen}
+        animationType="slide"
+        onRequestClose={() => setApproveModalOpen(false)}
+      >
+        <SafeAreaView style={styles.modalRoot} edges={["top", "bottom"]}>
+          <Text style={styles.modalTitle}>회원 승인</Text>
+
+          {approvingMember && (
+            <View style={styles.approveInfo}>
+              <Text style={styles.approveInfoText}>
+                <Text style={{ fontWeight: "700" }}>{approvingMember.name}</Text> 님을 승인합니다.
+              </Text>
+              <Text style={styles.approveInfoSub}>{approvingMember.email}</Text>
+            </View>
+          )}
+
+          <Text style={styles.label}>소속 매장 선택 *</Text>
+
+          {storesLoading ? (
+            <View style={styles.storeLoadingContainer}>
+              <ActivityIndicator color="#1E5BFF" />
+              <Text style={styles.muted}>매장 목록 불러오는 중...</Text>
+            </View>
+          ) : (
+            <ScrollView style={styles.storeList} contentContainerStyle={{ paddingBottom: 20 }}>
+              {stores.map((store) => (
+                <Pressable
+                  key={store.id}
+                  onPress={() => setSelectedStoreId(store.id)}
+                  style={[
+                    styles.storeItem,
+                    selectedStoreId === store.id && styles.storeItemSelected,
+                  ]}
+                >
+                  <View style={styles.storeItemContent}>
+                    <Text style={[
+                      styles.storeCode,
+                      selectedStoreId === store.id && styles.storeTextSelected,
+                    ]}>
+                      {store.code}
+                    </Text>
+                    <Text style={[
+                      styles.storeName,
+                      selectedStoreId === store.id && styles.storeTextSelected,
+                    ]}>
+                      {store.name || "-"}
+                    </Text>
+                    {store.isHq && (
+                      <View style={styles.hqBadge}>
+                        <Text style={styles.hqBadgeText}>본사</Text>
+                      </View>
+                    )}
+                  </View>
+                  {selectedStoreId === store.id && (
+                    <Text style={styles.checkMark}>✓</Text>
+                  )}
+                </Pressable>
+              ))}
+            </ScrollView>
+          )}
+
+          <View style={styles.modalActions}>
+            <Pressable
+              onPress={() => setApproveModalOpen(false)}
+              style={[styles.modalBtn, styles.cancelBtn]}
+              disabled={approving}
+            >
+              <Text style={styles.modalBtnText}>취소</Text>
+            </Pressable>
+
+            <Pressable
+              onPress={handleApproveConfirm}
+              style={[styles.modalBtn, styles.approveConfirmBtn]}
+              disabled={approving || !selectedStoreId}
+            >
+              <Text style={styles.modalBtnText}>
+                {approving ? "승인 중..." : "승인"}
+              </Text>
+            </Pressable>
+          </View>
+        </SafeAreaView>
+      </Modal>
+
       {/* 하단 네비게이션 바 */}
       <SafeAreaView edges={["bottom"]} style={styles.bottomNavContainer}>
         <View style={styles.bottomNav}>
@@ -675,7 +786,85 @@ const styles = StyleSheet.create({
   },
   cancelBtn: { backgroundColor: "#374151" },
   saveBtn: { backgroundColor: "#10b981" },
+  approveConfirmBtn: { backgroundColor: "#10B981" },
   modalBtnText: { color: "#fff", fontWeight: "700", fontSize: 15 },
+
+  // 승인 모달 스타일
+  approveInfo: {
+    backgroundColor: "#1A1D24",
+    borderRadius: 10,
+    padding: 16,
+    marginBottom: 16,
+  },
+  approveInfoText: {
+    color: "#E6E7EB",
+    fontSize: 16,
+  },
+  approveInfoSub: {
+    color: "#A9AFBC",
+    fontSize: 13,
+    marginTop: 4,
+  },
+  storeLoadingContainer: {
+    alignItems: "center",
+    paddingVertical: 40,
+    gap: 8,
+  },
+  storeList: {
+    flex: 1,
+    marginBottom: 16,
+  },
+  storeItem: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
+    backgroundColor: "#1A1D24",
+    borderRadius: 10,
+    padding: 14,
+    marginBottom: 8,
+    borderWidth: 2,
+    borderColor: "transparent",
+  },
+  storeItemSelected: {
+    borderColor: "#10B981",
+    backgroundColor: "#1A2F24",
+  },
+  storeItemContent: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 12,
+    flex: 1,
+  },
+  storeCode: {
+    color: "#1E5BFF",
+    fontSize: 14,
+    fontWeight: "700",
+    minWidth: 60,
+  },
+  storeName: {
+    color: "#E6E7EB",
+    fontSize: 14,
+    flex: 1,
+  },
+  storeTextSelected: {
+    color: "#10B981",
+  },
+  hqBadge: {
+    backgroundColor: "#0ea5e9",
+    paddingHorizontal: 6,
+    paddingVertical: 2,
+    borderRadius: 4,
+  },
+  hqBadgeText: {
+    color: "#fff",
+    fontSize: 10,
+    fontWeight: "700",
+  },
+  checkMark: {
+    color: "#10B981",
+    fontSize: 18,
+    fontWeight: "700",
+  },
 
   bottomNavContainer: {
     position: "absolute",

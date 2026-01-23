@@ -737,17 +737,19 @@ pm2 restart all
 | 6 | role별 화면 분기 | 관리자/직원 메뉴 다르게 표시 | ✅ 완료 |
 | 7 | 푸시토큰 연동 + 출고 알림 | 출고 시 매장 직원에게 푸시 | ✅ 완료 |
 
-### 7.7 엑셀 업로드 필드 매핑 (참고)
+### 7.8 엑셀 업로드 필드 매핑 (참고)
 
 > 엑셀 컬럼은 외부 프로그램 export라 변경 불가
+> **매장 매칭 기준: Store.code 우선, Store.name 보조** (2026-01-24 통일)
 
-| 엑셀 종류 | 핵심 컬럼 | PostgreSQL 매칭 |
-|----------|----------|-----------------|
-| 매장 등록 | 매장코드, 매장명 | Store.code, Store.name |
-| 출고/반품 | 거래처코드, 단품코드, 수량 | Store.code, Sku.sku |
-| 택배 요청 | 매장코드, 옵션, 수취인정보 | Store.code |
-| 재고 초기화 | 코드, 수량, 매장/창고 | Sku.sku, Store.name |
-| 매출 업로드 | 매장명, 매출일, 금액 | SalesRaw.storeName (자동 code 생성) |
+| 엑셀 종류 | 필수 컬럼 | 매장 매칭 키 | PostgreSQL 저장 |
+|----------|----------|-------------|-----------------|
+| 매장 등록 | 매장코드, 매장명 | - | Store.code, Store.name |
+| 출고/반품 | 거래처코드, 단품코드, 수량, 구분 | **Store.code** | Job, JobItem |
+| 택배 요청 | 매장코드, 옵션, 수취인명/주소/전화 | **Store.code** | Job, JobParcel |
+| 재고 초기화 | SKU, 수량, 매장/창고, MakerCode, 상품명 | **Store.code** (code 우선, name 보조) | Inventory |
+| 매출 업로드 | 매장명, 매출일, 매출금액, 수량, 코드명 | **Store.code** (name으로 조회) | SalesRaw |
+| Firebase | code | **Store.code** | - |
 
 ---
 

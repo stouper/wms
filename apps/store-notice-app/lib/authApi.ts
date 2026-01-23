@@ -133,3 +133,25 @@ export async function rejectEmployee(employeeId: string): Promise<boolean> {
     return false;
   }
 }
+
+// Store 정보 타입
+export interface StoreInfo {
+  id: string;
+  code: string;
+  name: string | null;
+  isHq: boolean;
+}
+
+// 매장 목록 조회 (승인 시 선택용)
+export async function getStores(): Promise<StoreInfo[]> {
+  try {
+    const response = await fetch(`${API_BASE_URL}/stores`);
+    if (!response.ok) return [];
+
+    const data = await response.json();
+    return data.rows || [];
+  } catch (error) {
+    console.error('getStores error:', error);
+    return [];
+  }
+}

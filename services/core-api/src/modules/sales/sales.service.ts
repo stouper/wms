@@ -166,6 +166,17 @@ export class SalesService {
     const errorsSample: string[] = [];
     let skipped = 0;
 
+    // Store 테이블 조회 (매장명 → Store.code 매칭용)
+    const allStores = await this.prisma.store.findMany({
+      select: { id: true, code: true, name: true },
+    });
+    // 매장명/코드 → Store.code 매핑 (code 우선, name 보조)
+    const storeMap = new Map<string, string>();
+    for (const s of allStores) {
+      if (s.code) storeMap.set(s.code.toLowerCase(), s.code);
+      if (s.name) storeMap.set(s.name.toLowerCase(), s.code);
+    }
+
     const data = rows
       .map((r, idx) => {
         try {
@@ -186,7 +197,8 @@ export class SalesService {
           const codeName = String(pick(r, HEADER_KEYWORDS.codeName) ?? '').trim();
           if (!codeName) throw new Error('Missing 코드명');
 
-          const storeCode = normalizeStoreKey(storeName);
+          // Store 테이블에서 매칭 (code 우선, name 보조, 없으면 매장명 대문자 변환)
+          const storeCode = storeMap.get(storeName.toLowerCase()) || normalizeStoreKey(storeName);
 
           // 선택 컬럼 (있으면 저장 / 없으면 null)
           const productType = String(pick(r, HEADER_KEYWORDS.productType) ?? '').trim() || null;

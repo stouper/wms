@@ -326,10 +326,9 @@ export default function SettingsPage() {
       const storeName = (row.storeName || "").trim();
       if (!storeName) continue;
 
-      // 매장명으로 매칭 (name 또는 code로 매칭)
-      const matchedStore = invStores.find(
-        (s) => s.name === storeName || s.code === storeName
-      );
+      // 매장 매칭: code 우선, 없으면 name으로 매칭 (Store.code 기준 통일)
+      const matchedStore = invStores.find((s) => s.code === storeName)
+        || invStores.find((s) => s.name === storeName);
 
       if (!matchedStore) {
         unmatchedStores.add(storeName);
@@ -666,9 +665,15 @@ export default function SettingsPage() {
             ) : stores.length === 0 ? (
               <div style={{ fontSize: 12, color: "#64748b", marginTop: 8 }}>등록된 매장이 없습니다.</div>
             ) : (
-              <table style={{ width: "100%", borderCollapse: "collapse", marginTop: 10 }}>
+              <>
+                <div style={{ fontSize: 12, color: "#64748b", marginTop: 8, marginBottom: 4 }}>
+                  총 <b style={{ color: "#0ea5e9" }}>{stores.length}</b>개 매장 (본사: {stores.filter(s => s.isHq).length}, 매장: {stores.filter(s => !s.isHq).length})
+                </div>
+                <table style={{ width: "100%", borderCollapse: "collapse" }}>
                 <thead>
                   <tr style={{ background: "#f8fafc" }}>
+                    <th style={{ ...thStyle, width: 60 }}>#</th>
+                    <th style={{ ...thStyle, width: 220 }}>ID (DB)</th>
                     <th style={thStyle}>코드</th>
                     <th style={thStyle}>매장명</th>
                     <th style={thStyle}>구분</th>
@@ -676,8 +681,10 @@ export default function SettingsPage() {
                   </tr>
                 </thead>
                 <tbody>
-                  {stores.map((s) => (
+                  {stores.map((s, idx) => (
                     <tr key={s.id}>
+                      <td style={{ ...tdStyle, color: "#94a3b8", fontSize: 11 }}>{idx + 1}</td>
+                      <td style={{ ...tdStyle, fontFamily: "Consolas, monospace", fontSize: 10, color: "#64748b" }}>{s.id}</td>
                       <td style={tdStyle}>
                         {editingStore?.id === s.id ? (
                           <input
@@ -752,6 +759,7 @@ export default function SettingsPage() {
                   ))}
                 </tbody>
               </table>
+              </>
             )}
           </>
         )}
@@ -1010,8 +1018,10 @@ export default function SettingsPage() {
             {/* 매장별 요약 */}
             {(() => {
               const storeNames = [...new Set(resetPreview.rows?.map(r => r.storeName).filter(Boolean) || [])];
-              const matched = storeNames.filter(name => invStores.some(s => s.name === name || s.code === name));
-              const unmatched = storeNames.filter(name => !invStores.some(s => s.name === name || s.code === name));
+              // code 우선, name 보조 매칭 (Store.code 기준 통일)
+              const findStore = (name) => invStores.find(s => s.code === name) || invStores.find(s => s.name === name);
+              const matched = storeNames.filter(name => findStore(name));
+              const unmatched = storeNames.filter(name => !findStore(name));
               return (
                 <div style={{ fontSize: 11, marginBottom: 8, padding: 6, background: "#f8fafc", borderRadius: 4 }}>
                   <span>매장: </span>
@@ -1038,7 +1048,7 @@ export default function SettingsPage() {
                   <tbody>
                     {resetPreview.sample.map((item, idx) => (
                       <tr key={idx}>
-                        <td style={{ ...tdStyle, fontWeight: 600, color: invStores.some(s => s.name === item.storeName || s.code === item.storeName) ? "#16a34a" : "#dc2626" }}>{item.storeName || "-"}</td>
+                        <td style={{ ...tdStyle, fontWeight: 600, color: (invStores.find(s => s.code === item.storeName) || invStores.find(s => s.name === item.storeName)) ? "#16a34a" : "#dc2626" }}>{item.storeName || "-"}</td>
                         <td style={tdStyle}><b>{item.sku}</b></td>
                         <td style={{ ...tdStyle, textAlign: "right" }}>{item.qty?.toLocaleString()}</td>
                         <td style={tdStyle}>{item.location || "-"}</td>
@@ -1361,7 +1371,8 @@ export default function SettingsPage() {
                     }
 
                     return rows.map((item, idx) => {
-                      const isMatched = invStores.some((s) => s.name === item.storeName || s.code === item.storeName);
+                      // code 우선, name 보조 매칭 (Store.code 기준 통일)
+                      const isMatched = invStores.find((s) => s.code === item.storeName) || invStores.find((s) => s.name === item.storeName);
                       return (
                         <tr key={idx} style={{ borderBottom: "1px solid #f1f5f9" }}>
                           <td style={{ ...tdStyle, fontWeight: 600, color: isMatched ? "#16a34a" : "#dc2626" }}>
@@ -1394,8 +1405,10 @@ export default function SettingsPage() {
               <div style={{ fontSize: 12, color: "#64748b" }}>
                 {(() => {
                   const storeNames = [...new Set(resetPreview.rows.map((r) => r.storeName).filter(Boolean))];
-                  const matched = storeNames.filter((name) => invStores.some((s) => s.name === name || s.code === name));
-                  const unmatched = storeNames.filter((name) => !invStores.some((s) => s.name === name || s.code === name));
+                  // code 우선, name 보조 매칭 (Store.code 기준 통일)
+                  const findStore = (name) => invStores.find((s) => s.code === name) || invStores.find((s) => s.name === name);
+                  const matched = storeNames.filter((name) => findStore(name));
+                  const unmatched = storeNames.filter((name) => !findStore(name));
                   return (
                     <>
                       <span style={{ color: "#16a34a" }}>매칭됨: {matched.length}개 매장</span>
