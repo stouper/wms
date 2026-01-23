@@ -1,5 +1,5 @@
 // app/staff/inventory/index.tsx
-// 직원용 매장재고 관리 페이지
+// WMS 재고 조회 - 왼쪽 매장 목록, 오른쪽 재고 표시 (직원용)
 
 import React, { useEffect, useState } from "react";
 import {
@@ -10,253 +10,174 @@ import {
   Pressable,
   FlatList,
   TextInput,
-  Modal,
+  ActivityIndicator,
+  Alert,
 } from "react-native";
 import { useRouter } from "expo-router";
-import { doc, onSnapshot, collection, query, where, addDoc, updateDoc, deleteDoc, serverTimestamp } from "firebase/firestore";
+import { doc, onSnapshot } from "firebase/firestore";
+import { getFunctions, httpsCallable } from "firebase/functions";
 import { auth, db } from "../../../firebaseConfig";
-import Card from "../../../components/ui/Card";
 import { SafeAreaView } from "react-native-safe-area-context";
 
 interface InventoryItem {
   id: string;
-  companyId: string;
-  storeId: string;
-  storeName: string;
   productName: string;
   quantity: number;
   unit: string;
-  minQuantity?: number;
-  maxQuantity?: number;
-  lastUpdated?: string;
-  updatedBy?: string;
-  createdAt: any;
-  updatedAt: any;
+  skuCode?: string;
+  makerCode?: string;
+  locationCode?: string;
+  locationName?: string;
+}
+
+interface WmsStore {
+  storeCode: string;
+  storeName: string;
+  skuCount: number;
+  totalQty: number;
 }
 
 export default function StaffInventoryPage() {
   const router = useRouter();
   const [myCompanyId, setMyCompanyId] = useState<string | null>(null);
-  const [companyName, setCompanyName] = useState("");
+
+  // 매장 목록
+  const [stores, setStores] = useState<WmsStore[]>([]);
+  const [storesLoading, setStoresLoading] = useState(false);
+  const [selectedStoreCode, setSelectedStoreCode] = useState<string | null>(null);
+
+  // 재고 목록
   const [inventory, setInventory] = useState<InventoryItem[]>([]);
   const [filteredInventory, setFilteredInventory] = useState<InventoryItem[]>([]);
-  const [loading, setLoading] = useState(true);
+  const [inventoryLoading, setInventoryLoading] = useState(false);
   const [searchText, setSearchText] = useState("");
-  const [showAddModal, setShowAddModal] = useState(false);
-  const [editingItem, setEditingItem] = useState<InventoryItem | null>(null);
 
-  // Form fields
-  const [selectedStore, setSelectedStore] = useState("");
-  const [productName, setProductName] = useState("");
-  const [quantity, setQuantity] = useState("");
-  const [unit, setUnit] = useState("개");
-  const [minQuantity, setMinQuantity] = useState("");
-  const [stores, setStores] = useState<any[]>([]);
-
+  // 내 companyId 가져오기
   useEffect(() => {
     const uid = auth.currentUser?.uid;
     if (!uid) return;
 
-    let unsubCompany: (() => void) | undefined;
-    let unsubInventory: (() => void) | undefined;
-    let unsubStores: (() => void) | undefined;
-
     const unsubUser = onSnapshot(doc(db, "users", uid), async (userSnap) => {
       if (userSnap.exists()) {
         const companyId = (userSnap.data() as any)?.companyId;
-        if (!companyId) return;
-
-        setMyCompanyId(companyId);
-
-        unsubCompany = onSnapshot(doc(db, "companies", companyId), (companySnap) => {
-          if (companySnap.exists()) {
-            setCompanyName((companySnap.data() as any)?.name || "");
-          }
-        });
-
-        const storesQuery = query(
-          collection(db, "stores"),
-          where("companyId", "==", companyId)
-        );
-        unsubStores = onSnapshot(storesQuery, (snapshot) => {
-          const storeList: any[] = [];
-          snapshot.forEach((doc) => {
-            storeList.push({ id: doc.id, ...doc.data() });
-          });
-          setStores(storeList);
-          if (!selectedStore && storeList.length > 0) {
-            setSelectedStore(storeList[0].id);
-          }
-        });
-
-        const inventoryQuery = query(
-          collection(db, "inventory"),
-          where("companyId", "==", companyId)
-        );
-        unsubInventory = onSnapshot(inventoryQuery, (snapshot) => {
-          const items: InventoryItem[] = [];
-          snapshot.forEach((doc) => {
-            items.push({ id: doc.id, ...doc.data() } as InventoryItem);
-          });
-          setInventory(items);
-          setLoading(false);
-        });
+        if (companyId) {
+          setMyCompanyId(companyId);
+        }
       }
     });
 
-    return () => {
-      unsubUser();
-      unsubCompany?.();
-      unsubInventory?.();
-      unsubStores?.();
-    };
+    return () => unsubUser();
   }, []);
 
+  // 매장 목록 불러오기
+  useEffect(() => {
+    if (!myCompanyId) return;
+    loadStores();
+  }, [myCompanyId]);
+
+  const loadStores = async () => {
+    try {
+      setStoresLoading(true);
+      const functions = getFunctions();
+      const getWmsStoresList = httpsCallable(functions, "getWmsStoresList");
+      const result = await getWmsStoresList({});
+      const data = result.data as any;
+
+      if (data?.ok && data?.stores) {
+        setStores(data.stores);
+        // 첫 번째 매장 자동 선택
+        if (data.stores.length > 0 && !selectedStoreCode) {
+          setSelectedStoreCode(data.stores[0].storeCode);
+        }
+      }
+    } catch (error: any) {
+      console.error("매장 목록 조회 실패:", error);
+      Alert.alert("오류", "매장 목록을 불러올 수 없습니다");
+    } finally {
+      setStoresLoading(false);
+    }
+  };
+
+  // 선택된 매장의 재고 불러오기
+  useEffect(() => {
+    if (selectedStoreCode) {
+      loadInventory(selectedStoreCode);
+    }
+  }, [selectedStoreCode]);
+
+  const loadInventory = async (storeCode: string) => {
+    try {
+      setInventoryLoading(true);
+      const functions = getFunctions();
+      const getWmsStoreInventory = httpsCallable(functions, "getWmsStoreInventory");
+      const result = await getWmsStoreInventory({ storeCode });
+      const data = result.data as any;
+
+      if (data?.ok && data?.inventory) {
+        const items = (data.inventory.items || []).map((item: any, index: number) => ({
+          id: `wms-${index}`,
+          productName: item.skuName || item.skuCode || "알 수 없음",
+          quantity: item.onHand || 0,
+          unit: "개",
+          skuCode: item.skuCode,
+          makerCode: item.makerCode,
+          locationCode: item.locationCode,
+          locationName: item.locationName,
+        }));
+        setInventory(items);
+      } else {
+        setInventory([]);
+      }
+    } catch (error: any) {
+      console.error("재고 조회 실패:", error);
+      setInventory([]);
+    } finally {
+      setInventoryLoading(false);
+    }
+  };
+
+  // 검색 기능
   useEffect(() => {
     if (!searchText) {
       setFilteredInventory(inventory);
     } else {
       const filtered = inventory.filter(
         (item) =>
-          item.productName.toLowerCase().includes(searchText.toLowerCase()) ||
-          item.storeName.toLowerCase().includes(searchText.toLowerCase())
+          item.productName?.toLowerCase().includes(searchText.toLowerCase()) ||
+          item.skuCode?.toLowerCase().includes(searchText.toLowerCase()) ||
+          item.makerCode?.toLowerCase().includes(searchText.toLowerCase()) ||
+          item.locationName?.toLowerCase().includes(searchText.toLowerCase())
       );
       setFilteredInventory(filtered);
     }
   }, [searchText, inventory]);
 
-  const handleSave = async () => {
-    if (!myCompanyId || !selectedStore || !productName || !quantity) {
-      alert("필수 정보를 모두 입력하세요");
-      return;
-    }
-
-    const storeName =
-      stores.find((s) => s.id === selectedStore)?.name || "";
-    const uid = auth.currentUser?.uid;
-
-    try {
-      if (editingItem) {
-        await updateDoc(doc(db, "inventory", editingItem.id), {
-          storeId: selectedStore,
-          storeName,
-          productName,
-          quantity: parseInt(quantity),
-          unit,
-          minQuantity: minQuantity ? parseInt(minQuantity) : undefined,
-          updatedAt: serverTimestamp(),
-          updatedBy: uid,
-        });
-      } else {
-        await addDoc(collection(db, "inventory"), {
-          companyId: myCompanyId,
-          storeId: selectedStore,
-          storeName,
-          productName,
-          quantity: parseInt(quantity),
-          unit,
-          minQuantity: minQuantity ? parseInt(minQuantity) : undefined,
-          createdAt: serverTimestamp(),
-          updatedAt: serverTimestamp(),
-          updatedBy: uid,
-        });
-      }
-
-      setShowAddModal(false);
-      setEditingItem(null);
-      setProductName("");
-      setQuantity("");
-      setUnit("개");
-      setMinQuantity("");
-      if (stores.length > 0 && !selectedStore) {
-        setSelectedStore(stores[0].id);
-      }
-    } catch (error) {
-      console.error("저장 실패:", error);
-      alert("저장에 실패했습니다");
-    }
-  };
-
-  const handleDelete = async (id: string) => {
-    if (confirm("정말 삭제하시겠습니까?")) {
-      try {
-        await deleteDoc(doc(db, "inventory", id));
-      } catch (error) {
-        console.error("삭제 실패:", error);
-        alert("삭제에 실패했습니다");
-      }
-    }
-  };
-
-  const handleEdit = (item: InventoryItem) => {
-    setEditingItem(item);
-    setSelectedStore(item.storeId);
-    setProductName(item.productName);
-    setQuantity(item.quantity.toString());
-    setUnit(item.unit);
-    setMinQuantity(item.minQuantity?.toString() || "");
-    setShowAddModal(true);
-  };
-
-  const handleOpenAdd = () => {
-    setEditingItem(null);
-    setProductName("");
-    setQuantity("");
-    setUnit("개");
-    setMinQuantity("");
-    if (stores.length > 0) {
-      setSelectedStore(stores[0].id);
-    }
-    setShowAddModal(true);
-  };
-
-  const isLowStock = (item: InventoryItem) => {
-    if (item.minQuantity && item.quantity < item.minQuantity) {
-      return true;
-    }
-    return false;
-  };
-
   const InventoryCard = ({ item }: { item: InventoryItem }) => (
-    <Pressable
-      onPress={() => handleEdit(item)}
-      style={[styles.inventoryCard, isLowStock(item) && styles.lowStockCard]}
-    >
+    <View style={styles.inventoryCard}>
       <View style={styles.inventoryHeader}>
         <View style={{ flex: 1 }}>
-          <Text style={styles.storeName}>{item.storeName}</Text>
+          {item.locationName && (
+            <Text style={styles.locationName}>📍 {item.locationName}</Text>
+          )}
           <Text style={styles.productName}>{item.productName}</Text>
+          {item.skuCode && (
+            <Text style={styles.skuCode}>SKU: {item.skuCode}</Text>
+          )}
+          {item.makerCode && (
+            <Text style={styles.skuCode}>제조사: {item.makerCode}</Text>
+          )}
         </View>
-        <Pressable
-          onPress={() => handleDelete(item.id)}
-          style={styles.deleteBtn}
-        >
-          <Text style={styles.deleteBtnText}>✕</Text>
-        </Pressable>
-      </View>
-      <View style={styles.inventoryInfo}>
         <View style={styles.quantityBox}>
           <Text style={styles.quantityLabel}>재고</Text>
-          <Text
-            style={[
-              styles.quantityValue,
-              isLowStock(item) && styles.lowStockText,
-            ]}
-          >
-            {item.quantity} {item.unit}
+          <Text style={styles.quantityValue}>
+            {item.quantity}
           </Text>
         </View>
-        {item.minQuantity && (
-          <View style={styles.minBox}>
-            <Text style={styles.minLabel}>최소</Text>
-            <Text style={styles.minValue}>
-              {item.minQuantity} {item.unit}
-            </Text>
-          </View>
-        )}
       </View>
-    </Pressable>
+    </View>
   );
+
+  const selectedStore = stores.find((s) => s.storeCode === selectedStoreCode);
 
   return (
     <SafeAreaView style={styles.safe} edges={["top"]}>
@@ -264,176 +185,95 @@ export default function StaffInventoryPage() {
         <Pressable onPress={() => router.push("/staff")}>
           <Text style={styles.backButton}>‹</Text>
         </Pressable>
-        <Text style={styles.headerTitle}>매장재고</Text>
-        <View style={{ width: 24 }} />
+        <Text style={styles.headerTitle}>WMS 재고</Text>
+        <Pressable onPress={loadStores}>
+          <Text style={styles.refreshButton}>🔄</Text>
+        </Pressable>
       </View>
 
-      <View style={styles.searchContainer}>
-        <TextInput
-          style={styles.searchInput}
-          placeholder="상품명 또는 매장명 검색..."
-          placeholderTextColor="#64748b"
-          value={searchText}
-          onChangeText={setSearchText}
-        />
-      </View>
-
-      <View style={styles.statsContainer}>
-        <View style={styles.statItem}>
-          <Text style={styles.statLabel}>총 상품</Text>
-          <Text style={styles.statValue}>{inventory.length}</Text>
+      <View style={styles.container}>
+        {/* 왼쪽: 매장 목록 */}
+        <View style={styles.storeListContainer}>
+          <Text style={styles.storeListTitle}>매장 목록</Text>
+          {storesLoading ? (
+            <View style={styles.loadingContainer}>
+              <ActivityIndicator color="#1E5BFF" />
+              <Text style={styles.loadingText}>불러오는 중...</Text>
+            </View>
+          ) : (
+            <ScrollView style={styles.storeList} contentContainerStyle={{ gap: 8 }}>
+              {stores.map((store) => (
+                <Pressable
+                  key={store.storeCode}
+                  onPress={() => setSelectedStoreCode(store.storeCode)}
+                  style={[
+                    styles.storeCard,
+                    selectedStoreCode === store.storeCode && styles.storeCardActive,
+                  ]}
+                >
+                  <Text style={[
+                    styles.storeCardName,
+                    selectedStoreCode === store.storeCode && styles.storeCardNameActive,
+                  ]}>
+                    {store.storeName}
+                  </Text>
+                  <Text style={styles.storeCardCode}>{store.storeCode}</Text>
+                  <View style={styles.storeCardStats}>
+                    <Text style={styles.storeCardStat}>상품 {store.skuCount}</Text>
+                    <Text style={styles.storeCardStat}>수량 {store.totalQty}</Text>
+                  </View>
+                </Pressable>
+              ))}
+            </ScrollView>
+          )}
         </View>
-        <View style={styles.statItem}>
-          <Text style={styles.statLabel}>낮은 재고</Text>
-          <Text style={[styles.statValue, styles.warningText]}>
-            {inventory.filter(isLowStock).length}
-          </Text>
-        </View>
-        <View style={styles.statItem}>
-          <Text style={styles.statLabel}>매장 수</Text>
-          <Text style={styles.statValue}>{stores.length}</Text>
-        </View>
-      </View>
 
-      <View style={{ flex: 1, paddingHorizontal: 16, paddingBottom: 100 }}>
-        {loading ? (
-          <Text style={styles.loadingText}>로딩 중...</Text>
-        ) : filteredInventory.length === 0 ? (
-          <Text style={styles.emptyText}>
-            {searchText
-              ? "검색 결과가 없습니다"
-              : "등록된 재고가 없습니다"}
-          </Text>
-        ) : (
-          <FlatList
-            data={filteredInventory}
-            keyExtractor={(item) => item.id}
-            renderItem={({ item }) => <InventoryCard item={item} />}
-            scrollEnabled={false}
-            contentContainerStyle={{ gap: 8 }}
-          />
-        )}
-      </View>
+        {/* 오른쪽: 재고 목록 */}
+        <View style={styles.inventoryContainer}>
+          {selectedStore && (
+            <View style={styles.inventoryHeader2}>
+              <View>
+                <Text style={styles.inventoryTitle}>{selectedStore.storeName}</Text>
+                <Text style={styles.inventorySubtitle}>
+                  상품 {inventory.length}개 · 총 {inventory.reduce((sum, item) => sum + item.quantity, 0)}개
+                </Text>
+              </View>
+            </View>
+          )}
 
-      {/* 추가 버튼 */}
-      <Pressable style={styles.fab} onPress={handleOpenAdd}>
-        <Text style={styles.fabText}>+</Text>
-      </Pressable>
-
-      {/* 추가/수정 모달 */}
-      <Modal
-        visible={showAddModal}
-        transparent
-        animationType="slide"
-        onRequestClose={() => setShowAddModal(false)}
-      >
-        <SafeAreaView style={styles.modalSafe}>
-          <View style={styles.modalHeader}>
-            <Pressable onPress={() => setShowAddModal(false)}>
-              <Text style={styles.modalCloseBtn}>‹</Text>
-            </Pressable>
-            <Text style={styles.modalTitle}>
-              {editingItem ? "재고 수정" : "재고 추가"}
-            </Text>
-            <Pressable onPress={handleSave}>
-              <Text style={styles.modalSaveBtn}>저장</Text>
-            </Pressable>
+          {/* 검색 */}
+          <View style={styles.searchContainer}>
+            <TextInput
+              style={styles.searchInput}
+              placeholder="SKU코드, 상품명 검색..."
+              placeholderTextColor="#64748b"
+              value={searchText}
+              onChangeText={setSearchText}
+            />
           </View>
 
-          <ScrollView
-            contentContainerStyle={styles.modalContent}
-            keyboardShouldPersistTaps="handled"
-          >
-            <Card>
-              <Text style={styles.formLabel}>매장</Text>
-              <View style={styles.storeSelect}>
-                {stores.map((store) => (
-                  <Pressable
-                    key={store.id}
-                    onPress={() => setSelectedStore(store.id)}
-                    style={[
-                      styles.storeOption,
-                      selectedStore === store.id &&
-                        styles.storeOptionSelected,
-                    ]}
-                  >
-                    <Text
-                      style={[
-                        styles.storeOptionText,
-                        selectedStore === store.id &&
-                          styles.storeOptionTextSelected,
-                      ]}
-                    >
-                      {store.name}
-                    </Text>
-                  </Pressable>
-                ))}
-              </View>
-            </Card>
-
-            <Card>
-              <Text style={styles.formLabel}>상품명</Text>
-              <TextInput
-                style={styles.formInput}
-                placeholder="상품명 입력"
-                placeholderTextColor="#64748b"
-                value={productName}
-                onChangeText={setProductName}
-              />
-            </Card>
-
-            <Card>
-              <Text style={styles.formLabel}>재고량</Text>
-              <View style={styles.quantityInputRow}>
-                <TextInput
-                  style={[styles.formInput, { flex: 1 }]}
-                  placeholder="수량"
-                  placeholderTextColor="#64748b"
-                  value={quantity}
-                  onChangeText={setQuantity}
-                  keyboardType="number-pad"
-                />
-                <View style={styles.unitSelect}>
-                  {["개", "박스", "팩", "병", "kg", "L"].map((u) => (
-                    <Pressable
-                      key={u}
-                      onPress={() => setUnit(u)}
-                      style={[
-                        styles.unitOption,
-                        unit === u && styles.unitOptionSelected,
-                      ]}
-                    >
-                      <Text
-                        style={[
-                          styles.unitOptionText,
-                          unit === u && styles.unitOptionTextSelected,
-                        ]}
-                      >
-                        {u}
-                      </Text>
-                    </Pressable>
-                  ))}
-                </View>
-              </View>
-            </Card>
-
-            <Card>
-              <Text style={styles.formLabel}>최소 재고 (선택사항)</Text>
-              <TextInput
-                style={styles.formInput}
-                placeholder="최소 재고량 입력"
-                placeholderTextColor="#64748b"
-                value={minQuantity}
-                onChangeText={setMinQuantity}
-                keyboardType="number-pad"
-              />
-              <Text style={styles.formHint}>
-                이 값 이하로 내려가면 경고가 표시됩니다
-              </Text>
-            </Card>
-          </ScrollView>
-        </SafeAreaView>
-      </Modal>
+          {/* 재고 목록 */}
+          {inventoryLoading ? (
+            <View style={styles.loadingContainer}>
+              <ActivityIndicator color="#1E5BFF" />
+              <Text style={styles.loadingText}>재고 불러오는 중...</Text>
+            </View>
+          ) : !selectedStoreCode ? (
+            <Text style={styles.emptyText}>왼쪽에서 매장을 선택해주세요</Text>
+          ) : filteredInventory.length === 0 ? (
+            <Text style={styles.emptyText}>
+              {searchText ? "검색 결과가 없습니다" : "재고가 없습니다"}
+            </Text>
+          ) : (
+            <FlatList
+              data={filteredInventory}
+              keyExtractor={(item) => item.id}
+              renderItem={({ item }) => <InventoryCard item={item} />}
+              contentContainerStyle={styles.inventoryList}
+            />
+          )}
+        </View>
+      </View>
 
       {/* 하단 네비게이션 바 */}
       <SafeAreaView edges={["bottom"]} style={styles.bottomNavContainer}>
@@ -480,10 +320,97 @@ const styles = StyleSheet.create({
     fontSize: 18,
     fontWeight: "700",
   },
+  refreshButton: {
+    fontSize: 20,
+  },
+  container: {
+    flex: 1,
+    flexDirection: "row",
+  },
+
+  // 왼쪽: 매장 목록
+  storeListContainer: {
+    width: 200,
+    borderRightWidth: 1,
+    borderRightColor: "#2A2F3A",
+    backgroundColor: "#0B0C10",
+  },
+  storeListTitle: {
+    color: "#E6E7EB",
+    fontSize: 14,
+    fontWeight: "700",
+    paddingHorizontal: 12,
+    paddingVertical: 12,
+    borderBottomWidth: 1,
+    borderBottomColor: "#2A2F3A",
+  },
+  storeList: {
+    flex: 1,
+    paddingHorizontal: 8,
+    paddingVertical: 8,
+  },
+  storeCard: {
+    backgroundColor: "#1A1D24",
+    borderWidth: 1,
+    borderColor: "#2A2F3A",
+    borderRadius: 8,
+    padding: 10,
+  },
+  storeCardActive: {
+    backgroundColor: "#1E5BFF",
+    borderColor: "#1E5BFF",
+  },
+  storeCardName: {
+    color: "#E6E7EB",
+    fontSize: 13,
+    fontWeight: "700",
+    marginBottom: 4,
+  },
+  storeCardNameActive: {
+    color: "#fff",
+  },
+  storeCardCode: {
+    color: "#64748b",
+    fontSize: 11,
+    fontFamily: "monospace",
+    marginBottom: 6,
+  },
+  storeCardStats: {
+    flexDirection: "row",
+    gap: 8,
+  },
+  storeCardStat: {
+    color: "#A9AFBC",
+    fontSize: 10,
+  },
+
+  // 오른쪽: 재고 목록
+  inventoryContainer: {
+    flex: 1,
+    backgroundColor: "#0B0C10",
+  },
+  inventoryHeader2: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
+    paddingHorizontal: 16,
+    paddingVertical: 12,
+    borderBottomWidth: 1,
+    borderBottomColor: "#2A2F3A",
+  },
+  inventoryTitle: {
+    color: "#E6E7EB",
+    fontSize: 16,
+    fontWeight: "700",
+  },
+  inventorySubtitle: {
+    color: "#A9AFBC",
+    fontSize: 12,
+    marginTop: 2,
+  },
   searchContainer: {
     paddingHorizontal: 16,
     paddingVertical: 12,
-    gap: 8,
   },
   searchInput: {
     backgroundColor: "#1A1D24",
@@ -495,47 +422,10 @@ const styles = StyleSheet.create({
     color: "#E6E7EB",
     fontSize: 14,
   },
-  statsContainer: {
-    flexDirection: "row",
+  inventoryList: {
     paddingHorizontal: 16,
-    paddingVertical: 8,
+    paddingBottom: 100,
     gap: 8,
-  },
-  statItem: {
-    flex: 1,
-    backgroundColor: "#1A1D24",
-    borderRadius: 8,
-    borderWidth: 1,
-    borderColor: "#2A2F3A",
-    paddingVertical: 12,
-    paddingHorizontal: 8,
-    alignItems: "center",
-  },
-  statLabel: {
-    color: "#A9AFBC",
-    fontSize: 11,
-    fontWeight: "500",
-    marginBottom: 4,
-  },
-  statValue: {
-    color: "#1E5BFF",
-    fontSize: 18,
-    fontWeight: "700",
-  },
-  warningText: {
-    color: "#F59E0B",
-  },
-  loadingText: {
-    color: "#64748b",
-    fontSize: 14,
-    textAlign: "center",
-    marginTop: 20,
-  },
-  emptyText: {
-    color: "#64748b",
-    fontSize: 14,
-    textAlign: "center",
-    marginTop: 20,
   },
   inventoryCard: {
     backgroundColor: "#1A1D24",
@@ -543,45 +433,35 @@ const styles = StyleSheet.create({
     borderColor: "#2A2F3A",
     borderRadius: 10,
     padding: 12,
-    marginVertical: 4,
-  },
-  lowStockCard: {
-    borderColor: "#F59E0B",
-    backgroundColor: "#1A1D2408",
   },
   inventoryHeader: {
     flexDirection: "row",
     justifyContent: "space-between",
     alignItems: "flex-start",
-    marginBottom: 8,
   },
-  storeName: {
+  locationName: {
     color: "#A9AFBC",
-    fontSize: 12,
-    fontWeight: "500",
-    marginBottom: 2,
+    fontSize: 11,
+    marginBottom: 4,
   },
   productName: {
     color: "#E6E7EB",
     fontSize: 14,
     fontWeight: "600",
+    marginBottom: 4,
   },
-  deleteBtn: {
-    padding: 4,
-  },
-  deleteBtnText: {
-    color: "#EF4444",
-    fontSize: 18,
-  },
-  inventoryInfo: {
-    flexDirection: "row",
-    gap: 12,
+  skuCode: {
+    color: "#64748b",
+    fontSize: 11,
+    marginTop: 2,
+    fontFamily: "monospace",
   },
   quantityBox: {
-    flex: 1,
     backgroundColor: "#0B0C10",
     borderRadius: 6,
     padding: 8,
+    minWidth: 70,
+    alignItems: "center",
   },
   quantityLabel: {
     color: "#A9AFBC",
@@ -591,159 +471,25 @@ const styles = StyleSheet.create({
   },
   quantityValue: {
     color: "#1E5BFF",
-    fontSize: 14,
+    fontSize: 18,
     fontWeight: "700",
   },
-  lowStockText: {
-    color: "#F59E0B",
-  },
-  minBox: {
-    backgroundColor: "#0B0C10",
-    borderRadius: 6,
-    padding: 8,
-    minWidth: 80,
-  },
-  minLabel: {
-    color: "#A9AFBC",
-    fontSize: 10,
-    fontWeight: "500",
-    marginBottom: 2,
-  },
-  minValue: {
-    color: "#64748b",
-    fontSize: 12,
-    fontWeight: "600",
-  },
-  fab: {
-    position: "absolute",
-    bottom: 80,
-    right: 16,
-    width: 56,
-    height: 56,
-    borderRadius: 28,
-    backgroundColor: "#1E5BFF",
-    justifyContent: "center",
-    alignItems: "center",
-    shadowColor: "#000",
-    shadowOffset: { width: 0, height: 2 },
-    shadowOpacity: 0.3,
-    shadowRadius: 4,
-    elevation: 5,
-  },
-  fabText: {
-    color: "#fff",
-    fontSize: 28,
-    fontWeight: "600",
-  },
-  modalSafe: {
+  loadingContainer: {
     flex: 1,
-    backgroundColor: "#0B0C10",
-  },
-  modalHeader: {
-    flexDirection: "row",
     alignItems: "center",
-    justifyContent: "space-between",
-    paddingHorizontal: 16,
-    paddingVertical: 12,
-    borderBottomWidth: 1,
-    borderBottomColor: "#2A2F3A",
+    justifyContent: "center",
+    gap: 8,
   },
-  modalCloseBtn: {
-    color: "#E6E7EB",
-    fontSize: 28,
-    fontWeight: "300",
-  },
-  modalTitle: {
-    color: "#E6E7EB",
-    fontSize: 16,
-    fontWeight: "700",
-  },
-  modalSaveBtn: {
-    color: "#1E5BFF",
-    fontSize: 16,
-    fontWeight: "600",
-  },
-  modalContent: {
-    paddingHorizontal: 16,
-    paddingVertical: 16,
-    gap: 12,
-  },
-  formLabel: {
-    color: "#E6E7EB",
-    fontSize: 13,
-    fontWeight: "600",
-    marginBottom: 8,
-  },
-  formInput: {
-    backgroundColor: "#0B0C10",
-    borderWidth: 1,
-    borderColor: "#2A2F3A",
-    borderRadius: 8,
-    paddingHorizontal: 12,
-    paddingVertical: 10,
-    color: "#E6E7EB",
-    fontSize: 14,
-  },
-  formHint: {
+  loadingText: {
     color: "#64748b",
-    fontSize: 11,
-    marginTop: 6,
+    fontSize: 13,
   },
-  storeSelect: {
-    flexDirection: "row",
-    gap: 8,
-    flexWrap: "wrap",
+  emptyText: {
+    color: "#64748b",
+    fontSize: 14,
+    textAlign: "center",
+    marginTop: 40,
   },
-  storeOption: {
-    paddingHorizontal: 12,
-    paddingVertical: 8,
-    borderRadius: 6,
-    backgroundColor: "#0B0C10",
-    borderWidth: 1,
-    borderColor: "#2A2F3A",
-  },
-  storeOptionSelected: {
-    backgroundColor: "#1E5BFF",
-    borderColor: "#1E5BFF",
-  },
-  storeOptionText: {
-    color: "#A9AFBC",
-    fontSize: 12,
-    fontWeight: "500",
-  },
-  storeOptionTextSelected: {
-    color: "#fff",
-  },
-  quantityInputRow: {
-    flexDirection: "row",
-    gap: 8,
-    alignItems: "flex-start",
-  },
-  unitSelect: {
-    flexDirection: "row",
-    gap: 4,
-  },
-  unitOption: {
-    paddingHorizontal: 8,
-    paddingVertical: 10,
-    borderRadius: 6,
-    backgroundColor: "#0B0C10",
-    borderWidth: 1,
-    borderColor: "#2A2F3A",
-  },
-  unitOptionSelected: {
-    backgroundColor: "#1E5BFF",
-    borderColor: "#1E5BFF",
-  },
-  unitOptionText: {
-    color: "#A9AFBC",
-    fontSize: 12,
-    fontWeight: "500",
-  },
-  unitOptionTextSelected: {
-    color: "#fff",
-  },
-
   bottomNavContainer: {
     position: "absolute",
     bottom: 0,

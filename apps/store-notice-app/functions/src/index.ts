@@ -7,6 +7,9 @@ import { MemoryOption } from "firebase-functions/v2/options";
 admin.initializeApp();
 const db = admin.firestore();
 
+// ✅ WMS API URL (환경변수로 설정 가능, 기본값: backend.dheska.com)
+const WMS_API_BASE = process.env.WMS_API_URL || "https://backend.dheska.com";
+
 // ✅ Multi-tenant migration (one-time use)
 export { migrateToMultiTenant } from "./migrate";
 
@@ -724,3 +727,121 @@ export const onApprovalUpdated = onDocumentUpdated(
     }
   }
 );
+
+/** =========================================================
+ * ✅ WMS 매장 목록 조회
+ * ======================================================= */
+export const getWmsStoresList = onCall(PERF_HTTP, async (req) => {
+  const uid = req.auth?.uid;
+  if (!uid) throw new HttpsError("unauthenticated", "로그인이 필요합니다.");
+
+  // 사용자 정보 가져오기 (보안 확인용)
+  const userDoc = await db.doc(`users/${uid}`).get();
+  if (!userDoc.exists) {
+    throw new HttpsError("not-found", "사용자 정보를 찾을 수 없습니다.");
+  }
+
+  const userData = userDoc.data() as any;
+  const userCompanyId = userData?.companyId;
+  if (!userCompanyId) {
+    throw new HttpsError("failed-precondition", "회사 정보가 없습니다.");
+  }
+
+  // WMS API 호출 - 매장별 재고 요약
+  const wmsApiUrl = `${WMS_API_BASE}/inventory/stores-summary`;
+
+  try {
+    const response = await fetch(wmsApiUrl, {
+      method: "GET",
+      headers: {
+        "Content-Type": "application/json",
+      },
+    });
+
+    if (!response.ok) {
+      const errorText = await response.text().catch(() => "알 수 없는 오류");
+      throw new HttpsError(
+        "internal",
+        `WMS API 호출 실패 (${response.status}): ${errorText}`
+      );
+    }
+
+    const data = await response.json() as any;
+
+    return {
+      ok: true,
+      stores: data.items || [],
+    };
+  } catch (error: any) {
+    console.error("WMS API 호출 오류:", error);
+    throw new HttpsError(
+      "internal",
+      `WMS 매장 목록 조회 실패: ${error?.message ?? "알 수 없는 오류"}`
+    );
+  }
+});
+
+/** =========================================================
+ * ✅ WMS 매장 재고 조회: 특정 매장 재고 정보 가져오기 (storeCode 직접 사용)
+ * ======================================================= */
+export const getWmsStoreInventory = onCall(PERF_HTTP, async (req) => {
+  const uid = req.auth?.uid;
+  if (!uid) throw new HttpsError("unauthenticated", "로그인이 필요합니다.");
+
+  const { storeCode, q, offset, limit } = req.data || {};
+  if (!storeCode || typeof storeCode !== "string") {
+    throw new HttpsError("invalid-argument", "storeCode가 필요합니다.");
+  }
+
+  // 사용자 정보 가져오기
+  const userDoc = await db.doc(`users/${uid}`).get();
+  if (!userDoc.exists) {
+    throw new HttpsError("not-found", "사용자 정보를 찾을 수 없습니다.");
+  }
+
+  const userData = userDoc.data() as any;
+  const userCompanyId = userData?.companyId;
+  if (!userCompanyId) {
+    throw new HttpsError("failed-precondition", "회사 정보가 없습니다.");
+  }
+
+  // WMS API 호출
+  let wmsApiUrl = `${WMS_API_BASE}/inventory/store/${encodeURIComponent(storeCode)}`;
+  const params = new URLSearchParams();
+  if (q) params.append("q", q);
+  if (offset !== undefined) params.append("offset", offset.toString());
+  if (limit !== undefined) params.append("limit", limit.toString());
+  if (params.toString()) wmsApiUrl += `?${params.toString()}`;
+
+  try {
+    const response = await fetch(wmsApiUrl, {
+      method: "GET",
+      headers: {
+        "Content-Type": "application/json",
+      },
+    });
+
+    if (!response.ok) {
+      const errorText = await response.text().catch(() => "알 수 없는 오류");
+      throw new HttpsError(
+        "internal",
+        `WMS API 호출 실패 (${response.status}): ${errorText}`
+      );
+    }
+
+    const data = await response.json();
+
+    return {
+      ok: true,
+      storeCode,
+      inventory: data,
+    };
+  } catch (error: any) {
+    console.error("WMS API 호출 오류:", error);
+    throw new HttpsError(
+      "internal",
+      `WMS 매장 재고 조회 실패: ${error?.message ?? "알 수 없는 오류"}`
+    );
+  }
+});
+
