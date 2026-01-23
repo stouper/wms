@@ -9,7 +9,7 @@
     "userInterfaceStyle": "automatic",
 
     "android": {
-      "package": "com.donhwa.noticeapp",               // ★ Firebase와 일치
+      "package": "com.eska.office",                     // ★ Firebase google-services.json과 일치
       "googleServicesFile": "./google-services.json",  // ★ 루트에 둔 파일 경로
       "versionCode": 22,                                // ★ 게시판 파일 첨부 권한 추가
       "adaptiveIcon": {
