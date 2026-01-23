@@ -14,10 +14,10 @@ import {
   Alert,
 } from "react-native";
 import { useRouter } from "expo-router";
-import { doc, onSnapshot } from "firebase/firestore";
-import { getFunctions, httpsCallable } from "firebase/functions";
-import { auth, db } from "../../../firebaseConfig";
 import { SafeAreaView } from "react-native-safe-area-context";
+
+// WMS API URL
+const WMS_API_URL = "https://backend.dheska.com";
 
 interface InventoryItem {
   id: string;
@@ -39,7 +39,6 @@ interface WmsStore {
 
 export default function StaffInventoryPage() {
   const router = useRouter();
-  const [myCompanyId, setMyCompanyId] = useState<string | null>(null);
 
   // 매장 목록
   const [stores, setStores] = useState<WmsStore[]>([]);
@@ -52,43 +51,27 @@ export default function StaffInventoryPage() {
   const [inventoryLoading, setInventoryLoading] = useState(false);
   const [searchText, setSearchText] = useState("");
 
-  // 내 companyId 가져오기
+  // 매장 목록 불러오기 (앱 시작시)
   useEffect(() => {
-    const uid = auth.currentUser?.uid;
-    if (!uid) return;
-
-    const unsubUser = onSnapshot(doc(db, "users", uid), async (userSnap) => {
-      if (userSnap.exists()) {
-        const companyId = (userSnap.data() as any)?.companyId;
-        if (companyId) {
-          setMyCompanyId(companyId);
-        }
-      }
-    });
-
-    return () => unsubUser();
-  }, []);
-
-  // 매장 목록 불러오기
-  useEffect(() => {
-    if (!myCompanyId) return;
     loadStores();
-  }, [myCompanyId]);
+  }, []);
 
   const loadStores = async () => {
     try {
       setStoresLoading(true);
-      const functions = getFunctions();
-      const getWmsStoresList = httpsCallable(functions, "getWmsStoresList");
-      const result = await getWmsStoresList({});
-      const data = result.data as any;
+      const response = await fetch(`${WMS_API_URL}/inventory/stores-summary`);
 
-      if (data?.ok && data?.stores) {
-        setStores(data.stores);
-        // 첫 번째 매장 자동 선택
-        if (data.stores.length > 0 && !selectedStoreCode) {
-          setSelectedStoreCode(data.stores[0].storeCode);
-        }
+      if (!response.ok) {
+        throw new Error(`HTTP ${response.status}`);
+      }
+
+      const data = await response.json();
+      const storeList = data.items || [];
+
+      setStores(storeList);
+      // 첫 번째 매장 자동 선택
+      if (storeList.length > 0 && !selectedStoreCode) {
+        setSelectedStoreCode(storeList[0].storeCode);
       }
     } catch (error: any) {
       console.error("매장 목록 조회 실패:", error);
@@ -108,26 +91,24 @@ export default function StaffInventoryPage() {
   const loadInventory = async (storeCode: string) => {
     try {
       setInventoryLoading(true);
-      const functions = getFunctions();
-      const getWmsStoreInventory = httpsCallable(functions, "getWmsStoreInventory");
-      const result = await getWmsStoreInventory({ storeCode });
-      const data = result.data as any;
+      const response = await fetch(`${WMS_API_URL}/inventory/store/${encodeURIComponent(storeCode)}`);
 
-      if (data?.ok && data?.inventory) {
-        const items = (data.inventory.items || []).map((item: any, index: number) => ({
-          id: `wms-${index}`,
-          productName: item.skuName || item.skuCode || "알 수 없음",
-          quantity: item.onHand || 0,
-          unit: "개",
-          skuCode: item.skuCode,
-          makerCode: item.makerCode,
-          locationCode: item.locationCode,
-          locationName: item.locationName,
-        }));
-        setInventory(items);
-      } else {
-        setInventory([]);
+      if (!response.ok) {
+        throw new Error(`HTTP ${response.status}`);
       }
+
+      const data = await response.json();
+      const items = (data.items || []).map((item: any, index: number) => ({
+        id: `wms-${index}`,
+        productName: item.skuName || item.skuCode || "알 수 없음",
+        quantity: item.onHand || 0,
+        unit: "개",
+        skuCode: item.skuCode,
+        makerCode: item.makerCode,
+        locationCode: item.locationCode,
+        locationName: item.locationName,
+      }));
+      setInventory(items);
     } catch (error: any) {
       console.error("재고 조회 실패:", error);
       setInventory([]);
