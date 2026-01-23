@@ -15,36 +15,22 @@ import {
 } from "react-native";
 import { useRouter } from "expo-router";
 import { SafeAreaView } from "react-native-safe-area-context";
-import {
-  collection,
-  query,
-  where,
-  getDocs,
-  doc,
-  deleteDoc,
-  updateDoc,
-  onSnapshot,
-} from "firebase/firestore";
-import { auth, db } from "../../../firebaseConfig";
 import Card from "../../../components/ui/Card";
-import { approveEmployee, rejectEmployee, getEmployees, getStores, StoreInfo } from "../../../lib/authApi";
-
-interface Member {
-  id: string;
-  name: string;
-  email: string;
-  phone?: string;
-  role: string;
-  department?: string;
-  storeId?: string;
-  status: string;
-}
+import {
+  approveEmployee,
+  rejectEmployee,
+  getEmployees,
+  getStores,
+  updateEmployee,
+  deleteEmployee,
+  StoreInfo,
+  EmployeeInfo
+} from "../../../lib/authApi";
 
 export default function MembersManagement() {
   const router = useRouter();
-  const [members, setMembers] = useState<Member[]>([]);
+  const [members, setMembers] = useState<EmployeeInfo[]>([]);
   const [loading, setLoading] = useState(true);
-  const [myCompanyId, setMyCompanyId] = useState<string | null>(null);
   const [pendingCount, setPendingCount] = useState(0);
 
   // 확장된 회원 ID 추적
@@ -52,90 +38,38 @@ export default function MembersManagement() {
 
   // 수정 모달
   const [editModalOpen, setEditModalOpen] = useState(false);
-  const [editingMember, setEditingMember] = useState<Member | null>(null);
+  const [editingMember, setEditingMember] = useState<EmployeeInfo | null>(null);
   const [editName, setEditName] = useState("");
   const [editPhone, setEditPhone] = useState("");
-  const [editDepartment, setEditDepartment] = useState("");
   const [saving, setSaving] = useState(false);
 
   // 승인 모달 (매장 선택)
   const [approveModalOpen, setApproveModalOpen] = useState(false);
-  const [approvingMember, setApprovingMember] = useState<Member | null>(null);
+  const [approvingMember, setApprovingMember] = useState<EmployeeInfo | null>(null);
   const [stores, setStores] = useState<StoreInfo[]>([]);
   const [selectedStoreId, setSelectedStoreId] = useState<string | null>(null);
   const [storesLoading, setStoresLoading] = useState(false);
   const [approving, setApproving] = useState(false);
 
-  // 내 companyId 가져오기 + pendingCount
+  // 회원 목록 가져오기 (PostgreSQL)
   useEffect(() => {
-    const uid = auth.currentUser?.uid;
-    if (!uid) return;
-
-    let unsubPending: (() => void) | undefined;
-
-    const unsub = onSnapshot(doc(db, "users", uid), (snap) => {
-      if (snap.exists()) {
-        const companyId = (snap.data() as any)?.companyId;
-        setMyCompanyId(companyId || null);
-
-        if (companyId) {
-          const pendingQuery = query(
-            collection(db, "users"),
-            where("companyId", "==", companyId),
-            where("status", "==", "PENDING")
-          );
-          unsubPending = onSnapshot(pendingQuery, (snapshot) => {
-            setPendingCount(snapshot.size);
-          });
-        }
-      }
-    });
-
-    return () => {
-      unsub();
-      unsubPending?.();
-    };
+    loadMembers();
   }, []);
 
-  // 회원 목록 가져오기
-  useEffect(() => {
-    if (!myCompanyId) return;
-    loadMembers();
-  }, [myCompanyId]);
-
   const loadMembers = async () => {
-    if (!myCompanyId) return;
-
     setLoading(true);
     try {
-      const q = query(
-        collection(db, "users"),
-        where("companyId", "==", myCompanyId)
-      );
-      const snapshot = await getDocs(q);
-      const memberList: Member[] = [];
-      snapshot.forEach((doc) => {
-        const data = doc.data();
-        memberList.push({
-          id: doc.id,
-          name: data.name || data.email?.split('@')[0] || "이름 없음",
-          email: data.email || "",
-          phone: data.phone || "",
-          role: data.role || "",
-          department: data.department || "",
-          storeId: data.storeId || "",
-          status: data.status || "ACTIVE",
-        });
-      });
+      const allEmployees = await getEmployees();
 
-      // OWNER를 최상단에 정렬
-      memberList.sort((a, b) => {
-        if (a.role === "OWNER") return -1;
-        if (b.role === "OWNER") return 1;
+      // HQ_ADMIN을 최상단에 정렬
+      allEmployees.sort((a, b) => {
+        if (a.role === "HQ_ADMIN") return -1;
+        if (b.role === "HQ_ADMIN") return 1;
         return 0;
       });
 
-      setMembers(memberList);
+      setMembers(allEmployees);
+      setPendingCount(allEmployees.filter(e => e.status === "PENDING").length);
     } catch (error) {
       console.error("회원 목록 로드 실패:", error);
       Alert.alert("오류", "회원 목록을 불러오는데 실패했습니다.");
@@ -150,7 +84,7 @@ export default function MembersManagement() {
   };
 
   // 승인 모달 열기 (매장 선택)
-  const handleApprove = async (member: Member) => {
+  const handleApprove = async (member: EmployeeInfo) => {
     setApprovingMember(member);
     setSelectedStoreId(null);
     setApproveModalOpen(true);
@@ -178,22 +112,14 @@ export default function MembersManagement() {
 
     setApproving(true);
     try {
-      // 1. Firestore 업데이트
-      await updateDoc(doc(db, "users", approvingMember.id), {
-        status: "ACTIVE",
-        storeId: selectedStoreId,
-      });
-
-      // 2. core-api Employee 업데이트 (firebaseUid = member.id)
-      const employees = await getEmployees("PENDING");
-      const employee = employees.find((e) => e.firebaseUid === approvingMember.id);
-      if (employee) {
-        await approveEmployee(employee.id, undefined, selectedStoreId);
+      const success = await approveEmployee(approvingMember.id, undefined, selectedStoreId);
+      if (success) {
+        Alert.alert("완료", "회원이 승인되었습니다.");
+        setApproveModalOpen(false);
+        loadMembers();
+      } else {
+        Alert.alert("오류", "회원 승인에 실패했습니다.");
       }
-
-      Alert.alert("완료", "회원이 승인되었습니다.");
-      setApproveModalOpen(false);
-      loadMembers();
     } catch (error) {
       console.error("승인 실패:", error);
       Alert.alert("오류", "회원 승인에 실패했습니다.");
@@ -203,7 +129,7 @@ export default function MembersManagement() {
   };
 
   // 거부
-  const handleReject = (member: Member) => {
+  const handleReject = (member: EmployeeInfo) => {
     Alert.alert(
       "거부 확인",
       `"${member.name}" 회원의 가입을 거부하시겠습니까?`,
@@ -214,20 +140,13 @@ export default function MembersManagement() {
           style: "destructive",
           onPress: async () => {
             try {
-              // 1. Firestore 업데이트
-              await updateDoc(doc(db, "users", member.id), {
-                status: "REJECTED",
-              });
-
-              // 2. core-api Employee 업데이트
-              const employees = await getEmployees("PENDING");
-              const employee = employees.find((e) => e.firebaseUid === member.id);
-              if (employee) {
-                await rejectEmployee(employee.id);
+              const success = await rejectEmployee(member.id);
+              if (success) {
+                Alert.alert("완료", "회원 가입이 거부되었습니다.");
+                loadMembers();
+              } else {
+                Alert.alert("오류", "회원 거부에 실패했습니다.");
               }
-
-              Alert.alert("완료", "회원 가입이 거부되었습니다.");
-              loadMembers();
             } catch (error) {
               console.error("거부 실패:", error);
               Alert.alert("오류", "회원 거부에 실패했습니다.");
@@ -239,10 +158,10 @@ export default function MembersManagement() {
   };
 
   // 삭제
-  const handleDelete = (member: Member) => {
-    // OWNER는 삭제 불가
-    if (member.role === "OWNER") {
-      Alert.alert("알림", "대표 계정은 삭제할 수 없습니다.");
+  const handleDelete = (member: EmployeeInfo) => {
+    // HQ_ADMIN은 삭제 불가
+    if (member.role === "HQ_ADMIN") {
+      Alert.alert("알림", "관리자 계정은 삭제할 수 없습니다.");
       return;
     }
 
@@ -256,9 +175,13 @@ export default function MembersManagement() {
           style: "destructive",
           onPress: async () => {
             try {
-              await deleteDoc(doc(db, "users", member.id));
-              Alert.alert("완료", "회원이 삭제되었습니다.");
-              loadMembers();
+              const success = await deleteEmployee(member.id);
+              if (success) {
+                Alert.alert("완료", "회원이 삭제되었습니다.");
+                loadMembers();
+              } else {
+                Alert.alert("오류", "회원 삭제에 실패했습니다.");
+              }
             } catch (error) {
               console.error("삭제 실패:", error);
               Alert.alert("오류", "회원 삭제에 실패했습니다.");
@@ -270,17 +193,16 @@ export default function MembersManagement() {
   };
 
   // 수정 모달 열기
-  const openEditModal = (member: Member) => {
-    // OWNER는 수정 불가
-    if (member.role === "OWNER") {
-      Alert.alert("알림", "대표 계정은 수정할 수 없습니다.");
+  const openEditModal = (member: EmployeeInfo) => {
+    // HQ_ADMIN은 수정 불가
+    if (member.role === "HQ_ADMIN") {
+      Alert.alert("알림", "관리자 계정은 수정할 수 없습니다.");
       return;
     }
 
     setEditingMember(member);
     setEditName(member.name);
     setEditPhone(member.phone || "");
-    setEditDepartment(member.department || "");
     setEditModalOpen(true);
   };
 
@@ -290,14 +212,17 @@ export default function MembersManagement() {
 
     try {
       setSaving(true);
-      await updateDoc(doc(db, "users", editingMember.id), {
+      const success = await updateEmployee(editingMember.id, {
         name: editName.trim(),
-        phone: editPhone.trim() || null,
-        department: editDepartment.trim() || null,
+        phone: editPhone.trim() || undefined,
       });
-      Alert.alert("완료", "회원 정보가 수정되었습니다.");
-      setEditModalOpen(false);
-      loadMembers();
+      if (success) {
+        Alert.alert("완료", "회원 정보가 수정되었습니다.");
+        setEditModalOpen(false);
+        loadMembers();
+      } else {
+        Alert.alert("오류", "회원 정보 수정에 실패했습니다.");
+      }
     } catch (error) {
       console.error("수정 실패:", error);
       Alert.alert("오류", "회원 정보 수정에 실패했습니다.");
@@ -308,12 +233,11 @@ export default function MembersManagement() {
 
   const getRoleLabel = (role: string) => {
     const labels: Record<string, string> = {
-      OWNER: "admin",
-      EXEC: "임원",
-      MANAGER: "관리자",
+      HQ_ADMIN: "본사 관리자",
+      HQ_WMS: "본사 물류",
       SALES: "영업",
-      STORE: "매장",
-      ETC: "기타",
+      STORE_MANAGER: "매장 관리자",
+      STORE_STAFF: "매장 직원",
     };
     return labels[role] || role;
   };
@@ -322,7 +246,7 @@ export default function MembersManagement() {
     const labels: Record<string, string> = {
       ACTIVE: "활성",
       PENDING: "대기",
-      INACTIVE: "비활성",
+      DISABLED: "비활성",
     };
     return labels[status] || status;
   };
@@ -332,17 +256,6 @@ export default function MembersManagement() {
     if (status === "PENDING") return "#F59E0B";
     return "#64748b";
   };
-
-  if (!myCompanyId) {
-    return (
-      <View style={styles.root}>
-        <View style={styles.center}>
-          <ActivityIndicator color="#1E5BFF" />
-          <Text style={styles.muted}>회사 정보를 불러오는 중...</Text>
-        </View>
-      </View>
-    );
-  }
 
   return (
     <SafeAreaView style={styles.root} edges={["top"]}>
@@ -365,7 +278,7 @@ export default function MembersManagement() {
         {!loading &&
           members.map((member) => {
             const isExpanded = expandedMemberId === member.id;
-            const isOwner = member.role === "OWNER";
+            const isAdmin = member.role === "HQ_ADMIN";
 
             return (
               <Card key={member.id}>
@@ -384,7 +297,7 @@ export default function MembersManagement() {
                             {getStatusLabel(member.status)}
                           </Text>
                         </View>
-                        {isOwner && (
+                        {isAdmin && (
                           <View style={styles.ownerBadge}>
                             <Text style={styles.ownerText}>admin</Text>
                           </View>
@@ -400,9 +313,9 @@ export default function MembersManagement() {
                           <Text style={styles.memberDetail}>
                             역할: {getRoleLabel(member.role)}
                           </Text>
-                          {member.department && (
+                          {member.storeName && (
                             <Text style={styles.memberDetail}>
-                              부서: {member.department}
+                              매장: {member.storeName}
                             </Text>
                           )}
                           {member.phone && (
@@ -429,8 +342,8 @@ export default function MembersManagement() {
                             </View>
                           )}
 
-                          {/* OWNER가 아니고 PENDING이 아닌 경우만 수정/삭제 버튼 표시 */}
-                          {!isOwner && member.status !== "PENDING" && (
+                          {/* HQ_ADMIN이 아니고 PENDING이 아닌 경우만 수정/삭제 버튼 표시 */}
+                          {!isAdmin && member.status !== "PENDING" && (
                             <View style={styles.actionsInDetail}>
                               <Pressable
                                 onPress={() => openEditModal(member)}
@@ -482,15 +395,6 @@ export default function MembersManagement() {
             placeholderTextColor="#64748b"
             style={styles.input}
             keyboardType="phone-pad"
-          />
-
-          <Text style={styles.label}>부서</Text>
-          <TextInput
-            value={editDepartment}
-            onChangeText={setEditDepartment}
-            placeholder="부서명"
-            placeholderTextColor="#64748b"
-            style={styles.input}
           />
 
           <View style={{ height: 20 }} />

@@ -80,11 +80,25 @@ export class AuthService {
 
   // Employee 목록 조회 (관리자용)
   async getEmployees(status?: EmployeeStatus) {
-    return this.prisma.employee.findMany({
+    const employees = await this.prisma.employee.findMany({
       where: status ? { status } : undefined,
       include: { store: true },
       orderBy: { createdAt: 'desc' },
     });
+
+    // 앱이 기대하는 형식으로 변환
+    return employees.map((emp) => ({
+      id: emp.id,
+      firebaseUid: emp.firebaseUid,
+      name: emp.name,
+      email: emp.email,
+      phone: emp.phone,
+      role: emp.role,
+      status: emp.status,
+      storeId: emp.storeId,
+      storeCode: emp.store?.code || null,
+      storeName: emp.store?.name || null,
+    }));
   }
 
   // Employee 승인/거부
@@ -110,6 +124,30 @@ export class AuthService {
     return this.prisma.employee.update({
       where: { firebaseUid },
       data: { pushToken },
+    });
+  }
+
+  // Employee 정보 수정
+  async updateEmployee(
+    employeeId: string,
+    data: { name?: string; phone?: string; role?: string; storeId?: string },
+  ) {
+    return this.prisma.employee.update({
+      where: { id: employeeId },
+      data: {
+        ...(data.name && { name: data.name }),
+        ...(data.phone !== undefined && { phone: data.phone || null }),
+        ...(data.role && { role: data.role as any }),
+        ...(data.storeId !== undefined && { storeId: data.storeId || null }),
+      },
+      include: { store: true },
+    });
+  }
+
+  // Employee 삭제
+  async deleteEmployee(employeeId: string) {
+    return this.prisma.employee.delete({
+      where: { id: employeeId },
     });
   }
 }

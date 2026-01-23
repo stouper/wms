@@ -1,4 +1,4 @@
-import { Controller, Post, Body, Get, Param, Patch, Query } from '@nestjs/common';
+import { Controller, Post, Body, Get, Param, Patch, Query, Delete } from '@nestjs/common';
 import { AuthService } from './auth.service';
 import { EmployeeStatus } from '@prisma/client';
 
@@ -53,5 +53,20 @@ export class AuthController {
     }
     const employee = await this.authService.updatePushToken(firebaseUid, pushToken);
     return { success: true, employee };
+  }
+
+  // PATCH /auth/employees/:id - 직원 정보 수정
+  @Patch('employees/:id')
+  async updateEmployee(
+    @Param('id') id: string,
+    @Body() body: { name?: string; phone?: string; role?: string; storeId?: string },
+  ) {
+    return this.authService.updateEmployee(id, body);
+  }
+
+  // DELETE /auth/employees/:id - 직원 삭제
+  @Delete('employees/:id')
+  async deleteEmployee(@Param('id') id: string) {
+    return this.authService.deleteEmployee(id);
   }
 }

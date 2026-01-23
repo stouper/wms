@@ -1,10 +1,8 @@
 // lib/authApi.ts - core-api 인증 API 호출
 import { auth } from '../firebaseConfig';
 
-// API Base URL (환경에 따라 변경)
-const API_BASE_URL = __DEV__
-  ? 'http://localhost:3000'  // 개발 환경
-  : 'https://backend.dheska.com';  // 운영 환경
+// API Base URL (운영 서버 고정)
+const API_BASE_URL = 'https://backend.dheska.com';
 
 export interface EmployeeInfo {
   id: string;
@@ -153,5 +151,40 @@ export async function getStores(): Promise<StoreInfo[]> {
   } catch (error) {
     console.error('getStores error:', error);
     return [];
+  }
+}
+
+// 관리자용: 직원 정보 수정
+export async function updateEmployee(
+  employeeId: string,
+  data: { name?: string; phone?: string; role?: string; storeId?: string }
+): Promise<boolean> {
+  try {
+    const response = await fetch(`${API_BASE_URL}/auth/employees/${employeeId}`, {
+      method: 'PATCH',
+      headers: {
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify(data),
+    });
+
+    return response.ok;
+  } catch (error) {
+    console.error('updateEmployee error:', error);
+    return false;
+  }
+}
+
+// 관리자용: 직원 삭제
+export async function deleteEmployee(employeeId: string): Promise<boolean> {
+  try {
+    const response = await fetch(`${API_BASE_URL}/auth/employees/${employeeId}`, {
+      method: 'DELETE',
+    });
+
+    return response.ok;
+  } catch (error) {
+    console.error('deleteEmployee error:', error);
+    return false;
   }
 }
