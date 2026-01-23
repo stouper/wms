@@ -497,7 +497,7 @@ const styles = StyleSheet.create({
   },
   inventoryList: {
     paddingHorizontal: 16,
-    paddingBottom: 100,
+    paddingBottom: 20,
     gap: 8,
   },
   inventoryCard: {
@@ -564,10 +564,6 @@ const styles = StyleSheet.create({
     marginTop: 40,
   },
   bottomNavContainer: {
-    position: "absolute",
-    bottom: 0,
-    left: 0,
-    right: 0,
     backgroundColor: "#1A1D24",
   },
   bottomNav: {
