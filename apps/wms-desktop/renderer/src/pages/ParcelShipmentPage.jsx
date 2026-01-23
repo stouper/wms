@@ -27,6 +27,9 @@ export default function ParcelShipmentPage({ pageTitle = "택배 작업" }) {
   const [lastScan, setLastScan] = useState(null);
   const scanRef = useRef(null);
 
+  // ✅ 스캔 중복 방지용 ref (state보다 빠름)
+  const scanningRef = useRef(false);
+
   // 엑셀 업로드
   const fileRef = useRef(null);
   const [fileName, setFileName] = useState("");
@@ -229,6 +232,12 @@ export default function ParcelShipmentPage({ pageTitle = "택배 작업" }) {
   // 배치 스캔
   // ========================================
   async function doScan() {
+    // ✅ 중복 호출 방지 (ref 기반 - state보다 빠름)
+    if (scanningRef.current) {
+      console.log("[doScan] 이미 스캔 진행 중 - 중복 호출 방지");
+      return;
+    }
+
     if (!selectedBatchId) {
       push({ kind: "warn", title: "배치 선택", message: "먼저 배치를 선택해주세요" });
       return;
@@ -242,6 +251,8 @@ export default function ParcelShipmentPage({ pageTitle = "택배 작업" }) {
     const barcode = scanValue.trim();
     const qty = Number(scanQty) || 1;
 
+    // ✅ 스캔 시작 - 락 설정
+    scanningRef.current = true;
     setLoading(true);
     try {
       const res = await jobsApi.scanBatch(selectedBatchId, {
@@ -314,6 +325,8 @@ export default function ParcelShipmentPage({ pageTitle = "택배 작업" }) {
       setLastScan({ barcode, qty, success: false, message: e?.message || String(e) });
       push({ kind: "error", title: "스캔 실패", message: e?.message || String(e) });
     } finally {
+      // ✅ 스캔 완료 - 락 해제
+      scanningRef.current = false;
       setLoading(false);
       if (scanRef.current) scanRef.current.focus();
     }

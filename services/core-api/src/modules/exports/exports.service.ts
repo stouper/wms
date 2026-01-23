@@ -1,4 +1,4 @@
-import { BadRequestException, Injectable } from '@nestjs/common';
+import { BadRequestException, Injectable, Logger } from '@nestjs/common';
 import { PrismaService } from '../../prisma/prisma.service';
 import { CjApiService } from '../cj-api/cj-api.service';
 import type { WaybillPrintData, CjTrackingData } from '../cj-api/interfaces/cj-api.interface';
@@ -7,6 +7,8 @@ type Row = { storeCode: string; makerCode: string; qty: number };
 
 @Injectable()
 export class ExportsService {
+  private readonly logger = new Logger(ExportsService.name);
+
   constructor(
     private readonly prisma: PrismaService,
     private readonly cjApi: CjApiService,
@@ -127,28 +129,104 @@ export class ExportsService {
    * - Job에 대해 CJ API 호출
    * - CjShipment 레코드 생성
    * - JobParcel에 운송장 번호 저장
+   *
+   * ✅ Race Condition 방지:
+   * - 선점 레코드(pending) 먼저 생성 → API 호출 → 완료 업데이트
+   * - 트랜잭션으로 선점 단계 보호
    */
   async createCjReservation(jobId: string) {
-    // 이미 CjShipment가 있는지 확인
-    const existing = await this.prisma.cjShipment.findUnique({
-      where: { jobId },
-    });
+    this.logger.log(`CJ 예약 시작: ${jobId}`);
 
-    if (existing) {
-      throw new BadRequestException('CJ 예약이 이미 존재합니다. 운송장 번호: ' + existing.invcNo);
+    // ============================================
+    // 1단계: 선점 레코드 생성 (트랜잭션으로 보호)
+    // ============================================
+    let pendingShipment: any;
+
+    try {
+      pendingShipment = await this.prisma.$transaction(async (tx) => {
+        // 이미 CjShipment가 있는지 확인 (FOR UPDATE 효과)
+        const existing = await tx.cjShipment.findUnique({
+          where: { jobId },
+        });
+
+        if (existing) {
+          // 이미 완료된 예약
+          if (existing.invcNo && existing.invcNo !== 'PENDING') {
+            throw new BadRequestException(`CJ 예약이 이미 존재합니다. 운송장 번호: ${existing.invcNo}`);
+          }
+          // pending 상태인 경우 (다른 요청이 진행 중)
+          if (existing.invcNo === 'PENDING') {
+            throw new BadRequestException('CJ 예약이 진행 중입니다. 잠시 후 다시 시도해주세요.');
+          }
+        }
+
+        // 선점 레코드 생성 (pending 상태)
+        const pending = await tx.cjShipment.create({
+          data: {
+            jobId,
+            invcNo: 'PENDING', // 임시 값
+            custUseNo: `PENDING_${Date.now()}`,
+            rcptYmd: new Date().toISOString().slice(0, 10).replace(/-/g, ''),
+          },
+        });
+
+        this.logger.log(`선점 레코드 생성: ${pending.id}`);
+        return pending;
+      }, {
+        timeout: 10000, // 10초 타임아웃
+      });
+    } catch (error: any) {
+      // Unique constraint 에러 처리 (동시 요청 시)
+      if (error.code === 'P2002') {
+        throw new BadRequestException('CJ 예약이 이미 진행 중입니다. 잠시 후 다시 시도해주세요.');
+      }
+      throw error;
     }
 
-    // CJ API 호출
-    const data = await this.cjApi.createReservation(jobId);
+    // ============================================
+    // 2단계: CJ API 호출 (트랜잭션 밖에서)
+    // ============================================
+    try {
+      const data = await this.cjApi.createReservation(jobId);
 
-    return {
-      success: true,
-      jobId,
-      invcNo: data.INVC_NO,
-      waybillNo: data.INVC_NO, // 호환성
-      rcptYmd: data.RCPT_YMD,
-      mpckKey: data.MPCK_KEY,
-    };
+      // ============================================
+      // 3단계: 선점 레코드를 실제 데이터로 업데이트
+      // ============================================
+      await this.prisma.cjShipment.update({
+        where: { id: pendingShipment.id },
+        data: {
+          invcNo: data.INVC_NO,
+          custUseNo: data.CUST_USE_NO || pendingShipment.custUseNo,
+          rcptYmd: data.RCPT_YMD,
+          mpckKey: data.MPCK_KEY,
+        },
+      });
+
+      this.logger.log(`CJ 예약 완료: ${jobId}, 운송장: ${data.INVC_NO}`);
+
+      return {
+        success: true,
+        jobId,
+        invcNo: data.INVC_NO,
+        waybillNo: data.INVC_NO, // 호환성
+        rcptYmd: data.RCPT_YMD,
+        mpckKey: data.MPCK_KEY,
+      };
+
+    } catch (apiError: any) {
+      // API 호출 실패 시 선점 레코드 삭제
+      this.logger.error(`CJ API 호출 실패, 선점 레코드 삭제: ${pendingShipment.id}`);
+
+      try {
+        await this.prisma.cjShipment.delete({
+          where: { id: pendingShipment.id },
+        });
+      } catch (deleteError: any) {
+        this.logger.error(`선점 레코드 삭제 실패: ${deleteError.message}`);
+      }
+
+      throw apiError;
+    }
   }
 
   /**
@@ -196,6 +274,11 @@ export class ExportsService {
 
     if (!shipment) {
       return { exists: false };
+    }
+
+    // PENDING 상태면 진행 중
+    if (shipment.invcNo === 'PENDING') {
+      return { exists: false, pending: true };
     }
 
     return {
