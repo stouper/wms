@@ -9,6 +9,7 @@ import { PrismaService } from '../../prisma/prisma.service';
 import { JobType, Prisma } from '@prisma/client';
 import * as ExcelJS from 'exceljs';
 import { ExportsService } from '../exports/exports.service';
+import { PushService } from '../auth/push.service';
 
 @Injectable()
 export class JobsService {
@@ -17,7 +18,42 @@ export class JobsService {
   constructor(
     private readonly prisma: PrismaService,
     private readonly exportsService: ExportsService, // ✅ CJ 자동 예약용
+    private readonly pushService: PushService, // ✅ 출고 완료 푸시 알림용
   ) {}
+
+  // ✅ 출고 완료 시 매장 직원에게 푸시 알림 발송
+  private async notifyOutboundComplete(jobId: string): Promise<void> {
+    try {
+      const job = await this.prisma.job.findUnique({
+        where: { id: jobId },
+        include: {
+          store: true,
+          items: true,
+        },
+      });
+
+      if (!job || job.type !== 'OUTBOUND' || !job.storeId) {
+        return;
+      }
+
+      // 본사 창고로의 출고는 알림 제외
+      if (job.store?.isHq) {
+        return;
+      }
+
+      const itemCount = job.items?.length || 0;
+      const storeName = job.store?.name || job.store?.code || '매장';
+
+      await this.pushService.notifyOutboundComplete(
+        job.storeId,
+        storeName,
+        jobId,
+        itemCount,
+      );
+    } catch (error: any) {
+      this.logger.warn(`Push notification failed for job ${jobId}: ${error?.message}`);
+    }
+  }
 
   // ✅ C안: Job 단위 실재고 우선 토글
   async setAllowOverpick(jobId: string, allowOverpick: boolean) {
@@ -1097,8 +1133,14 @@ async addItems(jobId: string, dto: any) {
     const job = await this.prisma.job.update({
       where: { id: jobId } as any,
       data: { status: 'done', doneAt: new Date() } as any,
-      select: { id: true, status: true, doneAt: true } as any,
+      select: { id: true, status: true, doneAt: true, type: true } as any,
     } as any);
+
+    // ✅ 출고 완료 시 매장 직원에게 푸시 알림
+    if ((job as any).type === 'OUTBOUND') {
+      this.notifyOutboundComplete(jobId).catch(() => {});
+    }
+
     return { ok: true, ...job };
   }
 

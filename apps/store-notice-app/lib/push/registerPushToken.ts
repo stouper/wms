@@ -7,6 +7,7 @@ import {
   setDoc, updateDoc,
 } from "firebase/firestore";
 import { auth, db } from "../../firebaseConfig";
+import { updatePushToken } from "../authApi";
 
 /**
  * 로그인 직후 1회 호출:
@@ -76,4 +77,11 @@ export async function registerPushToken() {
       ...payload,
     });
   });
+
+  // ✅ core-api Employee에도 푸시 토큰 저장
+  try {
+    await updatePushToken(token);
+  } catch (error) {
+    console.warn("core-api push token update failed:", error);
+  }
 }

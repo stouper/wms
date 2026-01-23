@@ -15,6 +15,22 @@ enum JobType {
   ADJUST
 }
 
+// 직원 역할 (본사/매장 통합)
+enum EmployeeRole {
+  HQ_ADMIN       // 본사 관리자
+  HQ_WMS         // 본사 물류팀
+  SALES          // 영업직
+  STORE_MANAGER  // 매장 관리자
+  STORE_STAFF    // 매장 직원
+}
+
+// 직원 상태
+enum EmployeeStatus {
+  ACTIVE    // 승인됨
+  PENDING   // 승인대기
+  DISABLED  // 비활성화
+}
+
 model Store {
   id        String     @id @default(cuid())
   code      String     @unique  // 매장코드 (HQ, 4000, 4100...)
@@ -22,6 +38,54 @@ model Store {
   isHq      Boolean    @default(false)  // 본사 창고 여부
   locations Location[]
   jobs      Job[]
+  users     StoreUser[]
+  employees Employee[]
+}
+
+// 매장-앱사용자 매핑 (Firebase 연동용)
+model StoreUser {
+  id          String   @id @default(cuid())
+  storeId     String
+  firebaseUid String   @unique  // Firebase Auth UID
+  pushToken   String?            // FCM 푸시 토큰
+  name        String?            // 사용자 이름
+  phone       String?            // 연락처
+  role        String   @default("staff")  // "manager" | "staff"
+  isActive    Boolean  @default(true)
+
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  store Store @relation(fields: [storeId], references: [id], onDelete: Cascade)
+
+  @@index([storeId], map: "StoreUser_storeId_idx")
+  @@index([firebaseUid], map: "StoreUser_firebaseUid_idx")
+  @@index([pushToken], map: "StoreUser_pushToken_idx")
+}
+
+// 통합 직원 모델 (Firebase Auth 연동 + 권한 관리)
+model Employee {
+  id          String   @id @default(cuid())
+  firebaseUid String?  @unique  // Firebase Auth UID (가입 전이면 null)
+  storeId     String?            // 소속 매장 (본사 직원은 null)
+
+  name        String             // 이름 (필수)
+  phone       String?            // 연락처
+  email       String?            // 이메일
+  pushToken   String?            // FCM 푸시 토큰
+
+  role        EmployeeRole   @default(STORE_STAFF)
+  status      EmployeeStatus @default(PENDING)
+
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  store       Store?   @relation(fields: [storeId], references: [id], onDelete: SetNull)
+
+  @@index([storeId], map: "Employee_storeId_idx")
+  @@index([firebaseUid], map: "Employee_firebaseUid_idx")
+  @@index([status], map: "Employee_status_idx")
+  @@index([role], map: "Employee_role_idx")
 }
 
 model Location {

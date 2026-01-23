@@ -14,6 +14,7 @@ import {
 import { signInWithEmailAndPassword } from "firebase/auth";
 import { auth } from "../../firebaseConfig";
 import { useRouter } from "expo-router";
+import { authenticateWithCoreApi } from "../../lib/authApi";
 
 export default function Login() {
   const router = useRouter();
@@ -24,7 +25,19 @@ export default function Login() {
   const onLogin = async () => {
     try {
       setLoading(true);
+
+      // 1. Firebase 로그인
       await signInWithEmailAndPassword(auth, email.trim(), pw);
+
+      // 2. core-api 인증 (Employee 조회/생성)
+      const result = await authenticateWithCoreApi();
+      if (!result.success) {
+        console.warn('core-api auth failed:', result.error);
+        // core-api 실패해도 기존 Firestore 기반으로 진행 (과도기)
+      } else {
+        console.log('core-api auth success:', result.employee?.status);
+      }
+
       router.replace("/");
     } catch (e: any) {
       Alert.alert("로그인 실패", e?.message ?? "이메일/비밀번호를 확인해 주세요.");

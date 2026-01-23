@@ -17,6 +17,7 @@ import { createUserWithEmailAndPassword } from "firebase/auth";
 import { auth } from "../../firebaseConfig";
 import { useRouter } from "expo-router";
 import { httpsCallable, getFunctions } from "firebase/functions";
+import { authenticateWithCoreApi } from "../../lib/authApi";
 
 type SignupMode = "choose" | "create" | "join";
 
@@ -52,6 +53,12 @@ export default function Signup() {
       const createCompanyFn = httpsCallable(functions, "createCompany");
       const result = await createCompanyFn({ companyName: companyName.trim() });
       const data = result.data as any;
+
+      // 3. core-api 인증 (Employee 생성)
+      const authResult = await authenticateWithCoreApi();
+      if (!authResult.success) {
+        console.warn('core-api auth failed:', authResult.error);
+      }
 
       Alert.alert(
         "회사 생성 완료!",
@@ -94,6 +101,12 @@ export default function Signup() {
         requestedDepartment: requestedDepartment.trim() || null,
       });
       const data = result.data as any;
+
+      // 3. core-api 인증 (Employee 생성 - PENDING 상태)
+      const authResult = await authenticateWithCoreApi();
+      if (!authResult.success) {
+        console.warn('core-api auth failed:', authResult.error);
+      }
 
       Alert.alert(
         "가입 완료",

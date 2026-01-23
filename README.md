@@ -618,7 +618,146 @@ CJ_SENDER_DETAIL_ADDR=테스트빌딩 1층
 
 ---
 
-## 7. 작업 이력
+## 7. 아키텍처 로드맵 (진행 중)
+
+> 📋 build.md 기반 아키텍처 결정 사항
+
+### 7.1 현재 문제점
+
+```
+현재 구조 (분리됨)
+┌─────────────┐     ┌─────────────┐
+│   Desktop   │────▶│  PostgreSQL │  (WMS: 재고/출고/매장)
+└─────────────┘     └─────────────┘
+
+┌─────────────┐     ┌─────────────┐
+│     App     │────▶│  Firebase   │  (공지/게시판/인증)
+└─────────────┘     └─────────────┘
+
+→ 서로 연결고리 없음
+→ 매장/사용자 정보 중복 관리
+→ 출고 시 매장 직원 알림 불가
+```
+
+### 7.2 목표 구조
+
+```
+변경 후 (연결됨)
+┌─────────────┐
+│   Desktop   │──────────┐
+└─────────────┘          │
+                         ▼
+┌─────────────┐     ┌─────────────┐
+│     App     │────▶│  PostgreSQL │  ◀── SSOT (권한/매장/사용자)
+└─────────────┘     └─────────────┘
+       │                 ▲
+       ▼                 │
+┌─────────────┐          │
+│  Firebase   │──────────┘
+│  (Auth만)   │   firebaseUid로 연결
+└─────────────┘
+```
+
+### 7.3 SSOT (Single Source of Truth) 정리
+
+| 데이터 | 주인 (SSOT) | 현재 | 변경 후 |
+|--------|-------------|------|---------|
+| 매장 정보 | PostgreSQL | Firebase stores + PostgreSQL Store | PostgreSQL만 |
+| 사용자/권한 | PostgreSQL | Firebase users | PostgreSQL Employee |
+| 부서 | 선택 | Firebase departments | 유지 또는 PostgreSQL |
+| 공지/게시판 | Firebase | Firebase | 유지 (실시간 필요) |
+| 재고/출고 | PostgreSQL | PostgreSQL | 유지 |
+
+### 7.4 추가 예정 모델: Employee
+
+```
+Employee (신규 - PostgreSQL)
+├── firebaseUid     ← Firebase Auth 연결 (unique)
+├── storeId         ← PostgreSQL Store 연결
+├── pushToken       ← 알림 발송용
+├── name, phone, email
+├── role            ← HQ_ADMIN/HQ_WMS/SALES/STORE_MANAGER/STORE_STAFF
+└── status          ← ACTIVE/PENDING/DISABLED
+```
+
+### 7.5 인증 흐름 변경
+
+**현재:**
+```
+App 로그인 → Firebase Auth → Firestore users 직접 조회 → 화면 표시
+```
+
+**변경 후:**
+```
+App 로그인 → Firebase Auth → core-api로 idToken 전송 → PostgreSQL 권한 확인
+                                                         ↓
+                                              Employee 없음 → PENDING 생성 (승인대기)
+                                              Employee 있음 → role/store 반환 → 화면 분기
+```
+
+### 7.6 Lightsail 배포 시 필요 작업
+
+> ⚠️ **중요**: Firebase 인증 테스트 전 반드시 설정 필요
+
+**1. 환경변수 설정** (Lightsail 서버 `/home/ubuntu/wms/services/core-api/.env`):
+```bash
+# 방법 1: JSON 문자열로 직접 설정
+FIREBASE_SERVICE_ACCOUNT='{"type":"service_account","project_id":"your-project","private_key":"-----BEGIN PRIVATE KEY-----\n...\n-----END PRIVATE KEY-----\n","client_email":"...","client_id":"..."}'
+
+# 방법 2: 파일 경로 지정
+GOOGLE_APPLICATION_CREDENTIALS=/home/ubuntu/wms/firebase-service-account.json
+```
+
+**2. 서비스 계정 키 발급** (Firebase Console):
+- Firebase Console > 프로젝트 설정 > 서비스 계정 > 새 비공개 키 생성
+- JSON 파일 다운로드 → Lightsail에 업로드
+
+**3. 배포 명령어**:
+```bash
+# 로컬에서
+git push
+
+# Lightsail SSH 접속 후
+cd ~/wms/services/core-api
+git pull
+npm install
+npm run build
+pm2 restart all
+```
+
+### 7.7 구현 순서 (MVP 7단계)
+
+| 단계 | 작업 | 완료 기준 | 상태 |
+|------|------|----------|:----:|
+| 1 | Prisma에 Employee 모델 추가 + migrate | DB에 테이블 생성됨 | ✅ 완료 |
+| 2 | core-api에 firebase-admin 설치 + idToken 검증 | 토큰 검증 성공 로그 | ✅ 완료 |
+| 3 | `POST /auth/firebase` 엔드포인트 구현 | Postman 테스트 통과 | ✅ 완료 (Lightsail 테스트 필요) |
+| 4 | App 로그인 후 core-api 호출 로직 추가 | 로그인 시 Employee 생성됨 | ✅ 완료 |
+| 5 | 승인대기 화면 + 승인 API 구현 | PENDING→ACTIVE 전환 가능 | ✅ 완료 |
+| 6 | role별 화면 분기 | 관리자/직원 메뉴 다르게 표시 | ✅ 완료 |
+| 7 | 푸시토큰 연동 + 출고 알림 | 출고 시 매장 직원에게 푸시 | ✅ 완료 |
+
+### 7.7 엑셀 업로드 필드 매핑 (참고)
+
+> 엑셀 컬럼은 외부 프로그램 export라 변경 불가
+
+| 엑셀 종류 | 핵심 컬럼 | PostgreSQL 매칭 |
+|----------|----------|-----------------|
+| 매장 등록 | 매장코드, 매장명 | Store.code, Store.name |
+| 출고/반품 | 거래처코드, 단품코드, 수량 | Store.code, Sku.sku |
+| 택배 요청 | 매장코드, 옵션, 수취인정보 | Store.code |
+| 재고 초기화 | 코드, 수량, 매장/창고 | Sku.sku, Store.name |
+| 매출 업로드 | 매장명, 매출일, 금액 | SalesRaw.storeName (자동 code 생성) |
+
+---
+
+## 8. 작업 이력
+
+### 2026-01-24 (오후)
+- **App 재고 조회 방식 변경**: Firebase Functions → WMS API 직접 호출로 변경
+- **바코드 스캐너 추가**: expo-camera 설치 + app.json plugins 설정
+- **EAS Build 실행**: Development Build로 네이티브 모듈 반영
+- **아키텍처 검토**: build.md 기반 Employee 모델 및 인증 흐름 설계
 
 ### 2026-01-24
 - **CJ API 문서화**: CJ 택배 API 테스트 환경 요약 문서 (`cj.md`) 작성

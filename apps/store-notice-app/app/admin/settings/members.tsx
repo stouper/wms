@@ -27,6 +27,7 @@ import {
 } from "firebase/firestore";
 import { auth, db } from "../../../firebaseConfig";
 import Card from "../../../components/ui/Card";
+import { approveEmployee, rejectEmployee, getEmployees } from "../../../lib/authApi";
 
 interface Member {
   id: string;
@@ -138,6 +139,77 @@ export default function MembersManagement() {
   // 회원 확장/축소 토글
   const toggleMemberExpand = (memberId: string) => {
     setExpandedMemberId(expandedMemberId === memberId ? null : memberId);
+  };
+
+  // 승인
+  const handleApprove = (member: Member) => {
+    Alert.alert(
+      "승인 확인",
+      `"${member.name}" 회원을 승인하시겠습니까?`,
+      [
+        { text: "취소", style: "cancel" },
+        {
+          text: "승인",
+          onPress: async () => {
+            try {
+              // 1. Firestore 업데이트
+              await updateDoc(doc(db, "users", member.id), {
+                status: "ACTIVE",
+              });
+
+              // 2. core-api Employee 업데이트 (firebaseUid = member.id)
+              const employees = await getEmployees("PENDING");
+              const employee = employees.find((e) => e.firebaseUid === member.id);
+              if (employee) {
+                await approveEmployee(employee.id);
+              }
+
+              Alert.alert("완료", "회원이 승인되었습니다.");
+              loadMembers();
+            } catch (error) {
+              console.error("승인 실패:", error);
+              Alert.alert("오류", "회원 승인에 실패했습니다.");
+            }
+          },
+        },
+      ]
+    );
+  };
+
+  // 거부
+  const handleReject = (member: Member) => {
+    Alert.alert(
+      "거부 확인",
+      `"${member.name}" 회원의 가입을 거부하시겠습니까?`,
+      [
+        { text: "취소", style: "cancel" },
+        {
+          text: "거부",
+          style: "destructive",
+          onPress: async () => {
+            try {
+              // 1. Firestore 업데이트
+              await updateDoc(doc(db, "users", member.id), {
+                status: "REJECTED",
+              });
+
+              // 2. core-api Employee 업데이트
+              const employees = await getEmployees("PENDING");
+              const employee = employees.find((e) => e.firebaseUid === member.id);
+              if (employee) {
+                await rejectEmployee(employee.id);
+              }
+
+              Alert.alert("완료", "회원 가입이 거부되었습니다.");
+              loadMembers();
+            } catch (error) {
+              console.error("거부 실패:", error);
+              Alert.alert("오류", "회원 거부에 실패했습니다.");
+            }
+          },
+        },
+      ]
+    );
   };
 
   // 삭제
@@ -313,8 +385,26 @@ export default function MembersManagement() {
                             </Text>
                           )}
 
-                          {/* OWNER가 아닌 경우만 버튼 표시 */}
-                          {!isOwner && (
+                          {/* PENDING 회원: 승인/거부 버튼 */}
+                          {member.status === "PENDING" && (
+                            <View style={styles.actionsInDetail}>
+                              <Pressable
+                                onPress={() => handleApprove(member)}
+                                style={[styles.actionBtn, styles.approveBtn]}
+                              >
+                                <Text style={styles.actionBtnText}>승인</Text>
+                              </Pressable>
+                              <Pressable
+                                onPress={() => handleReject(member)}
+                                style={[styles.actionBtn, styles.rejectBtn]}
+                              >
+                                <Text style={styles.actionBtnText}>거부</Text>
+                              </Pressable>
+                            </View>
+                          )}
+
+                          {/* OWNER가 아니고 PENDING이 아닌 경우만 수정/삭제 버튼 표시 */}
+                          {!isOwner && member.status !== "PENDING" && (
                             <View style={styles.actionsInDetail}>
                               <Pressable
                                 onPress={() => openEditModal(member)}
@@ -534,6 +624,12 @@ const styles = StyleSheet.create({
   },
   deleteBtn: {
     backgroundColor: "#EF4444",
+  },
+  approveBtn: {
+    backgroundColor: "#10B981",
+  },
+  rejectBtn: {
+    backgroundColor: "#F59E0B",
   },
   actionBtnText: {
     color: "#fff",

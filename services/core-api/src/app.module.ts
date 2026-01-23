@@ -24,6 +24,9 @@ import { StoresModule } from './modules/stores/stores.module';
 // ✅ Locations (창고/로케이션 관리)
 import { LocationsModule } from './modules/locations/locations.module';
 
+// ✅ Auth (Firebase 인증 + Employee 관리)
+import { AuthModule } from './modules/auth/auth.module';
+
 @Module({
   imports: [
     ConfigModule.forRoot({ isGlobal: true }),
@@ -46,6 +49,9 @@ import { LocationsModule } from './modules/locations/locations.module';
 
     // ✅ 창고/로케이션 관리
     LocationsModule,
+
+    // ✅ Firebase 인증 + Employee 관리
+    AuthModule,
   ],
   controllers: [],
   providers: [],
