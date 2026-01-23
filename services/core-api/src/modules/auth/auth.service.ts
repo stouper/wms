@@ -150,4 +150,60 @@ export class AuthService {
       where: { id: employeeId },
     });
   }
+
+  // 회원가입 (Employee 생성)
+  async registerEmployee(data: {
+    firebaseUid: string;
+    name: string;
+    email: string;
+    phone: string;
+    isHq: boolean;
+  }): Promise<FirebaseAuthResult> {
+    try {
+      // 이미 등록된 firebaseUid인지 확인
+      const existing = await this.prisma.employee.findUnique({
+        where: { firebaseUid: data.firebaseUid },
+      });
+
+      if (existing) {
+        return { success: false, error: '이미 가입된 계정입니다.' };
+      }
+
+      // Employee 생성 (PENDING 상태)
+      const employee = await this.prisma.employee.create({
+        data: {
+          firebaseUid: data.firebaseUid,
+          name: data.name,
+          email: data.email,
+          phone: data.phone,
+          isHq: data.isHq,
+          status: EmployeeStatus.PENDING,
+          // 기본 역할 설정: 본사면 HQ_WMS, 매장이면 STORE_STAFF
+          role: data.isHq ? 'HQ_WMS' : 'STORE_STAFF',
+        },
+        include: { store: true },
+      });
+
+      this.logger.log(`New employee registered: ${employee.id} (${employee.name}, isHq=${data.isHq})`);
+
+      return {
+        success: true,
+        employee: {
+          id: employee.id,
+          firebaseUid: employee.firebaseUid!,
+          name: employee.name,
+          email: employee.email,
+          phone: employee.phone,
+          role: employee.role,
+          status: employee.status,
+          storeId: employee.storeId,
+          storeCode: employee.store?.code || null,
+          storeName: employee.store?.name || null,
+        },
+      };
+    } catch (error: any) {
+      this.logger.error(`registerEmployee error: ${error.message}`);
+      return { success: false, error: error.message || '가입 처리 중 오류가 발생했습니다.' };
+    }
+  }
 }

@@ -68,6 +68,7 @@ model Employee {
   id          String   @id @default(cuid())
   firebaseUid String?  @unique  // Firebase Auth UID (가입 전이면 null)
   storeId     String?            // 소속 매장 (본사 직원은 null)
+  isHq        Boolean  @default(false)  // 본사 여부 (true=본사, false=매장)
 
   name        String             // 이름 (필수)
   phone       String?            // 연락처

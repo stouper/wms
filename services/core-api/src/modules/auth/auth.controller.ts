@@ -15,6 +15,23 @@ export class AuthController {
     return this.authService.authenticateWithFirebase(idToken);
   }
 
+  // POST /auth/register - 회원가입 (Employee 생성)
+  @Post('register')
+  async registerEmployee(
+    @Body() body: {
+      firebaseUid: string;
+      name: string;
+      email: string;
+      phone: string;
+      isHq: boolean;
+    },
+  ) {
+    if (!body.firebaseUid || !body.name || !body.email || !body.phone) {
+      return { success: false, error: 'firebaseUid, name, email, phone are required' };
+    }
+    return this.authService.registerEmployee(body);
+  }
+
   // GET /auth/employees - 직원 목록 (관리자용)
   @Get('employees')
   async getEmployees(@Query('status') status?: string) {

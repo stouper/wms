@@ -188,3 +188,34 @@ export async function deleteEmployee(employeeId: string): Promise<boolean> {
     return false;
   }
 }
+
+// 회원가입 (Employee 생성)
+export interface RegisterEmployeeData {
+  firebaseUid: string;
+  name: string;
+  email: string;
+  phone: string;
+  isHq: boolean;
+}
+
+export async function registerEmployee(data: RegisterEmployeeData): Promise<AuthResult> {
+  try {
+    const response = await fetch(`${API_BASE_URL}/auth/register`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify(data),
+    });
+
+    if (!response.ok) {
+      const errorData = await response.json().catch(() => ({}));
+      return { success: false, error: errorData.error || `HTTP ${response.status}` };
+    }
+
+    return await response.json();
+  } catch (error: any) {
+    console.error('registerEmployee error:', error);
+    return { success: false, error: error?.message || 'Network error' };
+  }
+}
