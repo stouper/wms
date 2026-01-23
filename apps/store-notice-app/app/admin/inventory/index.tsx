@@ -1,5 +1,5 @@
 // app/admin/inventory/index.tsx
-// WMS 재고 조회 - 왼쪽 매장 목록, 오른쪽 재고 표시
+// WMS 재고 조회 - 왼쪽 매장 목록, 오른쪽 재고 표시 + 바코드 스캔
 
 import React, { useEffect, useState } from "react";
 import {
@@ -12,9 +12,12 @@ import {
   TextInput,
   ActivityIndicator,
   Alert,
+  Modal,
+  Dimensions,
 } from "react-native";
 import { useRouter } from "expo-router";
 import { SafeAreaView } from "react-native-safe-area-context";
+import { BarCodeScanner } from "expo-barcode-scanner";
 
 // WMS API URL
 const WMS_API_URL = "https://backend.dheska.com";
@@ -50,6 +53,11 @@ export default function InventoryPage() {
   const [filteredInventory, setFilteredInventory] = useState<InventoryItem[]>([]);
   const [inventoryLoading, setInventoryLoading] = useState(false);
   const [searchText, setSearchText] = useState("");
+
+  // 바코드 스캐너
+  const [scannerVisible, setScannerVisible] = useState(false);
+  const [hasPermission, setHasPermission] = useState<boolean | null>(null);
+  const [scanned, setScanned] = useState(false);
 
   // 매장 목록 불러오기 (앱 시작시)
   useEffect(() => {
@@ -125,11 +133,40 @@ export default function InventoryPage() {
       const filtered = inventory.filter(
         (item) =>
           item.productName?.toLowerCase().includes(searchText.toLowerCase()) ||
-          item.skuCode?.toLowerCase().includes(searchText.toLowerCase())
+          item.skuCode?.toLowerCase().includes(searchText.toLowerCase()) ||
+          item.makerCode?.includes(searchText)
       );
       setFilteredInventory(filtered);
     }
   }, [searchText, inventory]);
+
+  // 바코드 스캐너 열기
+  const openScanner = async () => {
+    const { status } = await BarCodeScanner.requestPermissionsAsync();
+    setHasPermission(status === "granted");
+
+    if (status === "granted") {
+      setScanned(false);
+      setScannerVisible(true);
+    } else {
+      Alert.alert("권한 필요", "바코드 스캔을 위해 카메라 권한이 필요합니다");
+    }
+  };
+
+  // 바코드 스캔 처리
+  const handleBarCodeScanned = ({ type, data }: { type: string; data: string }) => {
+    setScanned(true);
+    setScannerVisible(false);
+
+    // 스캔된 바코드로 검색 (makerCode 매칭)
+    setSearchText(data);
+
+    // 매칭되는 상품 확인
+    const matched = inventory.filter((item) => item.makerCode === data);
+    if (matched.length === 0) {
+      Alert.alert("알림", `바코드 "${data}"와 일치하는 상품이 없습니다`);
+    }
+  };
 
   const InventoryCard = ({ item }: { item: InventoryItem }) => (
     <View style={styles.inventoryCard}>
@@ -217,15 +254,25 @@ export default function InventoryPage() {
             </View>
           )}
 
-          {/* 검색 */}
+          {/* 검색 + 바코드 스캔 버튼 */}
           <View style={styles.searchContainer}>
-            <TextInput
-              style={styles.searchInput}
-              placeholder="SKU코드, 상품명 검색..."
-              placeholderTextColor="#64748b"
-              value={searchText}
-              onChangeText={setSearchText}
-            />
+            <View style={styles.searchRow}>
+              <TextInput
+                style={styles.searchInput}
+                placeholder="SKU코드, 상품명, 바코드 검색..."
+                placeholderTextColor="#64748b"
+                value={searchText}
+                onChangeText={setSearchText}
+              />
+              <Pressable style={styles.scanButton} onPress={openScanner}>
+                <Text style={styles.scanButtonText}>📷</Text>
+              </Pressable>
+            </View>
+            {searchText !== "" && (
+              <Pressable onPress={() => setSearchText("")} style={styles.clearButton}>
+                <Text style={styles.clearButtonText}>검색 초기화</Text>
+              </Pressable>
+            )}
           </View>
 
           {/* 재고 목록 */}
@@ -250,9 +297,36 @@ export default function InventoryPage() {
           )}
         </View>
       </View>
+
+      {/* 바코드 스캐너 모달 */}
+      <Modal visible={scannerVisible} animationType="slide">
+        <View style={styles.scannerContainer}>
+          <BarCodeScanner
+            onBarCodeScanned={scanned ? undefined : handleBarCodeScanned}
+            style={StyleSheet.absoluteFillObject}
+          />
+          <View style={styles.scannerOverlay}>
+            <View style={styles.scannerFrame} />
+          </View>
+          <View style={styles.scannerHeader}>
+            <Text style={styles.scannerTitle}>바코드를 스캔하세요</Text>
+          </View>
+          <View style={styles.scannerFooter}>
+            <Pressable
+              style={styles.scannerCloseButton}
+              onPress={() => setScannerVisible(false)}
+            >
+              <Text style={styles.scannerCloseText}>닫기</Text>
+            </Pressable>
+          </View>
+        </View>
+      </Modal>
     </SafeAreaView>
   );
 }
+
+const { width, height } = Dimensions.get("window");
+const scannerFrameSize = Math.min(width, height) * 0.7;
 
 const styles = StyleSheet.create({
   safe: { flex: 1, backgroundColor: "#0B0C10" },
@@ -367,7 +441,12 @@ const styles = StyleSheet.create({
     paddingHorizontal: 16,
     paddingVertical: 12,
   },
+  searchRow: {
+    flexDirection: "row",
+    gap: 8,
+  },
   searchInput: {
+    flex: 1,
     backgroundColor: "#1A1D24",
     borderWidth: 1,
     borderColor: "#2A2F3A",
@@ -376,6 +455,24 @@ const styles = StyleSheet.create({
     paddingVertical: 10,
     color: "#E6E7EB",
     fontSize: 14,
+  },
+  scanButton: {
+    backgroundColor: "#1E5BFF",
+    borderRadius: 8,
+    paddingHorizontal: 16,
+    justifyContent: "center",
+    alignItems: "center",
+  },
+  scanButtonText: {
+    fontSize: 20,
+  },
+  clearButton: {
+    marginTop: 8,
+    alignSelf: "flex-start",
+  },
+  clearButtonText: {
+    color: "#1E5BFF",
+    fontSize: 12,
   },
   inventoryList: {
     paddingHorizontal: 16,
@@ -444,5 +541,58 @@ const styles = StyleSheet.create({
     fontSize: 14,
     textAlign: "center",
     marginTop: 40,
+  },
+
+  // 바코드 스캐너
+  scannerContainer: {
+    flex: 1,
+    backgroundColor: "#000",
+  },
+  scannerOverlay: {
+    ...StyleSheet.absoluteFillObject,
+    justifyContent: "center",
+    alignItems: "center",
+  },
+  scannerFrame: {
+    width: scannerFrameSize,
+    height: scannerFrameSize,
+    borderWidth: 2,
+    borderColor: "#1E5BFF",
+    borderRadius: 16,
+    backgroundColor: "transparent",
+  },
+  scannerHeader: {
+    position: "absolute",
+    top: 80,
+    left: 0,
+    right: 0,
+    alignItems: "center",
+  },
+  scannerTitle: {
+    color: "#fff",
+    fontSize: 18,
+    fontWeight: "700",
+    backgroundColor: "rgba(0,0,0,0.5)",
+    paddingHorizontal: 20,
+    paddingVertical: 10,
+    borderRadius: 8,
+  },
+  scannerFooter: {
+    position: "absolute",
+    bottom: 60,
+    left: 0,
+    right: 0,
+    alignItems: "center",
+  },
+  scannerCloseButton: {
+    backgroundColor: "#1E5BFF",
+    paddingHorizontal: 40,
+    paddingVertical: 14,
+    borderRadius: 8,
+  },
+  scannerCloseText: {
+    color: "#fff",
+    fontSize: 16,
+    fontWeight: "700",
   },
 });
