@@ -1,8 +1,7 @@
 // app/admin/staff/pending.tsx
-// ✅ Multi-tenant: 같은 회사의 PENDING 사용자 승인
-// ✅ 매장/부서는 관리 화면에서 등록한 목록에서 선택
+// PostgreSQL Employee 기반 승인대기 관리
 
-import React, { useEffect, useState } from "react";
+import React, { useEffect, useState, useCallback } from "react";
 import {
   Alert,
   ActivityIndicator,
@@ -11,236 +10,102 @@ import {
   View,
   StyleSheet,
   Pressable,
+  RefreshControl,
 } from "react-native";
-import {
-  collection,
-  doc,
-  getDocs,
-  onSnapshot,
-  query,
-  where,
-  orderBy,
-} from "firebase/firestore";
-import { auth, db } from "../../../firebaseConfig";
 import Card from "../../../components/ui/Card";
 import EmptyState from "../../../components/ui/EmptyState";
 import { useRouter } from "expo-router";
-import { getFunctions, httpsCallable } from "firebase/functions";
+import {
+  getEmployees,
+  approveEmployee,
+  rejectEmployee,
+  getStores,
+  EmployeeInfo,
+  StoreInfo,
+} from "../../../lib/authApi";
 
-type UserRole = "OWNER" | "MANAGER" | "SALES";
-
-type PendingUser = {
-  id: string;
-  email?: string;
-  name?: string;
-  role?: UserRole;
-  storeId?: string | null;
-  department?: string | null;
-  phone?: string | null;
-  requestedDepartment?: string | null;
-  createdAt?: any;
-};
-
-type StoreRow = { id: string; name: string };
-type DepartmentRow = { id: string; name: string };
+type EmployeeRole = "HQ_ADMIN" | "HQ_WMS" | "SALES" | "STORE_MANAGER" | "STORE_STAFF";
 
 export default function AdminPending() {
   const router = useRouter();
-  const functions = getFunctions();
 
   const [loading, setLoading] = useState(true);
-  const [myCompanyId, setMyCompanyId] = useState<string | null>(null);
-  const [list, setList] = useState<PendingUser[]>([]);
-
-  // 매장/부서 목록
-  const [stores, setStores] = useState<StoreRow[]>([]);
-  const [departments, setDepartments] = useState<DepartmentRow[]>([]);
+  const [refreshing, setRefreshing] = useState(false);
+  const [list, setList] = useState<EmployeeInfo[]>([]);
+  const [stores, setStores] = useState<StoreInfo[]>([]);
 
   // 각 사용자별 승인 입력 상태
-  const [roleInputs, setRoleInputs] = useState<Record<string, UserRole>>({});
-  // 부서/매장 중 하나만 선택 (필수)
-  const [assignmentType, setAssignmentType] = useState<Record<string, 'department' | 'store'>>({});
-  const [assignmentValue, setAssignmentValue] = useState<Record<string, string>>({});
+  const [roleInputs, setRoleInputs] = useState<Record<string, EmployeeRole>>({});
+  const [storeInputs, setStoreInputs] = useState<Record<string, string>>({});
 
-  // 내 companyId 가져오기
-  useEffect(() => {
-    const uid = auth.currentUser?.uid;
-    if (!uid) return;
+  const fetchData = useCallback(async () => {
+    try {
+      const [employees, storeList] = await Promise.all([
+        getEmployees("PENDING"),
+        getStores(),
+      ]);
 
-    const unsub = onSnapshot(doc(db, "users", uid), (snap) => {
-      if (snap.exists()) {
-        const companyId = (snap.data() as any)?.companyId;
-        setMyCompanyId(companyId || null);
-      }
-    });
+      setList(employees);
+      setStores(storeList.filter(s => !s.isHq)); // 본사 제외
 
-    return () => unsub();
+      // 초기값 세팅
+      const roleInit: Record<string, EmployeeRole> = {};
+      const storeInit: Record<string, string> = {};
+
+      employees.forEach((emp) => {
+        // isHq 기반으로 기본 역할 설정
+        if ((emp as any).isHq) {
+          roleInit[emp.id] = "HQ_WMS";
+        } else {
+          roleInit[emp.id] = "STORE_STAFF";
+        }
+        storeInit[emp.id] = emp.storeId || "";
+      });
+
+      setRoleInputs(roleInit);
+      setStoreInputs(storeInit);
+    } catch (e: any) {
+      Alert.alert("오류", e?.message ?? "대기 목록을 불러오지 못했습니다.");
+    } finally {
+      setLoading(false);
+      setRefreshing(false);
+    }
   }, []);
 
-  // 매장 목록 가져오기
   useEffect(() => {
-    if (!myCompanyId) return;
+    fetchData();
+  }, [fetchData]);
 
-    const fetchStores = async () => {
-      try {
-        const q = query(
-          collection(db, "stores"),
-          where("companyId", "==", myCompanyId),
-          where("active", "==", true),
-          orderBy("name", "asc")
-        );
-        const snap = await getDocs(q);
+  const onRefresh = useCallback(() => {
+    setRefreshing(true);
+    fetchData();
+  }, [fetchData]);
 
-        const rows: StoreRow[] = [];
-        snap.forEach((d) => {
-          const data = d.data() as any;
-          rows.push({
-            id: d.id,
-            name: data?.name ?? d.id,
-          });
-        });
-
-        setStores(rows);
-      } catch (e: any) {
-        console.error("Store fetch error:", e);
-      }
-    };
-
-    fetchStores();
-  }, [myCompanyId]);
-
-  // 부서 목록 가져오기
-  useEffect(() => {
-    if (!myCompanyId) return;
-
-    const fetchDepartments = async () => {
-      try {
-        const q = query(
-          collection(db, "departments"),
-          where("companyId", "==", myCompanyId),
-          where("active", "==", true),
-          orderBy("name", "asc")
-        );
-        const snap = await getDocs(q);
-
-        const rows: DepartmentRow[] = [];
-        snap.forEach((d) => {
-          const data = d.data() as any;
-          rows.push({
-            id: d.id,
-            name: data?.name ?? d.id,
-          });
-        });
-
-        setDepartments(rows);
-      } catch (e: any) {
-        console.error("Department fetch error:", e);
-      }
-    };
-
-    fetchDepartments();
-  }, [myCompanyId]);
-
-  // PENDING 사용자 가져오기 (같은 회사)
-  useEffect(() => {
-    if (!myCompanyId) return;
-
-    const fetchPending = async () => {
-      try {
-        setLoading(true);
-        const q = query(
-          collection(db, "users"),
-          where("companyId", "==", myCompanyId),
-          where("status", "==", "PENDING")
-        );
-        const snap = await getDocs(q);
-
-        const rows: PendingUser[] = [];
-        snap.forEach((d) => {
-          const data = d.data() as any;
-          rows.push({
-            id: d.id,
-            email: data?.email ?? "",
-            name: data?.name ?? "",
-            role: data?.role ?? "SALES",
-            storeId: data?.storeId ?? null,
-            department: data?.department ?? null,
-            phone: data?.phone ?? null,
-            requestedDepartment: data?.requestedDepartment ?? null,
-            createdAt: data?.createdAt,
-          });
-        });
-        setList(rows);
-
-        // 초기값 세팅
-        const roleInit: Record<string, UserRole> = {};
-        const assignTypeInit: Record<string, 'department' | 'store'> = {};
-        const assignValueInit: Record<string, string> = {};
-
-        rows.forEach((r) => {
-          roleInit[r.id] = r.role || "SALES";
-          // 부서가 있으면 부서, 없으면 매장, 둘 다 없으면 부서로 기본값
-          if (r.department) {
-            assignTypeInit[r.id] = 'department';
-            assignValueInit[r.id] = r.department;
-          } else if (r.storeId) {
-            assignTypeInit[r.id] = 'store';
-            assignValueInit[r.id] = r.storeId;
-          } else {
-            assignTypeInit[r.id] = 'department';
-            assignValueInit[r.id] = '';
-          }
-        });
-
-        setRoleInputs(roleInit);
-        setAssignmentType(assignTypeInit);
-        setAssignmentValue(assignValueInit);
-      } catch (e: any) {
-        Alert.alert("오류", e?.message ?? "대기 목록을 불러오지 못했습니다.");
-      } finally {
-        setLoading(false);
-      }
-    };
-
-    fetchPending();
-  }, [myCompanyId]);
-
-  const approve = async (userId: string) => {
+  const approve = async (employeeId: string) => {
     try {
-      const role = roleInputs[userId] || "SALES";
-      const assignType = assignmentType[userId];
-      const assignValue = (assignmentValue[userId] || "").trim();
+      const role = roleInputs[employeeId];
+      const storeId = storeInputs[employeeId] || undefined;
 
-      // 부서/매장 필수 체크
-      if (!assignValue) {
-        Alert.alert("입력 오류", "부서 또는 매장을 선택해 주세요.");
+      // 매장 직원인데 매장 미선택
+      if ((role === "STORE_MANAGER" || role === "STORE_STAFF") && !storeId) {
+        Alert.alert("입력 오류", "매장을 선택해 주세요.");
         return;
       }
 
-      // assignType에 따라 storeId 또는 department 설정
-      const storeId = assignType === 'store' ? assignValue : null;
-      const department = assignType === 'department' ? assignValue : null;
+      const success = await approveEmployee(employeeId, role, storeId);
 
-      // Cloud Function 호출
-      const approveUserFn = httpsCallable(functions, "approveUser");
-      await approveUserFn({
-        userId,
-        status: "ACTIVE",
-        role,
-        storeId,
-        department,
-      });
-
-      Alert.alert("완료", "사용자가 승인되었습니다.");
-
-      // 목록 새로고침
-      setList((prev) => prev.filter((u) => u.id !== userId));
+      if (success) {
+        Alert.alert("완료", "사용자가 승인되었습니다.");
+        setList((prev) => prev.filter((u) => u.id !== employeeId));
+      } else {
+        Alert.alert("실패", "승인 처리에 실패했습니다.");
+      }
     } catch (e: any) {
       Alert.alert("승인 실패", e?.message ?? "잠시 후 다시 시도해 주세요.");
     }
   };
 
-  const reject = async (userId: string) => {
+  const reject = async (employeeId: string) => {
     Alert.alert(
       "확인",
       "이 사용자를 거부하시겠습니까?",
@@ -251,14 +116,14 @@ export default function AdminPending() {
           style: "destructive",
           onPress: async () => {
             try {
-              const approveUserFn = httpsCallable(functions, "approveUser");
-              await approveUserFn({
-                userId,
-                status: "REJECTED",
-              });
+              const success = await rejectEmployee(employeeId);
 
-              Alert.alert("완료", "사용자가 거부되었습니다.");
-              setList((prev) => prev.filter((u) => u.id !== userId));
+              if (success) {
+                Alert.alert("완료", "사용자가 거부되었습니다.");
+                setList((prev) => prev.filter((u) => u.id !== employeeId));
+              } else {
+                Alert.alert("실패", "거부 처리에 실패했습니다.");
+              }
             } catch (e: any) {
               Alert.alert("오류", e?.message ?? "잠시 후 다시 시도해 주세요.");
             }
@@ -268,29 +133,32 @@ export default function AdminPending() {
     );
   };
 
-  if (!myCompanyId) {
-    return (
-      <View style={styles.root}>
-        <View style={styles.center}>
-          <ActivityIndicator />
-          <Text style={styles.muted}>회사 정보를 불러오는 중...</Text>
-        </View>
-      </View>
-    );
-  }
+  const isHqRole = (role: EmployeeRole) => {
+    return role === "HQ_ADMIN" || role === "HQ_WMS" || role === "SALES";
+  };
+
+  const getRoleLabel = (role: EmployeeRole) => {
+    switch (role) {
+      case "HQ_ADMIN": return "본사 관리자";
+      case "HQ_WMS": return "본사 물류팀";
+      case "SALES": return "영업직";
+      case "STORE_MANAGER": return "매장 관리자";
+      case "STORE_STAFF": return "매장 직원";
+      default: return role;
+    }
+  };
 
   return (
     <View style={styles.root}>
-      <ScrollView contentContainerStyle={styles.container}>
+      <ScrollView
+        contentContainerStyle={styles.container}
+        refreshControl={
+          <RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor="#1E5BFF" />
+        }
+      >
         <View style={styles.header}>
           <Text style={styles.title}>승인 대기 사용자</Text>
-          <Pressable
-            onPress={() => {
-              setLoading(true);
-              setTimeout(() => setLoading(false), 100);
-            }}
-            style={styles.refreshBtn}
-          >
+          <Pressable onPress={onRefresh} style={styles.refreshBtn}>
             <Text style={styles.refreshText}>새로고침</Text>
           </Pressable>
         </View>
@@ -313,9 +181,9 @@ export default function AdminPending() {
 
         {!loading &&
           list.map((user) => {
-            const role = roleInputs[user.id] || "SALES";
-            const assignType = assignmentType[user.id] || 'department';
-            const assignValue = assignmentValue[user.id] || '';
+            const role = roleInputs[user.id] || "STORE_STAFF";
+            const storeId = storeInputs[user.id] || "";
+            const userIsHq = (user as any).isHq;
 
             return (
               <Card key={user.id}>
@@ -325,84 +193,81 @@ export default function AdminPending() {
                   {user.phone && (
                     <Text style={styles.userInfo}>📞 {user.phone}</Text>
                   )}
-                  {user.requestedDepartment && (
-                    <Text style={styles.userInfo}>🏢 희망 부서: {user.requestedDepartment}</Text>
-                  )}
+                  <View style={[styles.badge, { backgroundColor: userIsHq ? "#1E5BFF" : "#10B981" }]}>
+                    <Text style={styles.badgeText}>
+                      {userIsHq ? "🏢 본사" : "🏪 매장"}
+                    </Text>
+                  </View>
                 </View>
 
                 {/* Role 선택 */}
                 <View style={{ marginBottom: 12 }}>
-                  <Text style={styles.label}>구분</Text>
+                  <Text style={styles.label}>역할</Text>
                   <View style={styles.roleGrid}>
-                    {(["MANAGER", "SALES"] as UserRole[]).map((r) => (
-                      <Pressable
-                        key={r}
-                        onPress={() => {
-                          setRoleInputs((p) => ({ ...p, [user.id]: r }));
-                          // 구분 변경 시 부서/매장 선택 초기화
-                          setAssignmentType((p) => ({ ...p, [user.id]: r === "MANAGER" ? 'department' : 'store' }));
-                          setAssignmentValue((p) => ({ ...p, [user.id]: '' }));
-                        }}
-                        style={[styles.roleChip, role === r && styles.roleChipActive]}
-                      >
-                        <Text style={[styles.roleText, role === r && styles.roleTextActive]}>
-                          {r === "MANAGER" ? "본사 직원" : "매장 직원"}
-                        </Text>
-                      </Pressable>
-                    ))}
+                    {userIsHq ? (
+                      // 본사 직원용 역할
+                      <>
+                        {(["HQ_WMS", "SALES", "HQ_ADMIN"] as EmployeeRole[]).map((r) => (
+                          <Pressable
+                            key={r}
+                            onPress={() => setRoleInputs((p) => ({ ...p, [user.id]: r }))}
+                            style={[styles.roleChip, role === r && styles.roleChipActive]}
+                          >
+                            <Text style={[styles.roleText, role === r && styles.roleTextActive]}>
+                              {getRoleLabel(r)}
+                            </Text>
+                          </Pressable>
+                        ))}
+                      </>
+                    ) : (
+                      // 매장 직원용 역할
+                      <>
+                        {(["STORE_STAFF", "STORE_MANAGER"] as EmployeeRole[]).map((r) => (
+                          <Pressable
+                            key={r}
+                            onPress={() => setRoleInputs((p) => ({ ...p, [user.id]: r }))}
+                            style={[styles.roleChip, role === r && styles.roleChipActive]}
+                          >
+                            <Text style={[styles.roleText, role === r && styles.roleTextActive]}>
+                              {getRoleLabel(r)}
+                            </Text>
+                          </Pressable>
+                        ))}
+                      </>
+                    )}
                   </View>
                 </View>
 
-                {/* 부서/매장 선택 (필수, 하나만 선택) */}
-                <View style={{ marginBottom: 16 }}>
-                  <Text style={styles.label}>
-                    {role === "MANAGER" ? "부서 (필수)" : "매장 (필수)"}
-                  </Text>
-                  <View style={styles.optionWrap}>
-                    {/* 본사직원이면 부서만 */}
-                    {role === "MANAGER" && departments.map((dept) => (
-                      <Pressable
-                        key={`dept-${dept.id}`}
-                        onPress={() => {
-                          setAssignmentType((p) => ({ ...p, [user.id]: 'department' }));
-                          setAssignmentValue((p) => ({ ...p, [user.id]: dept.name }));
-                        }}
-                        style={[
-                          styles.optionChip,
-                          assignType === 'department' && assignValue === dept.name && styles.optionChipActive
-                        ]}
-                      >
-                        <Text style={[
-                          styles.optionText,
-                          assignType === 'department' && assignValue === dept.name && styles.optionTextActive
-                        ]}>
-                          🏢 {dept.name}
-                        </Text>
-                      </Pressable>
-                    ))}
-                    {/* 매장직원이면 매장만 */}
-                    {role === "SALES" && stores.map((st) => (
-                      <Pressable
-                        key={`store-${st.id}`}
-                        onPress={() => {
-                          setAssignmentType((p) => ({ ...p, [user.id]: 'store' }));
-                          setAssignmentValue((p) => ({ ...p, [user.id]: st.name }));
-                        }}
-                        style={[
-                          styles.optionChip,
-                          assignType === 'store' && assignValue === st.name && styles.optionChipActive
-                        ]}
-                      >
-                        <Text style={[
-                          styles.optionText,
-                          assignType === 'store' && assignValue === st.name && styles.optionTextActive
-                        ]}>
-                          🏪 {st.name}
-                        </Text>
-                      </Pressable>
-                    ))}
+                {/* 매장 선택 (매장 직원인 경우만) */}
+                {!userIsHq && (
+                  <View style={{ marginBottom: 16 }}>
+                    <Text style={styles.label}>매장 (필수)</Text>
+                    <View style={styles.optionWrap}>
+                      {stores.map((st) => (
+                        <Pressable
+                          key={st.id}
+                          onPress={() => setStoreInputs((p) => ({ ...p, [user.id]: st.id }))}
+                          style={[
+                            styles.optionChip,
+                            storeId === st.id && styles.optionChipActive,
+                          ]}
+                        >
+                          <Text
+                            style={[
+                              styles.optionText,
+                              storeId === st.id && styles.optionTextActive,
+                            ]}
+                          >
+                            🏪 {st.name || st.code}
+                          </Text>
+                        </Pressable>
+                      ))}
+                      {stores.length === 0 && (
+                        <Text style={styles.muted}>등록된 매장이 없습니다</Text>
+                      )}
+                    </View>
                   </View>
-                </View>
+                )}
 
                 {/* 버튼 */}
                 <View style={styles.actions}>
@@ -432,7 +297,7 @@ export default function AdminPending() {
 
 const styles = StyleSheet.create({
   root: { flex: 1, backgroundColor: "#0B0C10" },
-  container: { paddingHorizontal: 16, paddingTop: 8, gap: 12 },
+  container: { paddingHorizontal: 16, paddingTop: 8, gap: 12, paddingBottom: 40 },
 
   header: {
     flexDirection: "row",
@@ -463,6 +328,14 @@ const styles = StyleSheet.create({
   userName: { color: "#E6E7EB", fontSize: 18, fontWeight: "700", marginBottom: 4 },
   userEmail: { color: "#A9AFBC", fontSize: 14, marginBottom: 2 },
   userInfo: { color: "#A9AFBC", fontSize: 13, marginTop: 4 },
+  badge: {
+    alignSelf: "flex-start",
+    paddingHorizontal: 10,
+    paddingVertical: 4,
+    borderRadius: 12,
+    marginTop: 8,
+  },
+  badgeText: { color: "#fff", fontSize: 12, fontWeight: "700" },
 
   label: { color: "#A9AFBC", fontSize: 13, marginBottom: 8, fontWeight: "600" },
 

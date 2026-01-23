@@ -95,6 +95,7 @@ export class AuthService {
       phone: emp.phone,
       role: emp.role,
       status: emp.status,
+      isHq: emp.isHq,
       storeId: emp.storeId,
       storeCode: emp.store?.code || null,
       storeName: emp.store?.name || null,

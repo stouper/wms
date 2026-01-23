@@ -1,7 +1,7 @@
 // app/admin/settings/index.tsx
 // 관리자 설정 화면
 
-import React, { useEffect, useState } from "react";
+import React, { useEffect, useState, useCallback } from "react";
 import {
   View,
   ScrollView,
@@ -11,43 +11,29 @@ import {
 } from "react-native";
 import { useRouter } from "expo-router";
 import { SafeAreaView } from "react-native-safe-area-context";
-import { doc, onSnapshot, collection, query, where } from "firebase/firestore";
-import { auth, db } from "../../../firebaseConfig";
+import { useFocusEffect } from "@react-navigation/native";
 import Card from "../../../components/ui/Card";
+import { getEmployees } from "../../../lib/authApi";
 
 export default function AdminSettings() {
   const router = useRouter();
   const [pendingCount, setPendingCount] = useState(0);
 
-  useEffect(() => {
-    const uid = auth.currentUser?.uid;
-    if (!uid) return;
-
-    let unsubPending: (() => void) | undefined;
-
-    // 내 user 정보 가져와서 companyId 확인
-    const unsubUser = onSnapshot(doc(db, "users", uid), async (userSnap) => {
-      if (userSnap.exists()) {
-        const companyId = (userSnap.data() as any)?.companyId;
-        if (!companyId) return;
-
-        // PENDING 사용자 수 실시간 가져오기
-        const pendingQuery = query(
-          collection(db, "users"),
-          where("companyId", "==", companyId),
-          where("status", "==", "PENDING")
-        );
-        unsubPending = onSnapshot(pendingQuery, (snapshot) => {
-          setPendingCount(snapshot.size);
-        });
-      }
-    });
-
-    return () => {
-      unsubUser();
-      unsubPending?.();
-    };
+  const fetchPendingCount = useCallback(async () => {
+    try {
+      const employees = await getEmployees("PENDING");
+      setPendingCount(employees.length);
+    } catch (e) {
+      console.error("Failed to fetch pending count:", e);
+    }
   }, []);
+
+  // 화면 진입 시마다 갱신
+  useFocusEffect(
+    useCallback(() => {
+      fetchPendingCount();
+    }, [fetchPendingCount])
+  );
 
   return (
     <SafeAreaView style={styles.safe} edges={["top"]}>

@@ -12,6 +12,7 @@ export interface EmployeeInfo {
   phone: string | null;
   role: 'HQ_ADMIN' | 'HQ_WMS' | 'SALES' | 'STORE_MANAGER' | 'STORE_STAFF';
   status: 'ACTIVE' | 'PENDING' | 'DISABLED';
+  isHq: boolean;
   storeId: string | null;
   storeCode: string | null;
   storeName: string | null;
