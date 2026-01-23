@@ -253,25 +253,33 @@ export const jobsApi = {
     return http.get(`/jobs/${jobId}/tx`);
   },
 
-  undoLast: async (jobId) => {
+  // ✅ UNDO 전 음수 발생 여부 체크
+  checkUndo: async (jobId) => {
+    return http.get(`/jobs/${jobId}/check-undo`);
+  },
+
+  undoLast: async (jobId, { force = false } = {}) => {
     const operatorId = getOperatorId();
     return http.post(`/jobs/${jobId}/undo-last`, {
       ...(operatorId ? { operatorId } : {}),
+      ...(force ? { force: true } : {}),
     });
   },
 
-  undoUntil: async (jobId, txId) => {
+  undoUntil: async (jobId, txId, { force = false } = {}) => {
     const operatorId = getOperatorId();
     return http.post(`/jobs/${jobId}/undo`, {
       txId,
       ...(operatorId ? { operatorId } : {}),
+      ...(force ? { force: true } : {}),
     });
   },
 
-  undoAll: async (jobId) => {
+  undoAll: async (jobId, { force = false } = {}) => {
     const operatorId = getOperatorId();
     return http.post(`/jobs/${jobId}/undo-all`, {
       ...(operatorId ? { operatorId } : {}),
+      ...(force ? { force: true } : {}),
     });
   },
 

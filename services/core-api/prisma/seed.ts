@@ -11,11 +11,11 @@ const SYSTEM_LOCATIONS = [
 ];
 
 async function main() {
-  // 1) 기본 Store (HQ) 보장 - 본사 창고
+  // 1) 기본 Store (HQ) 보장 - 본사창고
   const store = await prisma.store.upsert({
     where: { code: 'HQ' },
     update: { isHq: true },
-    create: { code: 'HQ', name: '본사 창고', isHq: true },
+    create: { code: 'HQ', name: '본사창고', isHq: true },
     select: { id: true },
   });
 

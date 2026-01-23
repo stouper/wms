@@ -141,9 +141,15 @@ export class JobsController {
     return this.jobs.listInventoryTx(id);
   }
 
-  // ✅ 최근 tx부터 특정 tx까지 연속 undo (body: { txId, operatorId })
+  // ✅ UNDO 전 음수 발생 여부 체크
+  @Get(':id/check-undo')
+  checkUndo(@Param('id') id: string) {
+    return this.jobs.checkUndoNegative(id);
+  }
+
+  // ✅ 최근 tx부터 특정 tx까지 연속 undo (body: { txId, operatorId, force })
   @Post(':id/undo')
-  undoUntil(@Param('id') id: string, @Body() body: { txId?: string; operatorId?: string }) {
+  undoUntil(@Param('id') id: string, @Body() body: { txId?: string; operatorId?: string; force?: boolean }) {
     const txId = (body?.txId ?? '').toString().trim();
     if (!txId) throw new BadRequestException('txId is required');
     return this.jobs.undoUntilTx(id, txId, body?.operatorId);
@@ -151,13 +157,13 @@ export class JobsController {
 
   // ✅ job 전체 undo (최근 tx부터 끝까지)
   @Post(':id/undo-all')
-  undoAll(@Param('id') id: string, @Body() body?: { operatorId?: string }) {
-    return this.jobs.undoAllTx(id, body?.operatorId);
+  undoAll(@Param('id') id: string, @Body() body?: { operatorId?: string; force?: boolean }) {
+    return this.jobs.undoAllTx(id, body?.operatorId, body?.force);
   }
 
   @Post(':id/undo-last')
-  undoLast(@Param('id') id: string, @Body() body?: { operatorId?: string }) {
-    return this.jobs.undoLastTx(id, body?.operatorId);
+  undoLast(@Param('id') id: string, @Body() body?: { operatorId?: string; force?: boolean }) {
+    return this.jobs.undoLastTx(id, body?.operatorId, body?.force);
   }
 
   // ✅ (호환) Desktop: POST /jobs/:jobId/approve-extra  (body: { jobItemId, qty })

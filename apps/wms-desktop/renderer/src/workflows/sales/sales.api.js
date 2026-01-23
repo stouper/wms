@@ -1,9 +1,20 @@
 // apps/wms-desktop/renderer/src/workflows/sales/sales.api.js
 import { getApiBase } from "../../lib/api";
 
-async function request(path, options) {
+async function request(path, options = {}) {
   const base = getApiBase();
-  const res = await fetch(`${base}${path}`, options);
+
+  // GET 요청 캐시 방지
+  const headers = { ...(options.headers || {}) };
+  if (!options.method || options.method === "GET") {
+    headers["Cache-Control"] = "no-cache, no-store, must-revalidate";
+    headers["Pragma"] = "no-cache";
+  }
+
+  const res = await fetch(`${base}${path}`, {
+    ...options,
+    headers,
+  });
 
   const text = await res.text();
   let json;

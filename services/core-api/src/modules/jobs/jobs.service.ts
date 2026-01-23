@@ -190,6 +190,7 @@ const rows = await this.prisma.job.findMany({
     type: true,
     status: true,
     allowOverpick: true,
+    operatorId: true,
     createdAt: true,
     updatedAt: true,
     doneAt: true,
@@ -653,18 +654,42 @@ async addItems(jobId: string, dto: any) {
         } as any,
       });
 
-      // 7) 창고 inventory snapshot 갱신 (감소)
+      // 7) 창고 inventory snapshot 갱신 (감소) + 음수 체크
       const srcInvRow = await (tx as any).inventory.findUnique({
         where: { skuId_locationId: { skuId: sku.id, locationId: srcLoc.id } } as any,
         select: { qty: true } as any,
       } as any);
       const srcBefore = Number(srcInvRow?.qty ?? 0);
+      const srcAfter = srcBefore - qty;
 
-      await (tx as any).inventory.upsert({
+      // ✅ 음수 체크: force=false면 에러
+      if (srcAfter < 0 && !force) {
+        throw new ConflictException({
+          code: 'NEGATIVE_INVENTORY',
+          message: `재고 부족: ${srcLoc.code}에서 출고 시 음수 발생 (현재: ${srcBefore}, 출고: ${qty}, 예상: ${srcAfter})`,
+          locationCode: srcLoc.code,
+          currentQty: srcBefore,
+          requestQty: qty,
+          resultQty: srcAfter,
+        });
+      }
+
+      const srcInv = await (tx as any).inventory.upsert({
         where: { skuId_locationId: { skuId: sku.id, locationId: srcLoc.id } } as any,
-        create: { skuId: sku.id, locationId: srcLoc.id, qty: srcBefore - qty } as any,
+        create: { skuId: sku.id, locationId: srcLoc.id, qty: srcAfter } as any,
         update: { qty: { decrement: qty } as any } as any,
       } as any);
+
+      // ✅ 강제 출고로 음수 발생 시 inventoryTx에 기록 업데이트
+      if (srcInv.qty < 0 && force) {
+        await (tx as any).inventoryTx.updateMany({
+          where: { jobId, skuId: sku.id, locationId: srcLoc.id, type: 'out' } as any,
+          data: {
+            isForced: true,
+            forcedReason: forceReason || `강제 출고로 음수 재고 발생: ${srcInv.qty}`,
+          } as any,
+        });
+      }
 
       // ✅ 8) 매장 재고 증가 (도착지가 있을 때만)
       if (destLoc) {
@@ -793,6 +818,8 @@ async addItems(jobId: string, dto: any) {
       qty?: number;
       locationCode?: string;
       operatorId?: string;
+      force?: boolean;
+      forceReason?: string;
     },
   ) {
     const job = await this.prisma.job.findUnique({
@@ -817,6 +844,8 @@ async addItems(jobId: string, dto: any) {
     if (!Number.isFinite(qty) || qty <= 0) throw new BadRequestException('qty must be > 0');
 
     const inputLocationCode = this.norm(dto?.locationCode);
+    const force = Boolean(dto?.force);
+    const forceReason = this.norm(dto?.forceReason);
 
     // 1) sku 찾기
     let sku: any = null;
@@ -917,6 +946,28 @@ async addItems(jobId: string, dto: any) {
           } as any);
         }
 
+        // 매장 inventory 현재 수량 확인
+        const srcInvRow = await (tx as any).inventory.findUnique({
+          where: { skuId_locationId: { skuId: sku.id, locationId: srcLoc.id } } as any,
+          select: { qty: true } as any,
+        } as any);
+        const srcBefore = Number(srcInvRow?.qty ?? 0);
+        const srcAfter = srcBefore - qty;
+
+        // ✅ 음수 체크: force=false면 에러
+        if (srcAfter < 0 && !force) {
+          throw new ConflictException({
+            code: 'NEGATIVE_INVENTORY',
+            message: `매장 재고 부족: ${srcLoc.code}에서 반품 시 음수 발생 (현재: ${srcBefore}, 반품: ${qty}, 예상: ${srcAfter})`,
+            locationCode: srcLoc.code,
+            currentQty: srcBefore,
+            requestQty: qty,
+            resultQty: srcAfter,
+          });
+        }
+
+        const isNegative = srcAfter < 0;
+
         // ✅ 매장 재고 감소 (출발지)
         await (tx as any).inventoryTx.create({
           data: {
@@ -926,22 +977,17 @@ async addItems(jobId: string, dto: any) {
             locationId: srcLoc.id,
             jobId,
             jobItemId: item.id,
-            isForced: false,
+            isForced: isNegative && force,
+            forcedReason: isNegative && force ? (forceReason || `강제 반품으로 매장 재고 음수 발생: ${srcAfter}`) : null,
             operatorId: this.norm(dto?.operatorId) || null,
             note: `매장반품→창고입고 (to: ${destLoc.code})`,
           } as any,
         });
 
         // 매장 inventory snapshot 감소
-        const srcInvRow = await (tx as any).inventory.findUnique({
-          where: { skuId_locationId: { skuId: sku.id, locationId: srcLoc.id } } as any,
-          select: { qty: true } as any,
-        } as any);
-        const srcBefore = Number(srcInvRow?.qty ?? 0);
-
         await (tx as any).inventory.upsert({
           where: { skuId_locationId: { skuId: sku.id, locationId: srcLoc.id } } as any,
-          create: { skuId: sku.id, locationId: srcLoc.id, qty: srcBefore - qty } as any,
+          create: { skuId: sku.id, locationId: srcLoc.id, qty: srcAfter } as any,
           update: { qty: { decrement: qty } as any } as any,
         } as any);
       }
@@ -1063,11 +1109,87 @@ async addItems(jobId: string, dto: any) {
   }
 
   /**
+   * ✅ UNDO 전 음수 발생 여부 체크 API
+   */
+  async checkUndoNegative(jobId: string) {
+    const lastTx = await (this.prisma as any).inventoryTx.findFirst({
+      where: { jobId },
+      orderBy: { createdAt: 'desc' },
+      include: {
+        sku: { select: { sku: true, name: true, makerCode: true } },
+        location: { select: { code: true, name: true } },
+      },
+    });
+
+    if (!lastTx) {
+      return { ok: true, hasNegative: false, message: '되돌릴 기록 없음' };
+    }
+
+    // 연관 tx 찾기
+    const lastCreatedAt = new Date(lastTx.createdAt);
+    const oneSecondBefore = new Date(lastCreatedAt.getTime() - 1000);
+
+    const relatedTxs = await (this.prisma as any).inventoryTx.findMany({
+      where: {
+        jobId,
+        jobItemId: lastTx.jobItemId,
+        createdAt: { gte: oneSecondBefore },
+      },
+      include: {
+        sku: { select: { sku: true, name: true, makerCode: true } },
+        location: { select: { code: true, name: true } },
+      },
+    });
+
+    const txsToCheck = relatedTxs.length > 0 ? relatedTxs : [lastTx];
+    const negativeItems: any[] = [];
+
+    for (const txItem of txsToCheck) {
+      const txAbsQty = Math.abs(Number(txItem.qty || 0));
+      const delta = txItem.qty < 0 ? +txAbsQty : -txAbsQty;
+
+      const invRow = await (this.prisma as any).inventory.findUnique({
+        where: {
+          skuId_locationId: { skuId: txItem.skuId, locationId: txItem.locationId },
+        },
+        select: { qty: true },
+      });
+
+      const before = Number(invRow?.qty ?? 0);
+      const after = before + delta;
+
+      if (after < 0) {
+        negativeItems.push({
+          txId: txItem.id,
+          skuCode: txItem.sku?.sku,
+          skuName: txItem.sku?.name,
+          makerCode: txItem.sku?.makerCode,
+          locationCode: txItem.location?.code,
+          locationName: txItem.location?.name,
+          currentQty: before,
+          afterQty: after,
+          delta,
+        });
+      }
+    }
+
+    return {
+      ok: true,
+      hasNegative: negativeItems.length > 0,
+      negativeItems,
+      message: negativeItems.length > 0
+        ? `UNDO 시 ${negativeItems.length}개 항목이 음수가 됩니다.`
+        : '정상 UNDO 가능',
+    };
+  }
+
+  /**
    * ✅ undoLastTx - 양방향 처리 지원
    * - 출고/입고 시 창고+매장 양쪽에 tx가 생성되므로, 연관된 tx들을 함께 삭제
    * - 같은 jobItemId + 1초 이내에 생성된 tx들을 쌍으로 처리
+   * - force=true: 음수 재고 허용 (경고 후 진행)
    */
-  async undoLastTx(jobId: string, operatorId?: string) {
+  async undoLastTx(jobId: string, operatorId?: string, force?: boolean) {
   return this.prisma.$transaction(async (tx) => {
     // 1) 마지막 InventoryTx (이 Job 기준)
     const lastTx = await (tx as any).inventoryTx.findFirst({
@@ -1144,11 +1266,45 @@ async addItems(jobId: string, dto: any) {
       const before = Number(invRow?.qty ?? 0);
       const after = before + delta;
 
-      // ✅ 음수 방어
+      // ✅ 음수 체크 - force=true면 허용하고 로그 기록
       if (after < 0) {
-        throw new BadRequestException(
-          `재고가 이미 다른 작업으로 사용되어 취소할 수 없어. (location: ${txItem.locationId}, 재고 부족)`,
-        );
+        if (!force) {
+          throw new BadRequestException(
+            `재고가 이미 다른 작업으로 사용되어 취소할 수 없어. (location: ${txItem.locationId}, 재고 부족)`,
+          );
+        }
+
+        // ✅ 강제 UNDO 시 음수 발생 로그 기록 (별도 tx로 기록)
+        const skuInfo = await (tx as any).sku.findUnique({
+          where: { id: txItem.skuId },
+          select: { sku: true, name: true, makerCode: true },
+        });
+        const locInfo = await (tx as any).location.findUnique({
+          where: { id: txItem.locationId },
+          select: { code: true, name: true },
+        });
+
+        const forceReason = `[강제UNDO] 음수재고허용 | 위치: ${locInfo?.code || txItem.locationId} | 상품: ${skuInfo?.name || skuInfo?.sku || txItem.skuId} (${skuInfo?.makerCode || '-'}) | 변경: ${before} → ${after} | 작업자: ${operatorId || '-'}`;
+
+        // 음수 발생 기록용 tx 생성 (type: 'adjust', isForced: true)
+        await (tx as any).inventoryTx.create({
+          data: {
+            skuId: txItem.skuId,
+            locationId: txItem.locationId,
+            qty: 0, // 기록용 - 실제 수량 변경은 아래서 처리
+            type: 'adjust',
+            isForced: true,
+            forcedReason: forceReason,
+            operatorId: operatorId || null,
+            jobId,
+            jobItemId: txItem.jobItemId,
+            beforeQty: before,
+            afterQty: after,
+            note: `UNDO로 인한 음수 재고 발생 기록`,
+          },
+        });
+
+        this.logger.warn(`[FORCE UNDO] ${forceReason}`);
       }
 
       await (tx as any).inventory.upsert({
@@ -1237,7 +1393,14 @@ async addItems(jobId: string, dto: any) {
     return (this.prisma as any).inventoryTx.findMany({
       where: { jobId },
       orderBy: { createdAt: 'desc' },
-      include: {
+      select: {
+        id: true,
+        qty: true,
+        type: true,
+        createdAt: true,
+        operatorId: true,
+        skuId: true,
+        locationId: true,
         sku: { select: { id: true, sku: true, makerCode: true, name: true } },
         location: { select: { id: true, code: true, name: true } },
       },
@@ -1267,7 +1430,7 @@ async addItems(jobId: string, dto: any) {
   }
 
   // job 전체 undo
-  async undoAllTx(jobId: string, operatorId?: string) {
+  async undoAllTx(jobId: string, operatorId?: string, force?: boolean) {
     let undoneCount = 0;
 
     while (true) {
@@ -1279,7 +1442,7 @@ async addItems(jobId: string, dto: any) {
 
       if (!last) break;
 
-      await this.undoLastTx(jobId, operatorId);
+      await this.undoLastTx(jobId, operatorId, force);
       undoneCount += 1;
 
       if (undoneCount > 5000) {

@@ -38,4 +38,13 @@ export class SalesController {
     }
     return this.sales.getSalesByStore(from, to);
   }
+
+  /**
+   * 디버그: 최근 저장된 매출 데이터 확인
+   * GET /sales/debug-recent
+   */
+  @Get('debug-recent')
+  async debugRecent() {
+    return this.sales.getRecentSalesRaw();
+  }
 }

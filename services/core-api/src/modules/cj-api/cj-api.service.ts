@@ -217,8 +217,6 @@ export class CjApiService {
         throw new Error(`CJ Waybill Error: ${result.RESULT_DETAIL || 'Unknown error'}`);
       }
 
-      this.logger.debug('Waybill response DATA:', JSON.stringify(result.DATA));
-
       // 응답 구조 확인: INVC_NO_LIST 또는 INVC_NO 배열
       const waybills = result.DATA.INVC_NO_LIST || [result.DATA.INVC_NO];
       return waybills.filter(Boolean);
@@ -235,6 +233,15 @@ export class CjApiService {
    */
 
   async createReservation(jobId: string): Promise<CjReservationData> {
+    // ✅ 중복 방지: 이미 CJ 예약이 있으면 에러 (PENDING은 제외)
+    const existing = await this.prisma.cjShipment.findUnique({
+      where: { jobId },
+    });
+    // PENDING 상태는 exports.service에서 선점 레코드로 생성한 것이므로 통과
+    if (existing && existing.invcNo !== 'PENDING') {
+      throw new BadRequestException('이미 CJ 예약이 완료된 주문입니다');
+    }
+
     // Job + JobParcel 조회
     const job = await this.prisma.job.findUnique({
       where: { id: jobId },
@@ -361,12 +368,6 @@ export class CjApiService {
     };
 
     try {
-      // 디버그: 전송 데이터 로깅
-      this.logger.debug('RegBook payload:', JSON.stringify({
-        ...payload.DATA,
-        TOKEN_NUM: '***',
-      }, null, 2));
-
       const response = await fetch(url, {
         method: 'POST',
         headers: {
@@ -381,7 +382,6 @@ export class CjApiService {
       }
 
       const result: any = await response.json();
-      this.logger.debug('RegBook response:', JSON.stringify(result));
 
       if (result.RESULT_CD !== 'S') {
         throw new Error(`CJ Reservation Error: ${result.RESULT_DETAIL || 'Unknown error'}`);
@@ -393,12 +393,22 @@ export class CjApiService {
       const responseRcptYmd = data.RCPT_YMD || rcptYmd;
       const responseMpckKey = data.MPCK_KEY || mpckKey;
 
-      // CjShipment DB 저장
-      await this.prisma.cjShipment.create({
-        data: {
+      // CjShipment DB 저장 (upsert: 재시도 시 중복 방지)
+      await this.prisma.cjShipment.upsert({
+        where: { jobId },
+        create: {
           jobId,
           invcNo: responseInvcNo,
           custUseNo: custUseNo,
+          rcptYmd: responseRcptYmd,
+          mpckKey: responseMpckKey,
+          reqInvcNoJson: { waybillNo } as any,
+          regBookJson: payload.DATA as any,
+          cjResJson: result as any,
+        },
+        update: {
+          invcNo: responseInvcNo,
+          custUseNo: custUseNo, // PENDING_xxx → 실제 주문번호로 업데이트
           rcptYmd: responseRcptYmd,
           mpckKey: responseMpckKey,
           reqInvcNoJson: { waybillNo } as any,
@@ -549,7 +559,6 @@ export class CjApiService {
       const result: any = await response.json();
 
       if (result.RESULT_CD !== 'S') {
-        // 운송장 스캔이 있거나 출력된 경우 등의 에러
         throw new Error(`CJ Cancel Error: ${result.RESULT_DETAIL || 'Unknown error'}`);
       }
 

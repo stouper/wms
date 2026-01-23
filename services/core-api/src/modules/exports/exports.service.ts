@@ -196,7 +196,6 @@ export class ExportsService {
         where: { id: pendingShipment.id },
         data: {
           invcNo: data.INVC_NO,
-          custUseNo: data.CUST_USE_NO || pendingShipment.custUseNo,
           rcptYmd: data.RCPT_YMD,
           mpckKey: data.MPCK_KEY,
         },
@@ -291,5 +290,12 @@ export class ExportsService {
       createdAt: shipment.createdAt,
       updatedAt: shipment.updatedAt,
     };
+  }
+
+  /**
+   * CJ 예약 취소 (테스트용)
+   */
+  async cancelCjReservation(jobId: string) {
+    return this.cjApi.cancelReservation(jobId);
   }
 }

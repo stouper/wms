@@ -3,6 +3,7 @@ import { inputStyle, primaryBtn } from "../ui/styles";
 import { http } from "../workflows/_common/http";
 import { parseInventoryResetFile } from "../workflows/_common/excel/parseInventoryReset";
 import { parseStoreBulkUpsertFile } from "../workflows/_common/excel/parseStoreBulkUpsert";
+import { runSalesImport } from "../workflows/sales/sales.workflow";
 
 export default function SettingsPage() {
   // 매장 관리
@@ -38,6 +39,12 @@ export default function SettingsPage() {
   const [resetPreview, setResetPreview] = useState(null);
   const [resetError, setResetError] = useState("");
 
+  // 재고 초기화 상세 모달
+  const [resetModalOpen, setResetModalOpen] = useState(false);
+  const [resetSortKey, setResetSortKey] = useState(""); // storeName, sku, qty, location, makerCode, name
+  const [resetSortDir, setResetSortDir] = useState("asc"); // asc, desc
+  const [resetFilterStore, setResetFilterStore] = useState(""); // 매장 필터
+
   // 재고 조정 (단건)
   const [invStoreCode, setInvStoreCode] = useState("");
   const [invError, setInvError] = useState("");
@@ -51,6 +58,13 @@ export default function SettingsPage() {
 
   // 재고관리용 매장 목록
   const [invStores, setInvStores] = useState([]);
+
+  // 매출 관리
+  const [salesFile, setSalesFile] = useState(null);
+  const [salesSourceKey, setSalesSourceKey] = useState("");
+  const [salesUploading, setSalesUploading] = useState(false);
+  const [salesResult, setSalesResult] = useState(null);
+  const [salesError, setSalesError] = useState("");
 
   // 매장 목록 로드
   async function loadStores() {
@@ -296,42 +310,115 @@ export default function SettingsPage() {
     }
   }
 
-  // 재고 초기화 실행
-  async function handleResetUpload() {
-    if (!resetStoreCode) {
-      setResetError("매장을 선택해주세요.");
-      return;
-    }
+  // 재고 초기화 실행 (매장명 매칭으로 여러 매장 한번에 처리)
+  // skipConfirm: 모달에서 이미 확인한 경우 confirm 건너뛰기
+  async function handleResetUpload(skipConfirm = false) {
     if (!resetPreview?.rows?.length) {
       setResetError("업로드할 데이터가 없습니다.");
       return;
     }
 
-    const storeName = invStores.find(s => s.code === resetStoreCode)?.name || resetStoreCode;
-    if (!confirm(`[${storeName}] 매장의 재고를 엑셀 기준으로 전체 교체합니다.\n\n⚠️ 주의: 엑셀에 없는 재고는 삭제됩니다.\n\n계속하시겠습니까?`)) {
+    // 엑셀 rows를 storeName별로 그룹핑
+    const groupedByStore = {};
+    const unmatchedStores = new Set();
+
+    for (const row of resetPreview.rows) {
+      const storeName = (row.storeName || "").trim();
+      if (!storeName) continue;
+
+      // 매장명으로 매칭 (name 또는 code로 매칭)
+      const matchedStore = invStores.find(
+        (s) => s.name === storeName || s.code === storeName
+      );
+
+      if (!matchedStore) {
+        unmatchedStores.add(storeName);
+        continue;
+      }
+
+      const storeCode = matchedStore.code;
+      const isHq = matchedStore.isHq;
+
+      if (!groupedByStore[storeCode]) {
+        groupedByStore[storeCode] = {
+          storeCode,
+          storeName: matchedStore.name,
+          isHq,
+          rows: [],
+        };
+      }
+
+      // 매장(isHq가 아닌 경우)이고 location이 없으면 FLOOR로 자동 설정
+      const finalRow = { ...row };
+      if (!isHq && !finalRow.location) {
+        finalRow.location = "FLOOR";
+      }
+
+      groupedByStore[storeCode].rows.push(finalRow);
+    }
+
+    const storeGroups = Object.values(groupedByStore);
+
+    if (storeGroups.length === 0) {
+      setResetError(`매칭되는 매장이 없습니다. 엑셀의 '매장/창고' 컬럼을 확인해주세요.\n매칭 실패: ${[...unmatchedStores].join(", ")}`);
       return;
+    }
+
+    // 확인 메시지 (모달에서 이미 확인한 경우 건너뛰기)
+    if (!skipConfirm) {
+      const storeList = storeGroups.map((g) => `  • ${g.storeName} (${g.storeCode}): ${g.rows.length}건`).join("\n");
+      const unmatchedMsg = unmatchedStores.size > 0 ? `\n\n⚠️ 매칭 실패 매장: ${[...unmatchedStores].join(", ")}` : "";
+
+      if (!confirm(`다음 매장의 재고를 엑셀 기준으로 전체 교체합니다.\n\n${storeList}${unmatchedMsg}\n\n⚠️ 주의: 각 매장별로 엑셀에 없는 재고는 삭제됩니다.\n\n계속하시겠습니까?`)) {
+        return;
+      }
     }
 
     setResetUploading(true);
     setResetResult(null);
     setResetError("");
 
-    try {
-      const res = await http.post("/inventory/reset", {
-        storeCode: resetStoreCode,
-        rows: resetPreview.rows,
-      });
+    const results = [];
+    const errors = [];
 
-      setResetResult(res);
-
-      if (res?.ok) {
-        alert(`재고 초기화 완료!\n\n매장: ${res.storeCode}\nLocation: ${res.locations}개\nSKU: ${res.skus}개\n적용: ${res.applied}건`);
+    for (const group of storeGroups) {
+      try {
+        const res = await http.post("/inventory/reset", {
+          storeCode: group.storeCode,
+          rows: group.rows,
+        });
+        results.push({
+          storeCode: group.storeCode,
+          storeName: group.storeName,
+          ...res,
+        });
+      } catch (err) {
+        errors.push({
+          storeCode: group.storeCode,
+          storeName: group.storeName,
+          error: err?.message || "업로드 실패",
+        });
       }
-    } catch (err) {
-      setResetError(err?.message || "업로드 실패");
-    } finally {
-      setResetUploading(false);
     }
+
+    setResetResult({ results, errors, totalStores: storeGroups.length });
+
+    // 완료 메시지
+    const successCount = results.length;
+    const errorCount = errors.length;
+    const totalApplied = results.reduce((sum, r) => sum + (r.applied || 0), 0);
+
+    let msg = `재고 초기화 완료!\n\n성공: ${successCount}개 매장\n적용: ${totalApplied}건`;
+    if (errorCount > 0) {
+      msg += `\n\n❌ 실패: ${errorCount}개 매장\n${errors.map((e) => `  • ${e.storeName}: ${e.error}`).join("\n")}`;
+    }
+    alert(msg);
+
+    if (errors.length > 0) {
+      setResetError(`${errors.length}개 매장 처리 실패: ${errors.map((e) => e.storeName).join(", ")}`);
+    }
+
+    setResetUploading(false);
   }
 
   // 단건 재고 조회 (SKU 또는 MakerCode로 검색)
@@ -416,6 +503,53 @@ export default function SettingsPage() {
     }
   }
 
+  // 매출 엑셀 파일 선택
+  function handleSalesFileSelect(e) {
+    const file = e.target.files?.[0];
+    if (!file) return;
+
+    setSalesFile(file);
+    setSalesResult(null);
+    setSalesError("");
+
+    // sourceKey 자동 설정
+    if (!salesSourceKey) {
+      setSalesSourceKey(file.name.replace(/\.(xlsx|xls|csv)$/i, ""));
+    }
+  }
+
+  // 매출 엑셀 업로드
+  async function handleSalesUpload() {
+    if (!salesFile) {
+      setSalesError("엑셀 파일을 선택해주세요.");
+      return;
+    }
+
+    setSalesUploading(true);
+    setSalesResult(null);
+    setSalesError("");
+
+    try {
+      const res = await runSalesImport({
+        file: salesFile,
+        sourceKey: salesSourceKey?.trim() || null,
+        onProgress: () => {},
+      });
+
+      setSalesResult(res);
+
+      if (res?.inserted > 0) {
+        alert(`매출 업로드 완료: ${res.inserted}건 저장${res.skipped ? ` (${res.skipped}건 스킵)` : ""}`);
+      } else {
+        alert(`업로드 결과: 저장된 데이터가 없습니다 (스킵: ${res?.skipped || 0}건)`);
+      }
+    } catch (err) {
+      setSalesError(err?.message || "매출 업로드 실패");
+    } finally {
+      setSalesUploading(false);
+    }
+  }
+
   const cardStyle = {
     background: "#fff",
     borderRadius: 8,
@@ -463,7 +597,7 @@ export default function SettingsPage() {
         <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 10 }}>
           <span style={{ fontSize: 13, fontWeight: 700 }}>매장 관리</span>
           <span style={{ fontSize: 11, color: "#64748b" }}>
-            Excel 일괄 등록 - 필수: <b>매장코드</b> | 선택: 매장명
+            Excel 일괄 등록 - 필수: <b>매장코드</b>, <b>매장명</b>
           </span>
         </div>
         <div style={{ display: "flex", gap: 6, alignItems: "center", justifyContent: "space-between", marginBottom: storeError ? 8 : 0 }}>
@@ -577,28 +711,28 @@ export default function SettingsPage() {
                       </td>
                       <td style={tdStyle}>
                         {editingStore?.id === s.id ? (
-                          <div style={{ display: "flex", gap: 4 }}>
+                          <div style={{ display: "flex", gap: 4, whiteSpace: "nowrap" }}>
                             <button
                               type="button"
                               onClick={handleUpdateStore}
-                              style={{ ...smallBtnStyle, background: "#3b82f6", color: "#fff", border: "none", padding: "4px 8px" }}
+                              style={{ ...smallBtnStyle, background: "#3b82f6", color: "#fff", border: "none", padding: "4px 8px", whiteSpace: "nowrap" }}
                             >
                               저장
                             </button>
                             <button
                               type="button"
                               onClick={() => setEditingStore(null)}
-                              style={{ ...smallBtnStyle, padding: "4px 8px" }}
+                              style={{ ...smallBtnStyle, padding: "4px 8px", whiteSpace: "nowrap" }}
                             >
                               취소
                             </button>
                           </div>
                         ) : (
-                          <div style={{ display: "flex", gap: 4 }}>
+                          <div style={{ display: "flex", gap: 4, whiteSpace: "nowrap" }}>
                             <button
                               type="button"
                               onClick={() => setEditingStore({ id: s.id, code: s.code, name: s.name || "" })}
-                              style={{ ...smallBtnStyle, padding: "4px 8px" }}
+                              style={{ ...smallBtnStyle, padding: "4px 8px", whiteSpace: "nowrap" }}
                             >
                               수정
                             </button>
@@ -606,7 +740,7 @@ export default function SettingsPage() {
                               <button
                                 type="button"
                                 onClick={() => handleDeleteStore(s.id, s.code, s.isHq)}
-                                style={{ ...smallBtnStyle, color: "#ef4444", padding: "4px 8px" }}
+                                style={{ ...smallBtnStyle, color: "#ef4444", padding: "4px 8px", whiteSpace: "nowrap" }}
                               >
                                 삭제
                               </button>
@@ -827,23 +961,11 @@ export default function SettingsPage() {
             <span style={{ fontSize: 11, color: "#dc2626" }}>전체 교체 (엑셀에 없는 재고 삭제)</span>
           </div>
           <span style={{ fontSize: 11, color: "#64748b" }}>
-            필수: <b>SKU</b>, <b>수량</b>, <b>Location</b>, <b>MakerCode</b>, <b>상품명</b> | 선택: 상품구분
+            필수: <b>매장/창고</b>, <b>SKU</b>, <b>수량</b>, <b>MakerCode</b>, <b>상품명</b> | 선택: Location (매장은 FLOOR 자동)
           </span>
         </div>
         <div style={{ display: "flex", gap: 6, alignItems: "center", justifyContent: "space-between", marginBottom: 10 }}>
           <div style={{ display: "flex", gap: 6, alignItems: "center" }}>
-            <select
-              value={resetStoreCode}
-              onChange={(e) => setResetStoreCode(e.target.value)}
-              style={{ ...inputSmall, minWidth: 180 }}
-            >
-              <option value="">-- 매장 선택 --</option>
-              {invStores.map((s) => (
-                <option key={s.id} value={s.code}>
-                  {s.name} ({s.code}) {s.isHq ? "[본사]" : ""}
-                </option>
-              ))}
-            </select>
             <input
               type="file"
               accept=".xlsx,.xls"
@@ -851,14 +973,20 @@ export default function SettingsPage() {
               disabled={resetUploading}
               style={{ fontSize: 12 }}
             />
+            <span style={{ fontSize: 11, color: "#64748b" }}>엑셀의 '매장/창고' 컬럼으로 매장 자동 매칭</span>
           </div>
           <button
             type="button"
-            onClick={handleResetUpload}
-            disabled={resetUploading || !resetStoreCode || !resetPreview?.rows?.length}
-            style={{ ...primaryBtn, padding: "6px 12px", fontSize: 12, background: "#fef2f2", border: "1px solid #fecaca", color: "#dc2626" }}
+            onClick={() => {
+              setResetSortKey("");
+              setResetSortDir("asc");
+              setResetFilterStore("");
+              setResetModalOpen(true);
+            }}
+            disabled={!resetPreview?.rows?.length}
+            style={{ ...primaryBtn, padding: "6px 12px", fontSize: 12 }}
           >
-            {resetUploading ? "..." : "초기화 실행"}
+            상세 보기
           </button>
         </div>
 
@@ -879,12 +1007,27 @@ export default function SettingsPage() {
                 </span>
               )}
             </div>
+            {/* 매장별 요약 */}
+            {(() => {
+              const storeNames = [...new Set(resetPreview.rows?.map(r => r.storeName).filter(Boolean) || [])];
+              const matched = storeNames.filter(name => invStores.some(s => s.name === name || s.code === name));
+              const unmatched = storeNames.filter(name => !invStores.some(s => s.name === name || s.code === name));
+              return (
+                <div style={{ fontSize: 11, marginBottom: 8, padding: 6, background: "#f8fafc", borderRadius: 4 }}>
+                  <span>매장: </span>
+                  {matched.length > 0 && <span style={{ color: "#16a34a" }}>매칭됨 {matched.length}개 ({matched.join(", ")})</span>}
+                  {matched.length > 0 && unmatched.length > 0 && <span> | </span>}
+                  {unmatched.length > 0 && <span style={{ color: "#dc2626" }}>미매칭 {unmatched.length}개 ({unmatched.join(", ")})</span>}
+                </div>
+              );
+            })()}
 
             {resetPreview.sample?.length > 0 && (
               <div style={{ maxHeight: 180, overflow: "auto", border: "1px solid #e5e7eb", borderRadius: 6 }}>
                 <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 11 }}>
                   <thead>
                     <tr style={{ background: "#f8fafc" }}>
+                      <th style={thStyle}>매장/창고</th>
                       <th style={thStyle}>SKU</th>
                       <th style={{ ...thStyle, textAlign: "right" }}>수량</th>
                       <th style={thStyle}>Location</th>
@@ -895,6 +1038,7 @@ export default function SettingsPage() {
                   <tbody>
                     {resetPreview.sample.map((item, idx) => (
                       <tr key={idx}>
+                        <td style={{ ...tdStyle, fontWeight: 600, color: invStores.some(s => s.name === item.storeName || s.code === item.storeName) ? "#16a34a" : "#dc2626" }}>{item.storeName || "-"}</td>
                         <td style={tdStyle}><b>{item.sku}</b></td>
                         <td style={{ ...tdStyle, textAlign: "right" }}>{item.qty?.toLocaleString()}</td>
                         <td style={tdStyle}>{item.location || "-"}</td>
@@ -912,12 +1056,84 @@ export default function SettingsPage() {
         {/* 업로드 결과 */}
         {resetResult && (
           <div style={{ marginTop: 10, padding: 10, background: "#f0fdf4", borderRadius: 8, fontSize: 12 }}>
-            <div>
-              매장: <b>{resetResult.storeCode}</b> |
-              Location: <b>{resetResult.locations}</b>개 |
-              SKU: <b>{resetResult.skus}</b>개 |
-              적용: <b style={{ color: "#16a34a" }}>{resetResult.applied}</b>건
+            <div style={{ marginBottom: 6, fontWeight: 700 }}>
+              처리 완료: {resetResult.results?.length || 0}개 매장
+              {resetResult.errors?.length > 0 && <span style={{ color: "#dc2626", marginLeft: 8 }}>실패: {resetResult.errors.length}개</span>}
             </div>
+            {resetResult.results?.map((r, idx) => (
+              <div key={idx} style={{ marginBottom: 4 }}>
+                <span style={{ color: "#16a34a" }}>✓</span> {r.storeName} ({r.storeCode}): Location {r.locations}개, SKU {r.skus}개, 적용 <b>{r.applied}</b>건
+              </div>
+            ))}
+            {resetResult.errors?.map((e, idx) => (
+              <div key={idx} style={{ marginBottom: 4, color: "#dc2626" }}>
+                ✗ {e.storeName} ({e.storeCode}): {e.error}
+              </div>
+            ))}
+          </div>
+        )}
+      </div>
+
+      {/* 매출 관리 */}
+      <div style={cardStyle}>
+        <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 6 }}>
+          <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+            <span style={{ fontSize: 13, fontWeight: 700 }}>매출 관리</span>
+            <span style={{ fontSize: 11, color: "#0ea5e9" }}>매출 데이터 업로드</span>
+          </div>
+          <span style={{ fontSize: 11, color: "#64748b" }}>
+            필수: <b>매장명</b>, <b>매출일</b>, <b>매출금액</b>, <b>수량</b>, <b>코드명</b> | 선택: 구분, 단품코드
+          </span>
+        </div>
+
+        <div style={{ display: "flex", gap: 6, alignItems: "center", flexWrap: "wrap" }}>
+          <input
+            type="file"
+            accept=".xlsx,.xls"
+            onChange={handleSalesFileSelect}
+            disabled={salesUploading}
+            style={{ fontSize: 12 }}
+          />
+          <input
+            type="text"
+            value={salesSourceKey}
+            onChange={(e) => setSalesSourceKey(e.target.value)}
+            placeholder="sourceKey (중복 추적용)"
+            style={{ ...inputSmall, width: 180 }}
+            disabled={salesUploading}
+          />
+          <button
+            type="button"
+            onClick={handleSalesUpload}
+            disabled={salesUploading || !salesFile}
+            style={{ ...primaryBtn, padding: "6px 12px", fontSize: 12 }}
+          >
+            {salesUploading ? "업로드 중..." : "업로드"}
+          </button>
+        </div>
+
+        {salesFile && (
+          <div style={{ marginTop: 8, fontSize: 12, color: "#78716c" }}>
+            선택됨: <b>{salesFile.name}</b>
+          </div>
+        )}
+
+        {salesError && (
+          <div style={{ marginTop: 8, fontSize: 11, color: "#ef4444" }}>
+            {salesError}
+          </div>
+        )}
+
+        {salesResult && (
+          <div style={{ marginTop: 10, padding: 10, background: "#f0fdf4", borderRadius: 8, fontSize: 12 }}>
+            <div>
+              저장: <b style={{ color: "#16a34a" }}>{salesResult.inserted}</b>건 | 스킵: <b>{salesResult.skipped}</b>건
+            </div>
+            {salesResult.errorsSample?.length > 0 && (
+              <div style={{ marginTop: 6, color: "#dc2626" }}>
+                에러 샘플: {salesResult.errorsSample.slice(0, 3).join(", ")}
+              </div>
+            )}
           </div>
         )}
       </div>
@@ -1002,6 +1218,227 @@ export default function SettingsPage() {
           </div>
         )}
       </div>
+
+      {/* 재고 초기화 상세 모달 */}
+      {resetModalOpen && resetPreview?.rows?.length > 0 && (
+        <div
+          style={{
+            position: "fixed",
+            top: 0,
+            left: 0,
+            right: 0,
+            bottom: 0,
+            background: "rgba(0,0,0,0.5)",
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "center",
+            zIndex: 1000,
+          }}
+          onClick={(e) => {
+            if (e.target === e.currentTarget) setResetModalOpen(false);
+          }}
+        >
+          <div
+            style={{
+              background: "#fff",
+              borderRadius: 12,
+              width: "90%",
+              maxWidth: 1200,
+              maxHeight: "90vh",
+              display: "flex",
+              flexDirection: "column",
+              boxShadow: "0 20px 60px rgba(0,0,0,0.3)",
+            }}
+          >
+            {/* 모달 헤더 */}
+            <div
+              style={{
+                padding: "16px 20px",
+                borderBottom: "1px solid #e5e7eb",
+                display: "flex",
+                alignItems: "center",
+                justifyContent: "space-between",
+              }}
+            >
+              <div>
+                <span style={{ fontSize: 16, fontWeight: 700 }}>재고 초기화 상세</span>
+                <span style={{ fontSize: 13, color: "#64748b", marginLeft: 12 }}>
+                  총 <b>{resetPreview.rows.length}</b>건
+                </span>
+              </div>
+              <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
+                <select
+                  value={resetFilterStore}
+                  onChange={(e) => setResetFilterStore(e.target.value)}
+                  style={{ ...inputSmall, minWidth: 150 }}
+                >
+                  <option value="">전체 매장</option>
+                  {[...new Set(resetPreview.rows.map((r) => r.storeName).filter(Boolean))].map((name) => (
+                    <option key={name} value={name}>
+                      {name}
+                    </option>
+                  ))}
+                </select>
+                <button
+                  type="button"
+                  onClick={() => setResetModalOpen(false)}
+                  style={{ padding: "6px 12px", borderRadius: 6, border: "1px solid #e5e7eb", background: "#fff", cursor: "pointer", fontSize: 12 }}
+                >
+                  닫기
+                </button>
+              </div>
+            </div>
+
+            {/* 모달 본문 - 테이블 */}
+            <div style={{ flex: 1, overflow: "auto", padding: "0 20px" }}>
+              <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 12 }}>
+                <thead style={{ position: "sticky", top: 0, background: "#f8fafc", zIndex: 1 }}>
+                  <tr>
+                    {[
+                      { key: "storeName", label: "매장/창고" },
+                      { key: "sku", label: "SKU" },
+                      { key: "qty", label: "수량", align: "right" },
+                      { key: "location", label: "Location" },
+                      { key: "makerCode", label: "MakerCode" },
+                      { key: "name", label: "상품명" },
+                      { key: "productType", label: "상품구분" },
+                    ].map((col) => (
+                      <th
+                        key={col.key}
+                        onClick={() => {
+                          if (resetSortKey === col.key) {
+                            setResetSortDir(resetSortDir === "asc" ? "desc" : "asc");
+                          } else {
+                            setResetSortKey(col.key);
+                            setResetSortDir("asc");
+                          }
+                        }}
+                        style={{
+                          ...thStyle,
+                          textAlign: col.align || "left",
+                          cursor: "pointer",
+                          userSelect: "none",
+                          whiteSpace: "nowrap",
+                        }}
+                      >
+                        {col.label}
+                        {resetSortKey === col.key && (
+                          <span style={{ marginLeft: 4 }}>{resetSortDir === "asc" ? "▲" : "▼"}</span>
+                        )}
+                      </th>
+                    ))}
+                  </tr>
+                </thead>
+                <tbody>
+                  {(() => {
+                    let rows = [...resetPreview.rows];
+
+                    // 매장 필터
+                    if (resetFilterStore) {
+                      rows = rows.filter((r) => r.storeName === resetFilterStore);
+                    }
+
+                    // 정렬
+                    if (resetSortKey) {
+                      rows.sort((a, b) => {
+                        let va = a[resetSortKey] ?? "";
+                        let vb = b[resetSortKey] ?? "";
+
+                        // 숫자 컬럼
+                        if (resetSortKey === "qty") {
+                          va = Number(va) || 0;
+                          vb = Number(vb) || 0;
+                          return resetSortDir === "asc" ? va - vb : vb - va;
+                        }
+
+                        // 문자열 컬럼
+                        va = String(va).toLowerCase();
+                        vb = String(vb).toLowerCase();
+                        if (va < vb) return resetSortDir === "asc" ? -1 : 1;
+                        if (va > vb) return resetSortDir === "asc" ? 1 : -1;
+                        return 0;
+                      });
+                    }
+
+                    return rows.map((item, idx) => {
+                      const isMatched = invStores.some((s) => s.name === item.storeName || s.code === item.storeName);
+                      return (
+                        <tr key={idx} style={{ borderBottom: "1px solid #f1f5f9" }}>
+                          <td style={{ ...tdStyle, fontWeight: 600, color: isMatched ? "#16a34a" : "#dc2626" }}>
+                            {item.storeName || "-"}
+                          </td>
+                          <td style={{ ...tdStyle, fontWeight: 600 }}>{item.sku}</td>
+                          <td style={{ ...tdStyle, textAlign: "right" }}>{item.qty?.toLocaleString()}</td>
+                          <td style={tdStyle}>{item.location || "-"}</td>
+                          <td style={tdStyle}>{item.makerCode || "-"}</td>
+                          <td style={tdStyle}>{item.name || "-"}</td>
+                          <td style={tdStyle}>{item.productType || "-"}</td>
+                        </tr>
+                      );
+                    });
+                  })()}
+                </tbody>
+              </table>
+            </div>
+
+            {/* 모달 푸터 */}
+            <div
+              style={{
+                padding: "16px 20px",
+                borderTop: "1px solid #e5e7eb",
+                display: "flex",
+                alignItems: "center",
+                justifyContent: "space-between",
+              }}
+            >
+              <div style={{ fontSize: 12, color: "#64748b" }}>
+                {(() => {
+                  const storeNames = [...new Set(resetPreview.rows.map((r) => r.storeName).filter(Boolean))];
+                  const matched = storeNames.filter((name) => invStores.some((s) => s.name === name || s.code === name));
+                  const unmatched = storeNames.filter((name) => !invStores.some((s) => s.name === name || s.code === name));
+                  return (
+                    <>
+                      <span style={{ color: "#16a34a" }}>매칭됨: {matched.length}개 매장</span>
+                      {unmatched.length > 0 && (
+                        <span style={{ color: "#dc2626", marginLeft: 12 }}>미매칭: {unmatched.length}개 ({unmatched.join(", ")})</span>
+                      )}
+                    </>
+                  );
+                })()}
+              </div>
+              <div style={{ display: "flex", gap: 8 }}>
+                <button
+                  type="button"
+                  onClick={() => setResetModalOpen(false)}
+                  style={{ padding: "8px 16px", borderRadius: 6, border: "1px solid #e5e7eb", background: "#fff", cursor: "pointer", fontSize: 13 }}
+                >
+                  취소
+                </button>
+                <button
+                  type="button"
+                  onClick={() => {
+                    setResetModalOpen(false);
+                    handleResetUpload(true); // skipConfirm=true: 모달에서 이미 확인함
+                  }}
+                  disabled={resetUploading}
+                  style={{
+                    padding: "8px 20px",
+                    borderRadius: 6,
+                    border: "1px solid #fecaca",
+                    background: "#fef2f2",
+                    color: "#dc2626",
+                    cursor: "pointer",
+                    fontSize: 13,
+                    fontWeight: 600,
+                  }}
+                >
+                  {resetUploading ? "처리중..." : "확정 (재고 초기화 실행)"}
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

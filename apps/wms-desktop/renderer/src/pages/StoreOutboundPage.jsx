@@ -525,7 +525,7 @@ export default function StoreOutboundPage({ pageTitle = "매장 출고", default
                     {j.title || "Job"}
                   </div>
                   <div style={{ fontSize: 12, color: "#64748b", whiteSpace: "nowrap" }}>
-                    store <b>{jobStoreLabel(j, defaultStoreCode)}</b> · <b>{j.status}</b>
+                    store <b>{jobStoreLabel(j, defaultStoreCode)}</b> · <b>{j.status}</b> · 등록: <b>{j.operatorId || "-"}</b>
                   </div>
                 </button>
 
@@ -730,13 +730,16 @@ export default function StoreOutboundPage({ pageTitle = "매장 출고", default
               onClick={async () => {
                 await warmUpAudioOnce();
                 playScanWarnBeep();
-                const ok = window.confirm("이 Job의 스캔 로그를 전부 취소(UNDO ALL)할까?");
+
+                // ✅ 전체취소는 음수 발생 가능성이 높으므로 강제 옵션 제공
+                const confirmMsg = `이 Job의 스캔 로그를 전부 취소(UNDO ALL)할까?\n\n⚠️ 음수 재고가 발생할 수 있습니다.`;
+                const ok = window.confirm(confirmMsg);
                 if (!ok) return;
 
                 setUndoing(true);
                 try {
-                  await jobsFlow.undoAll({ jobId: selectedJobId });
-                  pushToast({ kind: "info", title: "UNDO ALL", message: "전체 취소 완료" });
+                  await jobsFlow.undoAll({ jobId: selectedJobId, force: true });
+                  pushToast({ kind: "warn", title: "UNDO ALL", message: "전체 취소 완료 (음수 재고 발생 가능)" });
                   triggerTotalsFlash();
                   await loadJob(selectedJobId);
                   await loadTx(selectedJobId);
@@ -771,12 +774,14 @@ export default function StoreOutboundPage({ pageTitle = "매장 출고", default
               <table style={{ width: "100%", borderCollapse: "collapse" }}>
                 <thead>
                   <tr>
-                    <Th style={{ width: 80 }}>time</Th>
-                    <Th style={{ width: 90 }}>location</Th>
+                    <Th style={{ width: 70 }}>time</Th>
+                    <Th style={{ width: 70 }}>매장</Th>
+                    <Th style={{ width: 70 }}>작업자</Th>
+                    <Th style={{ width: 80 }}>location</Th>
                     <Th>sku</Th>
-                    <Th style={{ width: 130 }}>makerCode</Th>
-                    <Th align="right" style={{ width: 60 }}>qty</Th>
-                    <Th style={{ width: 60 }}></Th>
+                    <Th style={{ width: 110 }}>makerCode</Th>
+                    <Th align="right" style={{ width: 50 }}>qty</Th>
+                    <Th style={{ width: 50 }}></Th>
                   </tr>
                 </thead>
                 <tbody>
@@ -785,20 +790,22 @@ export default function StoreOutboundPage({ pageTitle = "매장 출고", default
                     const time = t ? t.toLocaleTimeString() : "-";
                     const qty = tx?.qty ?? tx?.deltaQty ?? "-";
                     const loc = tx?.locationCode || tx?.location?.code || tx?.locationId || "-";
-                    // ✅ SKU 이름 우선, 없으면 바코드 값으로 대체
                     const skuName = tx?.sku?.name || tx?.skuCode || tx?.sku?.sku || "-";
                     const makerCode = tx?.sku?.makerCode || tx?.makerCode || "-";
+                    const scanOperator = tx?.operatorId || "-";
+                    const storeName = selectedJob?.store?.name || jobStoreLabel(selectedJob, defaultStoreCode) || "-";
 
-                    // ✅ 서버에서 desc 정렬 → idx=0이 최근 스캔
                     const isLatest = idx === 0;
 
                     return (
                       <tr key={tx.id || idx}>
-                        <Td style={{ fontSize: 14, fontWeight: 600, color: "#475569" }}>{time}</Td>
-                        <Td style={{ fontSize: 14, fontWeight: 600, color: "#1e293b" }}>{loc}</Td>
-                        <Td style={{ fontSize: 14, fontWeight: 600, color: "#1e293b" }}>{skuName}</Td>
-                        <Td style={{ fontSize: 14, fontWeight: 600, color: "#1e293b" }}>{makerCode}</Td>
-                        <Td align="right" style={{ fontSize: 14, fontWeight: 700, color: "#1e293b" }}>
+                        <Td style={{ fontSize: 13, fontWeight: 600, color: "#475569" }}>{time}</Td>
+                        <Td style={{ fontSize: 13, fontWeight: 600, color: "#1e293b" }}>{storeName}</Td>
+                        <Td style={{ fontSize: 13, fontWeight: 600, color: "#6366f1" }}>{scanOperator}</Td>
+                        <Td style={{ fontSize: 13, fontWeight: 600, color: "#1e293b" }}>{loc}</Td>
+                        <Td style={{ fontSize: 13, fontWeight: 600, color: "#1e293b" }}>{skuName}</Td>
+                        <Td style={{ fontSize: 13, fontWeight: 600, color: "#1e293b" }}>{makerCode}</Td>
+                        <Td align="right" style={{ fontSize: 13, fontWeight: 700, color: "#1e293b" }}>
                           {qty}
                         </Td>
                         <Td align="right">
@@ -811,13 +818,36 @@ export default function StoreOutboundPage({ pageTitle = "매장 출고", default
                                 await warmUpAudioOnce();
                                 playScanWarnBeep();
 
-                                const ok = window.confirm("직전 스캔 1건을 취소할까?");
-                                if (!ok) return;
+                                // ✅ 1단계: 음수 발생 여부 체크
+                                let forceUndo = false;
+                                try {
+                                  const checkRes = await jobsFlow.checkUndo({ jobId: selectedJobId });
+                                  if (checkRes?.hasNegative) {
+                                    const items = checkRes.negativeItems || [];
+                                    const details = items.map(it =>
+                                      `• ${it.skuName || it.skuCode} (${it.locationCode}): ${it.currentQty} → ${it.afterQty}`
+                                    ).join("\n");
+
+                                    const confirmMsg = `⚠️ 경고: UNDO 시 재고가 음수가 됩니다!\n\n${details}\n\n음수 재고를 허용하고 강제 취소할까요?`;
+                                    forceUndo = window.confirm(confirmMsg);
+                                    if (!forceUndo) return;
+                                  } else {
+                                    const ok = window.confirm("직전 스캔 1건을 취소할까?");
+                                    if (!ok) return;
+                                  }
+                                } catch (checkErr) {
+                                  const ok = window.confirm("직전 스캔 1건을 취소할까?");
+                                  if (!ok) return;
+                                }
 
                                 setUndoing(true);
                                 try {
-                                  await jobsFlow.undoLast({ jobId: selectedJobId });
-                                  pushToast({ kind: "info", title: "UNDO", message: "취소 완료 (1건)" });
+                                  await jobsFlow.undoLast({ jobId: selectedJobId, force: forceUndo });
+                                  pushToast({
+                                    kind: forceUndo ? "warn" : "info",
+                                    title: "UNDO",
+                                    message: forceUndo ? "강제 취소 완료 (음수 재고 발생)" : "취소 완료 (1건)"
+                                  });
                                   triggerTotalsFlash();
                                   await loadJob(selectedJobId);
                                   await loadTx(selectedJobId);

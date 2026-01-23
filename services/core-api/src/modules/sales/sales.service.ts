@@ -4,6 +4,53 @@ import { PrismaService } from '../../prisma/prisma.service';
 
 type RowObj = Record<string, any>;
 
+/**
+ * 헤더 정규화: 특수문자/공백/괄호 제거, 소문자화
+ * 엑셀 정렬 시 생성되는 ▲▼ 등 특수문자 처리
+ */
+function normHeader(s: string): string {
+  const raw = String(s ?? '').trim();
+  if (!raw) return '';
+  return raw
+    .replace(/\s+/g, '')           // 공백 제거
+    .replace(/[()[\]{}]/g, '')     // 괄호 제거
+    .replace(/[▲▼△▽↑↓←→]/g, '')   // 정렬 특수문자 제거
+    .replace(/[\u200B-\u200D\uFEFF]/g, '') // 제로폭 문자/BOM 제거
+    .toLowerCase();
+}
+
+/**
+ * 여러 키워드 중 매칭되는 값 추출
+ */
+function pick(obj: RowObj, keys: string[]): any {
+  const normalizedKeys = keys.map((k) => normHeader(k));
+
+  for (const objKey of Object.keys(obj || {})) {
+    const normalizedObjKey = normHeader(objKey);
+    const idx = normalizedKeys.indexOf(normalizedObjKey);
+    if (idx >= 0) {
+      const v = obj[objKey];
+      if (v !== undefined && v !== null && String(v).trim() !== '') return v;
+    }
+  }
+  return '';
+}
+
+/**
+ * 필수 헤더 존재 여부 확인 (정규화된 키로 비교)
+ */
+function hasHeader(obj: RowObj, keys: string[]): boolean {
+  const normalizedKeys = keys.map((k) => normHeader(k));
+
+  for (const objKey of Object.keys(obj || {})) {
+    const normalizedObjKey = normHeader(objKey);
+    if (normalizedKeys.includes(normalizedObjKey)) {
+      return true;
+    }
+  }
+  return false;
+}
+
 function toInt(v: any, fieldName: string, defaultValue: number | null = null) {
   if (v === null || v === undefined || v === '') return defaultValue;
   const cleaned = String(v).replace(/,/g, '').trim();
@@ -66,6 +113,17 @@ function endOfDay(d: Date): Date {
   return new Date(d.getFullYear(), d.getMonth(), d.getDate(), 23, 59, 59, 999);
 }
 
+// 헤더 파싱 키워드 정의
+const HEADER_KEYWORDS = {
+  storeName: ['매장명', 'storeName', 'store_name', '매장', '지점', '지점명'],
+  saleDate: ['매출일', 'saleDate', 'sale_date', '일자', '날짜', 'date'],
+  amount: ['매출금액', 'amount', '금액', '매출액', 'salesAmount', 'sales_amount'],
+  qty: ['수량', 'qty', 'quantity', '판매수량'],
+  codeName: ['코드명', 'codeName', 'code_name', '상품명', '품명', 'productName', 'product_name'],
+  productType: ['구분', 'productType', 'product_type', '상품구분', 'type', 'category'],
+  itemCode: ['단품코드', 'itemCode', 'item_code', 'sku', 'SKU', '품번'],
+};
+
 @Injectable()
 export class SalesService {
   constructor(private readonly prisma: PrismaService) {}
@@ -87,11 +145,20 @@ export class SalesService {
     }
 
     const first = rows[0];
-    const requiredHeaders = ['매장명', '매출일', '매출금액'];
-    for (const h of requiredHeaders) {
-      if (!(h in first)) {
+
+    // 필수 헤더 검증 (정규화된 키로 비교)
+    const requiredChecks = [
+      { name: '매장명', keys: HEADER_KEYWORDS.storeName },
+      { name: '매출일', keys: HEADER_KEYWORDS.saleDate },
+      { name: '매출금액', keys: HEADER_KEYWORDS.amount },
+      { name: '수량', keys: HEADER_KEYWORDS.qty },
+      { name: '코드명', keys: HEADER_KEYWORDS.codeName },
+    ];
+
+    for (const check of requiredChecks) {
+      if (!hasHeader(first, check.keys)) {
         throw new BadRequestException(
-          `엑셀 데이터에 "${h}" 컬럼이 없어. (현재 헤더: ${Object.keys(first).join(', ')})`,
+          `엑셀 데이터에 "${check.name}" 컬럼이 없어. (현재 헤더: ${Object.keys(first).join(', ')})`,
         );
       }
     }
@@ -102,24 +169,28 @@ export class SalesService {
     const data = rows
       .map((r, idx) => {
         try {
-          const storeName = String(r['매장명'] ?? '').trim();
+          const storeName = String(pick(r, HEADER_KEYWORDS.storeName) ?? '').trim();
           if (!storeName) throw new Error('Missing 매장명');
 
-          const saleDate = toDateOnly(r['매출일'], '매출일');
+          const saleDateRaw = pick(r, HEADER_KEYWORDS.saleDate);
+          const saleDate = toDateOnly(saleDateRaw, '매출일');
 
-          const qty = toInt(r['수량'], '수량', 0) ?? 0;
-          const amount = toInt(r['매출금액'], '매출금액');
+          const qtyRaw = pick(r, HEADER_KEYWORDS.qty);
+          const qty = toInt(qtyRaw, '수량');
+          if (qty === null) throw new Error('Missing 수량');
+
+          const amountRaw = pick(r, HEADER_KEYWORDS.amount);
+          const amount = toInt(amountRaw, '매출금액');
           if (amount === null) throw new Error('Missing 매출금액');
+
+          const codeName = String(pick(r, HEADER_KEYWORDS.codeName) ?? '').trim();
+          if (!codeName) throw new Error('Missing 코드명');
 
           const storeCode = normalizeStoreKey(storeName);
 
-          // ✅ 추가 컬럼(있으면 저장 / 없으면 null)
-          // productType: 구분
-          // itemCode: 단품코드
-          // codeName: 코드명
-          const productType = String(r['구분'] ?? '').trim() || null;
-          const itemCode = String(r['단품코드'] ?? '').trim() || null;
-          const codeName = String(r['코드명'] ?? '').trim() || null;
+          // 선택 컬럼 (있으면 저장 / 없으면 null)
+          const productType = String(pick(r, HEADER_KEYWORDS.productType) ?? '').trim() || null;
+          const itemCode = String(pick(r, HEADER_KEYWORDS.itemCode) ?? '').trim() || null;
 
           return {
             saleDate,
@@ -163,6 +234,40 @@ export class SalesService {
       inserted,
       skipped,
       errorsSample,
+    };
+  }
+
+  /**
+   * 디버그: 최근 저장된 매출 데이터 확인
+   */
+  async getRecentSalesRaw() {
+    const total = await this.prisma.salesRaw.count();
+    const recent = await this.prisma.salesRaw.findMany({
+      take: 10,
+      orderBy: { id: 'desc' },
+    });
+
+    // 날짜 범위 확인
+    const dateRange = await this.prisma.salesRaw.aggregate({
+      _min: { saleDate: true },
+      _max: { saleDate: true },
+    });
+
+    return {
+      totalCount: total,
+      dateRange: {
+        min: dateRange._min.saleDate,
+        max: dateRange._max.saleDate,
+      },
+      recentItems: recent.map((r) => ({
+        id: r.id,
+        saleDate: r.saleDate,
+        storeCode: r.storeCode,
+        storeName: r.storeName,
+        qty: r.qty,
+        amount: r.amount,
+        codeName: r.codeName,
+      })),
     };
   }
 

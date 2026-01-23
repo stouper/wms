@@ -5,12 +5,20 @@ import { getApiBase } from "./api";
  * ✅ 공통 HTTP 클라이언트
  * - baseUrl(getApiBase) 단일화
  * - JSON 자동 파싱 + 에러 표준화
+ * - GET 요청 캐시 방지
  */
 async function request(method, path, body, opts = {}) {
   const base = getApiBase();
   const url = path.startsWith("http") ? path : `${base}${path}`;
 
   const headers = { ...(opts.headers || {}) };
+
+  // GET 요청 캐시 방지
+  if (method === "GET") {
+    headers["Cache-Control"] = "no-cache, no-store, must-revalidate";
+    headers["Pragma"] = "no-cache";
+  }
+
   const init = {
     method,
     headers,

@@ -82,4 +82,13 @@ export class ExportsController {
   async getCjReservationStatus(@Param('jobId') jobId: string) {
     return this.exports.getCjReservationStatus(jobId);
   }
+
+  /**
+   * CJ 예약 취소 (테스트용)
+   * POST /exports/cj/cancel/:jobId
+   */
+  @Post('cj/cancel/:jobId')
+  async cancelCjReservation(@Param('jobId') jobId: string) {
+    return this.exports.cancelCjReservation(jobId);
+  }
 }

@@ -3,70 +3,88 @@ import React, { useEffect, useMemo, useState } from "react";
 import { useToasts } from "../lib/toasts.jsx";
 import { inputStyle, primaryBtn } from "../ui/styles";
 
-// ✅ 정석: Page는 workflow만 호출
 import { inventoryFlow } from "../workflows/inventory/inventory.workflow";
+import { loadStores, getStoresCache } from "../workflows/_common/storeMap";
+import { http } from "../workflows/_common/http";
+
+// 시스템 Location (상단 고정)
+const SYSTEM_LOCATIONS = ["RET-01", "UNASSIGNED", "DEFECT", "HOLD"];
 
 export default function InventoryPage() {
   const { push, ToastHost } = useToasts();
 
   const [loading, setLoading] = useState(false);
   const [rows, setRows] = useState([]);
+  const [hqStoreId, setHqStoreId] = useState(null);
+  const [systemLocations, setSystemLocations] = useState([]); // 설정에서 만든 Location 목록
 
-  // ✅ 상단 검색(전체 검색)
+  // Location 필터
+  const [selectedLocation, setSelectedLocation] = useState("");
+
+  // 상단 검색
   const [q, setQ] = useState("");
 
-  // ✅ 빠른 필터(토글)
-  const [onlyExceptions, setOnlyExceptions] = useState(false); // RET-01 + UNASSIGNED만
-  const [hideZero, setHideZero] = useState(false); // onHand 0 숨김
+  // 빠른 필터
+  const [hideZero, setHideZero] = useState(false);
 
-  // ✅ 정렬
-  const [sortKey, setSortKey] = useState("LOC"); // LOC | SKU | QTY
-  const [sortDir, setSortDir] = useState("ASC"); // ASC | DESC
+  // 정렬
+  const [sortKey, setSortKey] = useState("LOC");
+  const [sortDir, setSortDir] = useState("ASC");
 
-  // ✅ Location 자연정렬(핵심)
+  // Location 자연정렬
   function parseLocKey(code) {
     const s = String(code || "").trim();
-    // 예: A-1002, A-1, B-12
     const m = s.match(/^([A-Za-z]+)[-_ ]?(\d+)$/);
     if (!m) {
-      // RET-01, UNASSIGNED 같은 특수코드
-      return {
-        kind: 1, // 숫자형 로케이션 뒤로
-        prefix: s.toUpperCase(),
-        num: Number.POSITIVE_INFINITY,
-        raw: s.toUpperCase(),
-      };
+      return { kind: 1, prefix: s.toUpperCase(), num: Number.POSITIVE_INFINITY, raw: s.toUpperCase() };
     }
-    return {
-      kind: 0,
-      prefix: m[1].toUpperCase(),
-      num: Number(m[2]),
-      raw: s.toUpperCase(),
-    };
+    return { kind: 0, prefix: m[1].toUpperCase(), num: Number(m[2]), raw: s.toUpperCase() };
   }
 
   function compareLocation(aCode, bCode) {
     const a = parseLocKey(aCode);
     const b = parseLocKey(bCode);
-
-    // 0(정상 A-숫자) 먼저, 1(특수) 뒤로
     if (a.kind !== b.kind) return a.kind - b.kind;
-
-    // prefix(A,B,...) 비교
     const p = a.prefix.localeCompare(b.prefix);
     if (p !== 0) return p;
-
-    // 숫자 비교
     if (a.num !== b.num) return a.num - b.num;
-
-    // 마지막 raw
     return a.raw.localeCompare(b.raw);
   }
 
-  async function load() {
+  // HQ 매장 ID 조회
+  async function loadHqStore() {
+    try {
+      await loadStores();
+      const stores = getStoresCache();
+      const hq = stores.find((s) => s.isHq);
+      if (hq) {
+        setHqStoreId(hq.id);
+        return hq.id;
+      }
+    } catch (e) {
+      console.error("HQ 매장 조회 실패:", e);
+    }
+    return null;
+  }
+
+  // 시스템 Location 목록 조회
+  async function loadSystemLocations() {
+    try {
+      const res = await http.get("/locations");
+      const locs = res?.rows || [];
+      // isSystem=true인 Location 코드 목록
+      const systemLocs = locs.filter((l) => l.isSystem).map((l) => l.code);
+      setSystemLocations(systemLocs);
+    } catch (e) {
+      console.error("Location 목록 조회 실패:", e);
+      setSystemLocations(SYSTEM_LOCATIONS);
+    }
+  }
+
+  async function load(storeId) {
     setLoading(true);
     try {
-      const list = await inventoryFlow.loadSummary({ limit: 50000 });
+      const list = await inventoryFlow.loadSummary({ limit: 50000, storeId });
       setRows(list);
     } catch (e) {
       push({ kind: "error", title: "재고 로드 실패", message: e?.message || String(e) });
@@ -77,27 +95,23 @@ export default function InventoryPage() {
   }
 
   useEffect(() => {
-    load();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
+    loadSystemLocations();
+    loadHqStore().then((id) => {
+      if (id) load(id);
+    });
   }, []);
 
   const filtered = useMemo(() => {
     let out = rows;
 
-    // 0) 예외 위치만
-    if (onlyExceptions) {
-      out = out.filter((r) => {
-        const lc = String(r.locationCode || "").toUpperCase();
-        return lc === "RET-01" || lc === "UNASSIGNED";
-      });
+    if (selectedLocation) {
+      out = out.filter((r) => String(r.locationCode || "").toUpperCase() === selectedLocation.toUpperCase());
     }
 
-    // 1) 0 숨김
     if (hideZero) {
       out = out.filter((r) => Number(r.onHand ?? 0) !== 0);
     }
 
-    // 2) 전체 검색
     const s = (q || "").trim().toLowerCase();
     if (s) {
       out = out.filter((r) => {
@@ -109,59 +123,70 @@ export default function InventoryPage() {
       });
     }
 
-    // 3) 정렬
     const dir = sortDir === "DESC" ? -1 : 1;
 
     out = [...out].sort((a, b) => {
       if (sortKey === "QTY") {
-        const av = Number(a.onHand ?? 0);
-        const bv = Number(b.onHand ?? 0);
-        return (av - bv) * dir; // ✅ 숫자 정렬
+        return (Number(a.onHand ?? 0) - Number(b.onHand ?? 0)) * dir;
       }
       if (sortKey === "SKU") {
         return String(a.skuCode || "").localeCompare(String(b.skuCode || "")) * dir;
       }
-      // ✅ LOC: 자연정렬
+      // LOC
       const c = compareLocation(a.locationCode, b.locationCode);
       if (c !== 0) return c * dir;
-
-      // tie-breaker
       return String(a.skuCode || "").localeCompare(String(b.skuCode || "")) * dir;
     });
 
     return out;
-  }, [rows, onlyExceptions, hideZero, q, sortKey, sortDir]);
+  }, [rows, selectedLocation, hideZero, q, sortKey, sortDir]);
 
-  // ✅ 현재 화면(필터/검색 적용된 filtered) OnHand 합계
   const sumOnHand = useMemo(() => {
     return filtered.reduce((acc, r) => acc + Number(r.onHand ?? 0), 0);
   }, [filtered]);
 
-  const pillBtn = (active) => ({
-    padding: "7px 10px",
-    borderRadius: 999,
-    border: "1px solid #e5e7eb",
-    background: active ? "#0ea5e9" : "#fff",
-    color: active ? "#fff" : "#0f172a",
-    fontWeight: 800,
-    cursor: "pointer",
-    userSelect: "none",
-  });
+  // Location별 재고 요약
+  const locationSummary = useMemo(() => {
+    const map = new Map();
+    for (const r of rows) {
+      const code = String(r.locationCode || "UNKNOWN").toUpperCase();
+      if (!map.has(code)) {
+        map.set(code, { code, qty: 0, skuCount: 0 });
+      }
+      const entry = map.get(code);
+      entry.qty += Number(r.onHand ?? 0);
+      entry.skuCount += 1;
+    }
 
-  function resetFilters() {
-    setQ("");
-    setOnlyExceptions(false);
-    setHideZero(false);
-    setSortKey("LOC");
-    setSortDir("ASC");
-  }
+    const all = Array.from(map.values());
 
-  // ✅ 헤더 클릭 정렬
+    // 시스템 Location을 상단에 고정
+    const systemSet = new Set([...systemLocations, ...SYSTEM_LOCATIONS].map((c) => c.toUpperCase()));
+    const systemLocs = all.filter((l) => systemSet.has(l.code));
+    const normalLocs = all.filter((l) => !systemSet.has(l.code));
+
+    // 시스템 Location은 정의된 순서대로, 나머지는 자연정렬
+    const systemOrder = [...systemLocations, ...SYSTEM_LOCATIONS].map((c) => c.toUpperCase());
+    systemLocs.sort((a, b) => {
+      const ai = systemOrder.indexOf(a.code);
+      const bi = systemOrder.indexOf(b.code);
+      return ai - bi;
+    });
+    normalLocs.sort((a, b) => compareLocation(a.code, b.code));
+
+    return [...systemLocs, ...normalLocs];
+  }, [rows, systemLocations]);
+
+  // 전체 합계
+  const totalSummary = useMemo(() => {
+    return locationSummary.reduce((acc, l) => ({ qty: acc.qty + l.qty, skuCount: acc.skuCount + l.skuCount }), { qty: 0, skuCount: 0 });
+  }, [locationSummary]);
+
   function toggleSort(key) {
-    setSortKey((prevKey) => {
-      if (prevKey === key) {
+    setSortKey((prev) => {
+      if (prev === key) {
         setSortDir((d) => (d === "ASC" ? "DESC" : "ASC"));
-        return prevKey;
+        return prev;
       }
       setSortDir("ASC");
       return key;
@@ -173,149 +198,209 @@ export default function InventoryPage() {
     return sortDir === "ASC" ? <span>▲</span> : <span>▼</span>;
   }
 
-  const thBase = {
-    padding: "10px 12px",
-    fontWeight: 800,
-    fontSize: 12,
-    color: "#64748b",
-    userSelect: "none",
-    whiteSpace: "nowrap",
+  const thBase = { padding: "10px 12px", fontWeight: 800, fontSize: 12, color: "#64748b", whiteSpace: "nowrap" };
+  const thClickable = { cursor: "pointer" };
+
+  const isSystemLoc = (code) => {
+    const upper = String(code).toUpperCase();
+    return [...systemLocations, ...SYSTEM_LOCATIONS].map((c) => c.toUpperCase()).includes(upper);
   };
 
-  const thClickable = {
+  const cardStyle = (active, isSystem) => ({
+    padding: "10px 14px",
+    borderRadius: 8,
+    border: active ? "2px solid #3b82f6" : isSystem ? "1px solid #fbbf24" : "1px solid #e5e7eb",
+    background: active ? "#dbeafe" : isSystem ? "#fffbeb" : "#fff",
     cursor: "pointer",
-  };
+    textAlign: "left",
+    width: "100%",
+  });
 
   return (
-    <div style={{ display: "grid", gap: 12 }}>
+    <div style={{ display: "flex", gap: 16, height: "100%" }}>
       <ToastHost />
 
-      {/* Header */}
-      <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 10, flexWrap: "wrap" }}>
-        <div style={{ fontWeight: 900 }}>창고 재고</div>
+      {/* 왼쪽: Location 카드 목록 */}
+      <div
+        style={{
+          width: 200,
+          minWidth: 200,
+          display: "flex",
+          flexDirection: "column",
+          gap: 8,
+          background: "#f8fafc",
+          borderRadius: 12,
+          padding: 12,
+          border: "1px solid #e5e7eb",
+          overflowY: "auto",
+        }}
+      >
+        <div style={{ fontWeight: 800, fontSize: 13, color: "#64748b", marginBottom: 4 }}>Location</div>
 
-        <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
-          <div
-            style={{
-              padding: "7px 12px",
-              borderRadius: 8,
-              background: "#dbeafe",
-              color: "#1e40af",
-              fontWeight: 800,
-              fontSize: 13,
-            }}
-          >
-            본사 창고
+        {/* 전체 버튼 */}
+        <button
+          type="button"
+          onClick={() => setSelectedLocation("")}
+          style={cardStyle(!selectedLocation, false)}
+        >
+          <div style={{ fontWeight: 700, fontSize: 13, color: "#0f172a" }}>전체</div>
+          <div style={{ fontSize: 11, color: "#64748b" }}>
+            {totalSummary.skuCount.toLocaleString()}건 | <b style={{ color: "#0ea5e9" }}>{totalSummary.qty.toLocaleString()}</b>개
           </div>
+        </button>
 
-          <input
-            value={q}
-            onChange={(e) => setQ(e.target.value)}
-            placeholder="전체 검색 (Location / SKU / MakerCode / 상품명)"
-            style={{ ...inputStyle, minWidth: 340 }}
-          />
-
-          <button type="button" style={primaryBtn} onClick={load} disabled={loading}>
-            새로고침
+        {/* Location별 카드 */}
+        {locationSummary.map((l) => (
+          <button
+            key={l.code}
+            type="button"
+            onClick={() => setSelectedLocation(selectedLocation === l.code ? "" : l.code)}
+            style={cardStyle(selectedLocation === l.code, isSystemLoc(l.code))}
+          >
+            <div style={{ fontWeight: 700, fontSize: 13, color: isSystemLoc(l.code) ? "#92400e" : "#0f172a" }}>
+              {l.code}
+              {isSystemLoc(l.code) && <span style={{ fontSize: 10, marginLeft: 4, color: "#d97706" }}>시스템</span>}
+            </div>
+            <div style={{ fontSize: 11, color: "#64748b" }}>
+              {l.skuCount.toLocaleString()}건 | <b style={{ color: "#0ea5e9" }}>{l.qty.toLocaleString()}</b>개
+            </div>
           </button>
-        </div>
+        ))}
+
+        {locationSummary.length === 0 && !loading && (
+          <div style={{ fontSize: 12, color: "#94a3b8", textAlign: "center", padding: 10 }}>
+            Location이 없습니다
+          </div>
+        )}
       </div>
 
-      {/* Table */}
-      <div style={{ border: "1px solid #e5e7eb", borderRadius: 12, overflow: "auto", background: "#fff" }}>
-        <table
+      {/* 오른쪽: 테이블 */}
+      <div style={{ flex: 1, display: "flex", flexDirection: "column", gap: 12, minWidth: 0 }}>
+        {/* Header */}
+        <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 10, flexWrap: "wrap" }}>
+          <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+            <div style={{ fontWeight: 900, fontSize: 16 }}>창고 재고</div>
+            <div style={{ padding: "5px 10px", borderRadius: 6, background: "#dbeafe", color: "#1e40af", fontWeight: 700, fontSize: 12 }}>
+              본사 창고
+            </div>
+          </div>
+          <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
+            <input
+              value={q}
+              onChange={(e) => setQ(e.target.value)}
+              placeholder="검색 (SKU / MakerCode / 상품명)"
+              style={{ ...inputStyle, minWidth: 280 }}
+            />
+            <button type="button" style={primaryBtn} onClick={() => load(hqStoreId)} disabled={loading || !hqStoreId}>
+              {loading ? "로딩..." : "새로고침"}
+            </button>
+          </div>
+        </div>
+
+        {/* Controls */}
+        <div
           style={{
-            width: "fit-content",
-            borderCollapse: "collapse",
-            tableLayout: "fixed",
-            minWidth: 0,
+            border: "1px solid #e5e7eb",
+            borderRadius: 10,
+            padding: 10,
+            background: "#fff",
+            display: "flex",
+            gap: 10,
+            alignItems: "center",
+            justifyContent: "space-between",
+            flexWrap: "wrap",
           }}
         >
-          <thead style={{ background: "#f8fafc" }}>
-            <tr>
-              <th
-                style={{ ...thBase, ...thClickable, textAlign: "left", width: 120 }}
-                onClick={() => toggleSort("LOC")}
-                title="정렬: Location (자연정렬)"
+          <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
+            {selectedLocation && (
+              <div
+                style={{
+                  padding: "6px 12px",
+                  borderRadius: 6,
+                  background: isSystemLoc(selectedLocation) ? "#fef3c7" : "#dbeafe",
+                  color: isSystemLoc(selectedLocation) ? "#92400e" : "#1e40af",
+                  fontWeight: 700,
+                  fontSize: 12,
+                }}
               >
-                <span style={{ display: "inline-flex", gap: 8, alignItems: "center" }}>
-                  <span>Location</span>
-                  {sortIcon("LOC")}
-                </span>
-              </th>
+                {selectedLocation}
+              </div>
+            )}
+            <button
+              type="button"
+              onClick={() => setHideZero((v) => !v)}
+              style={{
+                padding: "6px 10px",
+                borderRadius: 6,
+                border: "1px solid #e5e7eb",
+                background: hideZero ? "#0ea5e9" : "#fff",
+                color: hideZero ? "#fff" : "#0f172a",
+                fontWeight: 700,
+                fontSize: 12,
+                cursor: "pointer",
+              }}
+            >
+              0 숨김
+            </button>
+          </div>
+          <div style={{ fontSize: 12, color: "#64748b" }}>
+            rows: <b>{filtered.length.toLocaleString()}</b> | 합계: <b style={{ color: "#0ea5e9" }}>{sumOnHand.toLocaleString()}</b>
+          </div>
+        </div>
 
-              <th
-                style={{ ...thBase, ...thClickable, textAlign: "left", width: 210 }}
-                onClick={() => toggleSort("SKU")}
-                title="정렬: SKU"
-              >
-                <span style={{ display: "inline-flex", gap: 8, alignItems: "center" }}>
-                  <span>SKU</span>
-                  {sortIcon("SKU")}
-                </span>
-              </th>
-
-              <th style={{ ...thBase, textAlign: "left", width: 160 }}>MakerCode</th>
-
-              <th style={{ ...thBase, textAlign: "left", width: 380 }}>상품명</th>
-
-              <th
-                style={{ ...thBase, ...thClickable, textAlign: "right", width: 160 }}
-                onClick={() => toggleSort("QTY")}
-                title="정렬: OnHand"
-              >
-                <div style={{ display: "flex", justifyContent: "flex-end", gap: 10, alignItems: "baseline" }}>
-                  <span style={{ display: "inline-flex", gap: 8, alignItems: "center" }}>
-                    <span>OnHand</span>
-                    {sortIcon("QTY")}
-                  </span>
-                  <span style={{ fontSize: 12, fontWeight: 900, color: "#0f172a" }}>
-                    Σ {sumOnHand.toLocaleString()}
-                  </span>
-                </div>
-              </th>
-            </tr>
-          </thead>
-
-          <tbody>
-            {filtered.map((r) => (
-              <tr key={`${r.skuId ?? ""}-${r.locationId ?? ""}-${r.skuCode ?? ""}`} style={{ borderTop: "1px solid #e5e7eb" }}>
-                <td style={{ padding: "10px 12px", width: 120, fontFamily: "Consolas, monospace", whiteSpace: "nowrap" }}>
-                  {r.locationCode || "-"}
-                </td>
-                <td style={{ padding: "10px 12px", width: 210, fontFamily: "Consolas, monospace", whiteSpace: "nowrap" }}>
-                  {r.skuCode || "-"}
-                </td>
-                <td style={{ padding: "10px 12px", width: 160, fontFamily: "Consolas, monospace", whiteSpace: "nowrap" }}>
-                  {r.makerCode || "-"}
-                </td>
-                <td
-                  style={{
-                    padding: "10px 12px",
-                    width: 380,
-                    overflow: "hidden",
-                    textOverflow: "ellipsis",
-                    whiteSpace: "nowrap",
-                  }}
-                  title={r.skuName || ""}
-                >
-                  {r.skuName || "-"}
-                </td>
-                <td style={{ padding: "10px 12px", width: 160, textAlign: "right", fontWeight: 900 }}>
-                  {Number(r.onHand ?? 0)}
-                </td>
-              </tr>
-            ))}
-
-            {filtered.length === 0 ? (
+        {/* Table */}
+        <div style={{ border: "1px solid #e5e7eb", borderRadius: 10, overflow: "auto", background: "#fff", flex: 1 }}>
+          <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 12 }}>
+            <thead style={{ background: "#f8fafc", position: "sticky", top: 0 }}>
               <tr>
-                <td colSpan={5} style={{ padding: 14, textAlign: "center", color: "#94a3b8" }}>
-                  재고 데이터가 없습니다.
-                </td>
+                {!selectedLocation && (
+                  <th style={{ ...thBase, ...thClickable, textAlign: "left", width: 120 }} onClick={() => toggleSort("LOC")}>
+                    Location {sortIcon("LOC")}
+                  </th>
+                )}
+                <th style={{ ...thBase, ...thClickable, textAlign: "left", width: 180 }} onClick={() => toggleSort("SKU")}>
+                  SKU {sortIcon("SKU")}
+                </th>
+                <th style={{ ...thBase, textAlign: "left", width: 140 }}>MakerCode</th>
+                <th style={{ ...thBase, textAlign: "left" }}>상품명</th>
+                <th style={{ ...thBase, ...thClickable, textAlign: "right", width: 100 }} onClick={() => toggleSort("QTY")}>
+                  OnHand {sortIcon("QTY")}
+                </th>
               </tr>
-            ) : null}
-          </tbody>
-        </table>
+            </thead>
+            <tbody>
+              {filtered.map((r, idx) => (
+                <tr key={`${r.skuId}-${r.locationId}-${idx}`} style={{ borderTop: "1px solid #f1f5f9" }}>
+                  {!selectedLocation && (
+                    <td
+                      style={{
+                        padding: "8px 12px",
+                        fontFamily: "Consolas, monospace",
+                        fontWeight: 600,
+                        color: isSystemLoc(r.locationCode) ? "#92400e" : "#0f172a",
+                      }}
+                    >
+                      {r.locationCode || "-"}
+                    </td>
+                  )}
+                  <td style={{ padding: "8px 12px", fontFamily: "Consolas, monospace" }}>{r.skuCode || "-"}</td>
+                  <td style={{ padding: "8px 12px", fontFamily: "Consolas, monospace" }}>{r.makerCode || "-"}</td>
+                  <td style={{ padding: "8px 12px", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }} title={r.skuName}>
+                    {r.skuName || "-"}
+                  </td>
+                  <td style={{ padding: "8px 12px", textAlign: "right", fontWeight: 700 }}>{Number(r.onHand ?? 0).toLocaleString()}</td>
+                </tr>
+              ))}
+              {filtered.length === 0 && (
+                <tr>
+                  <td colSpan={selectedLocation ? 4 : 5} style={{ padding: 20, textAlign: "center", color: "#94a3b8" }}>
+                    {loading ? "로딩 중..." : "재고 데이터가 없습니다."}
+                  </td>
+                </tr>
+              )}
+            </tbody>
+          </table>
+        </div>
       </div>
     </div>
   );

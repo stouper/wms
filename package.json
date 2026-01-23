@@ -1,9 +1,16 @@
 {
   "name": "repo",
   "private": true,
-  "workspaces": ["apps/*", "packages/*", "services/*"],
+  "workspaces": [
+    "apps/*",
+    "packages/*",
+    "services/*"
+  ],
   "packageManager": "npm@11.6.2",
   "scripts": {
     "build": "npm run -w packages/shared-types build && npm run -w services/core-api build"
+  },
+  "dependencies": {
+    "react-window": "^1.8.10"
   }
 }

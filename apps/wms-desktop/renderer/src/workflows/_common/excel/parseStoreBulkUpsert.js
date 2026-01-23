@@ -8,8 +8,6 @@
  *
  * 필수 헤더:
  * - 매장코드 (code): 매장 코드
- *
- * 선택 헤더:
  * - 매장명 (name): 매장 이름
  */
 
@@ -57,8 +55,8 @@ export async function parseStoreBulkUpsertFile(arrayBuffer, fileName = "") {
       obj[headerKeys[j]] = r[j] ?? "";
     }
 
-    const code = pick(obj, ["매장코드", "storeCode", "StoreCode", "code", "Code", "매장"]);
-    const name = pick(obj, ["매장명", "storeName", "StoreName", "name", "Name", "이름"]);
+    const code = pick(obj, ["매장코드", "storeCode", "StoreCode", "code", "Code", "매장", "사용자ID", "사용자id", "userId", "UserId", "user_id"]);
+    const name = pick(obj, ["매장명", "storeName", "StoreName", "name", "Name", "이름", "사용자명"]);
 
     const rowNum = headerRowIndex + 2 + i; // 엑셀 행 번호 (1-based, 3행부터 시작)
 
@@ -67,9 +65,14 @@ export async function parseStoreBulkUpsertFile(arrayBuffer, fileName = "") {
       continue;
     }
 
+    if (!name) {
+      errors.push(`행 ${rowNum}: 매장명이 없습니다.`);
+      continue;
+    }
+
     items.push({
       code: String(code).trim(),
-      name: String(name ?? "").trim() || undefined,
+      name: String(name).trim(),
     });
   }
 
@@ -84,10 +87,30 @@ export async function parseStoreBulkUpsertFile(arrayBuffer, fileName = "") {
   };
 }
 
+/**
+ * 헤더 정규화: 특수문자/공백/괄호 제거, 소문자화
+ * 예) "매장코드▼" -> "매장코드", "Store Code" -> "storecode"
+ */
+function normHeader(s) {
+  const raw = String(s ?? "").trim();
+  if (!raw) return "";
+  return raw
+    .replace(/\s+/g, "")           // 공백 제거
+    .replace(/[\(\)\[\]\{\}]/g, "") // 괄호 제거
+    .replace(/[▲▼△▽↑↓←→]/g, "")   // 정렬 특수문자 제거
+    .replace(/[\u200B-\u200D\uFEFF]/g, "") // 제로폭 문자/BOM 제거
+    .toLowerCase();
+}
+
 function pick(obj, keys) {
-  for (const k of keys) {
-    if (obj && Object.prototype.hasOwnProperty.call(obj, k)) {
-      const v = obj[k];
+  // 정규화된 키로 매칭
+  const normalizedKeys = keys.map(k => normHeader(k));
+
+  for (const objKey of Object.keys(obj || {})) {
+    const normalizedObjKey = normHeader(objKey);
+    const idx = normalizedKeys.indexOf(normalizedObjKey);
+    if (idx >= 0) {
+      const v = obj[objKey];
       if (v !== undefined && v !== null && String(v).trim() !== "") return v;
     }
   }

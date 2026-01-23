@@ -1,19 +1,12 @@
 // apps/wms-desktop/renderer/src/pages/SalesPage.jsx
 
-import React, { useMemo, useState } from "react";
+import React, { useEffect, useMemo, useState } from "react";
 import { useToasts } from "../lib/toasts.jsx";
-import { runSalesImport, runSalesByStore } from "../workflows/sales/sales.workflow";
+import { runSalesByStore } from "../workflows/sales/sales.workflow";
 import { inputStyle, primaryBtn } from "../ui/styles";
 
 export default function SalesPage({ pageTitle = "매출 관리" }) {
   const { push, ToastHost } = useToasts();
-
-  // 업로드 상태
-  const [file, setFile] = useState(null);
-  const [sourceKey, setSourceKey] = useState("");
-  const [uploading, setUploading] = useState(false);
-  const [uploadResult, setUploadResult] = useState(null);
-  const [showUpload, setShowUpload] = useState(false);
 
   // 조회 상태
   const [from, setFrom] = useState("");
@@ -21,38 +14,15 @@ export default function SalesPage({ pageTitle = "매출 관리" }) {
   const [loading, setLoading] = useState(false);
   const [summary, setSummary] = useState(null);
 
-  // 필터
-  const [storeFilter, setStoreFilter] = useState("ALL");
-  const [storeQuery, setStoreQuery] = useState("");
+  // 매장 필터 (왼쪽 카드)
+  const [selectedStoreCode, setSelectedStoreCode] = useState("");
 
-  const fileName = useMemo(() => file?.name || "", [file]);
+  // 상단 검색
+  const [q, setQ] = useState("");
 
-  // ========================================
-  // 스타일
-  // ========================================
-  const cardStyle = {
-    background: "#fff",
-    borderRadius: 12,
-    border: "1px solid #e5e7eb",
-    padding: 12,
-  };
-
-  const smallBtn = {
-    padding: "6px 12px",
-    fontSize: 12,
-    fontWeight: 600,
-    borderRadius: 6,
-    border: "1px solid #e5e7eb",
-    background: "#fff",
-    cursor: "pointer",
-  };
-
-  const filterBtn = (active) => ({
-    ...smallBtn,
-    background: active ? "#3b82f6" : "#fff",
-    color: active ? "#fff" : "#374151",
-    border: active ? "1px solid #3b82f6" : "1px solid #e5e7eb",
-  });
+  // 정렬
+  const [sortKey, setSortKey] = useState("STORE");
+  const [sortDir, setSortDir] = useState("ASC");
 
   // ========================================
   // 데이터 계산
@@ -62,41 +32,63 @@ export default function SalesPage({ pageTitle = "매출 관리" }) {
     return Array.isArray(arr) ? arr : [];
   }, [summary]);
 
-  const storeOptions = useMemo(() => {
+  // 매장별 요약 (왼쪽 사이드바용)
+  const storeSummary = useMemo(() => {
     const map = new Map();
     for (const it of summaryItems) {
-      const code = String(it?.storeCode || "");
-      const name = String(it?.storeName || "");
-      if (!code && !name) continue;
-      const key = code || name;
-      if (!map.has(key)) map.set(key, name || code || key);
+      const code = String(it?.storeCode || "UNKNOWN");
+      const name = String(it?.storeName || code);
+      if (!map.has(code)) {
+        map.set(code, { code, name, totalAmount: 0, totalQty: 0 });
+      }
+      const entry = map.get(code);
+      entry.totalAmount += Number(it?.totalAmount || 0);
+      entry.totalQty += Number(it?.totalQty || 0);
     }
-    return Array.from(map.entries())
-      .map(([code, name]) => ({ code, name }))
-      .sort((a, b) => (a.name || a.code).localeCompare(b.name || b.code, "ko"));
+    return Array.from(map.values()).sort((a, b) => a.name.localeCompare(b.name, "ko"));
   }, [summaryItems]);
 
+  // 전체 합계
+  const totalSummary = useMemo(() => {
+    return storeSummary.reduce(
+      (acc, s) => ({ totalAmount: acc.totalAmount + s.totalAmount, totalQty: acc.totalQty + s.totalQty }),
+      { totalAmount: 0, totalQty: 0 }
+    );
+  }, [storeSummary]);
+
+  // 필터링된 아이템
   const filteredItems = useMemo(() => {
     let items = summaryItems;
 
-    const q = storeQuery.trim().toLowerCase();
-    if (q) {
+    // 매장 필터
+    if (selectedStoreCode) {
+      items = items.filter((it) => it?.storeCode === selectedStoreCode);
+    }
+
+    // 검색어 필터
+    const search = (q || "").trim().toLowerCase();
+    if (search) {
       items = items.filter((it) => {
-        const code = String(it?.storeCode || "").toLowerCase();
-        const name = String(it?.storeName || "").toLowerCase();
-        return code.includes(q) || name.includes(q);
+        const hay = [it?.storeCode, it?.storeName].filter(Boolean).join(" ").toLowerCase();
+        return hay.includes(search);
       });
     }
 
-    if (storeFilter && storeFilter !== "ALL") {
-      items = items.filter((it) => {
-        const code = String(it?.storeCode || it?.storeName || "");
-        return code === storeFilter;
-      });
-    }
+    // 정렬
+    const dir = sortDir === "DESC" ? -1 : 1;
+    items = [...items].sort((a, b) => {
+      if (sortKey === "QTY") {
+        return (Number(a.totalQty ?? 0) - Number(b.totalQty ?? 0)) * dir;
+      }
+      if (sortKey === "AMOUNT") {
+        return (Number(a.totalAmount ?? 0) - Number(b.totalAmount ?? 0)) * dir;
+      }
+      // STORE
+      return String(a.storeName || "").localeCompare(String(b.storeName || ""), "ko") * dir;
+    });
 
     return items;
-  }, [summaryItems, storeFilter, storeQuery]);
+  }, [summaryItems, selectedStoreCode, q, sortKey, sortDir]);
 
   const totals = useMemo(() => {
     let totalAmount = 0;
@@ -137,47 +129,6 @@ export default function SalesPage({ pageTitle = "매출 관리" }) {
   }
 
   // ========================================
-  // 업로드
-  // ========================================
-  async function doUpload() {
-    if (!file) {
-      push({ kind: "warn", title: "파일 선택", message: "엑셀 파일을 선택해주세요" });
-      return;
-    }
-
-    setUploading(true);
-    setUploadResult(null);
-
-    try {
-      const res = await runSalesImport({
-        file,
-        sourceKey: sourceKey?.trim() || null,
-        onProgress: () => {},
-      });
-
-      setUploadResult(res);
-
-      if (res?.inserted > 0) {
-        push({
-          kind: "success",
-          title: "업로드 완료",
-          message: `${res.inserted}건 저장 완료${res.skipped ? ` (${res.skipped}건 스킵)` : ""}`,
-        });
-      } else {
-        push({
-          kind: "warn",
-          title: "업로드 결과",
-          message: `저장된 데이터가 없습니다 (스킵: ${res?.skipped || 0}건)`,
-        });
-      }
-    } catch (e) {
-      push({ kind: "error", title: "업로드 실패", message: e?.message || String(e) });
-    } finally {
-      setUploading(false);
-    }
-  }
-
-  // ========================================
   // 조회
   // ========================================
   async function doFetchSummary() {
@@ -188,6 +139,8 @@ export default function SalesPage({ pageTitle = "매출 관리" }) {
 
     setLoading(true);
     setSummary(null);
+    setSelectedStoreCode("");
+    setQ("");
 
     try {
       const res = await runSalesByStore({
@@ -196,8 +149,6 @@ export default function SalesPage({ pageTitle = "매출 관리" }) {
         onProgress: () => {},
       });
       setSummary(res);
-      setStoreFilter("ALL");
-      setStoreQuery("");
 
       const itemCount = res?.items?.length || 0;
       push({
@@ -212,252 +163,240 @@ export default function SalesPage({ pageTitle = "매출 관리" }) {
     }
   }
 
+  // 초기 로드: 이번 달로 설정
+  useEffect(() => {
+    setThisMonthRange();
+  }, []);
+
+  // ========================================
+  // 정렬
+  // ========================================
+  function toggleSort(key) {
+    setSortKey((prev) => {
+      if (prev === key) {
+        setSortDir((d) => (d === "ASC" ? "DESC" : "ASC"));
+        return prev;
+      }
+      setSortDir("ASC");
+      return key;
+    });
+  }
+
+  function sortIcon(key) {
+    if (sortKey !== key) return <span style={{ color: "#cbd5e1" }}>↕</span>;
+    return sortDir === "ASC" ? <span>▲</span> : <span>▼</span>;
+  }
+
+  // ========================================
+  // 스타일
+  // ========================================
+  const thBase = { padding: "10px 12px", fontWeight: 800, fontSize: 12, color: "#64748b", whiteSpace: "nowrap" };
+  const thClickable = { cursor: "pointer" };
+
+  const cardStyle = (active) => ({
+    padding: "10px 14px",
+    borderRadius: 8,
+    border: active ? "2px solid #3b82f6" : "1px solid #e5e7eb",
+    background: active ? "#dbeafe" : "#fff",
+    cursor: "pointer",
+    textAlign: "left",
+    width: "100%",
+  });
+
+  const smallBtn = {
+    padding: "6px 12px",
+    fontSize: 12,
+    fontWeight: 600,
+    borderRadius: 6,
+    border: "1px solid #e5e7eb",
+    background: "#fff",
+    cursor: "pointer",
+  };
+
   // ========================================
   // 렌더링
   // ========================================
   return (
-    <div style={{ display: "grid", gap: 12, width: "100%" }}>
+    <div style={{ display: "flex", gap: 16, height: "100%" }}>
       <ToastHost />
 
-      {/* ========== 헤더 ========== */}
-      <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
-        <h1 style={{ margin: 0, fontSize: 20, fontWeight: 800 }}>{pageTitle}</h1>
+      {/* 왼쪽: 매장 카드 목록 */}
+      <div
+        style={{
+          width: 200,
+          minWidth: 200,
+          display: "flex",
+          flexDirection: "column",
+          gap: 8,
+          background: "#f8fafc",
+          borderRadius: 12,
+          padding: 12,
+          border: "1px solid #e5e7eb",
+          overflowY: "auto",
+        }}
+      >
+        <div style={{ fontWeight: 800, fontSize: 13, color: "#64748b", marginBottom: 4 }}>매장 목록</div>
+
+        {/* 전체 버튼 */}
         <button
           type="button"
-          style={{ ...smallBtn, background: showUpload ? "#fef3c7" : "#dbeafe" }}
-          onClick={() => setShowUpload(!showUpload)}
+          onClick={() => setSelectedStoreCode("")}
+          style={cardStyle(!selectedStoreCode)}
         >
-          {showUpload ? "업로드 닫기" : "엑셀 업로드"}
+          <div style={{ fontWeight: 700, fontSize: 13, color: "#0f172a" }}>전체</div>
+          <div style={{ fontSize: 11, color: "#64748b" }}>
+            {storeSummary.length}개 매장 | <b style={{ color: "#0ea5e9" }}>{fmtNum(totalSummary.totalAmount)}</b>원
+          </div>
         </button>
-      </div>
 
-      <div style={{ fontSize: 12, color: "#64748b" }}>
-        필수 헤더: <b>매장명</b>, <b>매출일</b>, <b>매출금액</b> | 선택: 수량, 구분, 단품코드, 코드명
-      </div>
-
-      {/* ========== 엑셀 업로드 (접이식) ========== */}
-      {showUpload && (
-        <div style={{ ...cardStyle, background: "#fffbeb" }}>
-          <div style={{ fontWeight: 700, marginBottom: 10 }}>매출 데이터 업로드</div>
-
-          <div style={{ display: "flex", gap: 12, alignItems: "flex-end", flexWrap: "wrap" }}>
-            <div>
-              <div style={{ fontSize: 12, color: "#64748b", marginBottom: 4 }}>엑셀 파일</div>
-              <input
-                type="file"
-                accept=".xlsx,.xls"
-                disabled={uploading}
-                onChange={(e) => {
-                  const f = e.target.files?.[0] || null;
-                  setFile(f);
-                  if (f && !sourceKey) {
-                    setSourceKey(f.name.replace(/\.(xlsx|xls|csv)$/i, ""));
-                  }
-                }}
-                style={{ fontSize: 12 }}
-              />
-            </div>
-
-            <div>
-              <div style={{ fontSize: 12, color: "#64748b", marginBottom: 4 }}>sourceKey (선택)</div>
-              <input
-                style={{ ...inputStyle, width: 180 }}
-                disabled={uploading}
-                value={sourceKey}
-                onChange={(e) => setSourceKey(e.target.value)}
-                placeholder="중복 추적용"
-              />
-            </div>
-
-            <button
-              type="button"
-              style={{ ...primaryBtn, padding: "8px 16px" }}
-              onClick={doUpload}
-              disabled={uploading || !file}
-            >
-              {uploading ? "업로드 중..." : "업로드"}
-            </button>
-          </div>
-
-          {fileName && (
-            <div style={{ marginTop: 8, fontSize: 12, color: "#78716c" }}>
-              선택됨: <b>{fileName}</b>
-            </div>
-          )}
-
-          {uploadResult && (
-            <div style={{ marginTop: 10, padding: 10, background: "#f0fdf4", borderRadius: 8, fontSize: 12 }}>
-              <div>저장: <b>{uploadResult.inserted}</b>건 | 스킵: <b>{uploadResult.skipped}</b>건</div>
-              {uploadResult.errorsSample?.length > 0 && (
-                <div style={{ marginTop: 6, color: "#dc2626" }}>
-                  에러 샘플: {uploadResult.errorsSample.slice(0, 3).join(", ")}
-                </div>
-              )}
-            </div>
-          )}
-        </div>
-      )}
-
-      {/* ========== 조회 영역 ========== */}
-      <div style={cardStyle}>
-        <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 10, flexWrap: "wrap" }}>
-          <div style={{ fontWeight: 900 }}>매장별 매출 조회</div>
-          {summary && (
-            <div style={{ fontSize: 12, color: "#64748b" }}>
-              총 <b>{filteredItems.length}</b>개 매장 | 수량: <b>{fmtNum(totals.totalQty)}</b> | 금액: <b>{fmtNum(totals.totalAmount)}</b>원
-            </div>
-          )}
-        </div>
-
-        <div style={{ marginTop: 10, display: "flex", gap: 8, alignItems: "flex-end", flexWrap: "wrap" }}>
-          <div>
-            <div style={{ fontSize: 12, color: "#64748b", marginBottom: 4 }}>시작일</div>
-            <input
-              type="date"
-              style={{ ...inputStyle, width: 150 }}
-              value={from}
-              onChange={(e) => setFrom(e.target.value)}
-              disabled={loading}
-            />
-          </div>
-
-          <div>
-            <div style={{ fontSize: 12, color: "#64748b", marginBottom: 4 }}>종료일</div>
-            <input
-              type="date"
-              style={{ ...inputStyle, width: 150 }}
-              value={to}
-              onChange={(e) => setTo(e.target.value)}
-              disabled={loading}
-            />
-          </div>
-
-          <button type="button" style={smallBtn} onClick={setTodayRange} disabled={loading}>
-            오늘
-          </button>
-          <button type="button" style={smallBtn} onClick={setThisMonthRange} disabled={loading}>
-            이번 달
-          </button>
-
+        {/* 매장별 카드 */}
+        {storeSummary.map((s) => (
           <button
+            key={s.code}
             type="button"
-            style={{ ...primaryBtn, padding: "8px 16px" }}
-            onClick={doFetchSummary}
-            disabled={loading || !from || !to}
+            onClick={() => setSelectedStoreCode(selectedStoreCode === s.code ? "" : s.code)}
+            style={cardStyle(selectedStoreCode === s.code)}
           >
-            {loading ? "조회 중..." : "조회"}
+            <div style={{ fontWeight: 700, fontSize: 13, color: "#0f172a" }}>{s.name}</div>
+            <div style={{ fontSize: 11, color: "#64748b" }}>
+              {fmtNum(s.totalQty)}개 | <b style={{ color: "#0ea5e9" }}>{fmtNum(s.totalAmount)}</b>원
+            </div>
           </button>
-        </div>
+        ))}
 
-        {/* 필터 */}
-        {summaryItems.length > 0 && (
-          <div style={{ marginTop: 12, display: "flex", gap: 8, alignItems: "flex-end", flexWrap: "wrap" }}>
-            <div>
-              <div style={{ fontSize: 12, color: "#64748b", marginBottom: 4 }}>매장 필터</div>
-              <select
-                style={{ ...inputStyle, width: 200 }}
-                value={storeFilter}
-                onChange={(e) => setStoreFilter(e.target.value)}
-                disabled={loading}
-              >
-                <option value="ALL">전체 매장</option>
-                {storeOptions.map((s) => (
-                  <option key={s.code} value={s.code}>
-                    {s.name ? `${s.name} (${s.code})` : s.code}
-                  </option>
-                ))}
-              </select>
-            </div>
+        {storeSummary.length === 0 && !loading && summary && (
+          <div style={{ fontSize: 12, color: "#94a3b8", textAlign: "center", padding: 10 }}>
+            매출 데이터가 없습니다
+          </div>
+        )}
 
-            <div>
-              <div style={{ fontSize: 12, color: "#64748b", marginBottom: 4 }}>검색</div>
-              <input
-                style={{ ...inputStyle, width: 180 }}
-                value={storeQuery}
-                onChange={(e) => setStoreQuery(e.target.value)}
-                placeholder="매장명/코드 검색"
-                disabled={loading}
-              />
-            </div>
-
-            <button
-              type="button"
-              style={smallBtn}
-              onClick={() => {
-                setStoreFilter("ALL");
-                setStoreQuery("");
-              }}
-              disabled={loading || (!storeQuery && storeFilter === "ALL")}
-            >
-              필터 초기화
-            </button>
+        {!summary && !loading && (
+          <div style={{ fontSize: 12, color: "#94a3b8", textAlign: "center", padding: 10 }}>
+            기간을 선택 후 조회하세요
           </div>
         )}
       </div>
 
-      {/* ========== 결과 테이블 ========== */}
-      {filteredItems.length > 0 && (
-        <div style={cardStyle}>
-          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 10 }}>
-            <div style={{ fontWeight: 900 }}>조회 결과</div>
-            <div style={{ fontSize: 12, color: "#64748b" }}>
-              {from} ~ {to}
-            </div>
+      {/* 오른쪽: 테이블 */}
+      <div style={{ flex: 1, display: "flex", flexDirection: "column", gap: 12, minWidth: 0 }}>
+        {/* Header */}
+        <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 10, flexWrap: "wrap" }}>
+          <div style={{ fontWeight: 900, fontSize: 16 }}>{pageTitle}</div>
+          <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
+            <input
+              value={q}
+              onChange={(e) => setQ(e.target.value)}
+              placeholder="검색 (매장명/코드)"
+              style={{ ...inputStyle, minWidth: 180 }}
+              disabled={!summary}
+            />
           </div>
+        </div>
 
-          <div style={{ maxHeight: 400, overflow: "auto", border: "1px solid #e5e7eb", borderRadius: 10 }}>
-            <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 12 }}>
-              <thead>
-                <tr style={{ background: "#f8fafc", position: "sticky", top: 0 }}>
-                  <th style={thStyle}>#</th>
-                  <th style={thStyle}>매장코드</th>
-                  <th style={thStyle}>매장명</th>
-                  <th style={{ ...thStyle, textAlign: "right" }}>수량</th>
-                  <th style={{ ...thStyle, textAlign: "right" }}>매출금액</th>
+        {/* 조회 영역 */}
+        <div
+          style={{
+            border: "1px solid #e5e7eb",
+            borderRadius: 10,
+            padding: 10,
+            background: "#fff",
+            display: "flex",
+            gap: 10,
+            alignItems: "center",
+            justifyContent: "space-between",
+            flexWrap: "wrap",
+          }}
+        >
+          <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
+            <input
+              type="date"
+              style={{ ...inputStyle, width: 140 }}
+              value={from}
+              onChange={(e) => setFrom(e.target.value)}
+              disabled={loading}
+            />
+            <span style={{ color: "#64748b" }}>~</span>
+            <input
+              type="date"
+              style={{ ...inputStyle, width: 140 }}
+              value={to}
+              onChange={(e) => setTo(e.target.value)}
+              disabled={loading}
+            />
+            <button type="button" style={smallBtn} onClick={setTodayRange} disabled={loading}>
+              오늘
+            </button>
+            <button type="button" style={smallBtn} onClick={setThisMonthRange} disabled={loading}>
+              이번 달
+            </button>
+            <button
+              type="button"
+              style={{ ...primaryBtn, padding: "8px 16px" }}
+              onClick={doFetchSummary}
+              disabled={loading || !from || !to}
+            >
+              {loading ? "조회 중..." : "조회"}
+            </button>
+          </div>
+          {summary && (
+            <div style={{ fontSize: 12, color: "#64748b" }}>
+              rows: <b>{filteredItems.length.toLocaleString()}</b> | 수량: <b>{fmtNum(totals.totalQty)}</b> | 금액: <b style={{ color: "#0ea5e9" }}>{fmtNum(totals.totalAmount)}</b>원
+            </div>
+          )}
+        </div>
+
+        {/* Table */}
+        <div style={{ border: "1px solid #e5e7eb", borderRadius: 10, overflow: "auto", background: "#fff", flex: 1 }}>
+          <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 12 }}>
+            <thead style={{ background: "#f8fafc", position: "sticky", top: 0 }}>
+              <tr>
+                <th style={{ ...thBase, textAlign: "left", width: 50 }}>#</th>
+                {!selectedStoreCode && (
+                  <th style={{ ...thBase, ...thClickable, textAlign: "left", width: 120 }} onClick={() => toggleSort("STORE")}>
+                    매장 {sortIcon("STORE")}
+                  </th>
+                )}
+                <th style={{ ...thBase, textAlign: "left", width: 120 }}>매장코드</th>
+                <th style={{ ...thBase, ...thClickable, textAlign: "right", width: 100 }} onClick={() => toggleSort("QTY")}>
+                  수량 {sortIcon("QTY")}
+                </th>
+                <th style={{ ...thBase, ...thClickable, textAlign: "right", width: 140 }} onClick={() => toggleSort("AMOUNT")}>
+                  매출금액 {sortIcon("AMOUNT")}
+                </th>
+              </tr>
+            </thead>
+            <tbody>
+              {filteredItems.map((it, idx) => (
+                <tr key={`${it.storeCode || "store"}-${idx}`} style={{ borderTop: "1px solid #f1f5f9" }}>
+                  <td style={{ padding: "8px 12px" }}>{idx + 1}</td>
+                  {!selectedStoreCode && (
+                    <td style={{ padding: "8px 12px", fontWeight: 600 }}>{it.storeName || "-"}</td>
+                  )}
+                  <td style={{ padding: "8px 12px", fontFamily: "Consolas, monospace" }}>{it.storeCode || "-"}</td>
+                  <td style={{ padding: "8px 12px", textAlign: "right" }}>{fmtNum(it.totalQty)}</td>
+                  <td style={{ padding: "8px 12px", textAlign: "right", fontWeight: 700, color: "#0ea5e9" }}>{fmtNum(it.totalAmount)}</td>
                 </tr>
-              </thead>
-              <tbody>
-                {filteredItems.map((it, idx) => (
-                  <tr key={`${it.storeCode || "store"}-${idx}`}>
-                    <td style={tdStyle}>{idx + 1}</td>
-                    <td style={tdStyle}>{it.storeCode || "-"}</td>
-                    <td style={tdStyle}>{it.storeName || "-"}</td>
-                    <td style={{ ...tdStyle, textAlign: "right" }}>{fmtNum(it.totalQty)}</td>
-                    <td style={{ ...tdStyle, textAlign: "right", fontWeight: 600 }}>{fmtNum(it.totalAmount)}</td>
-                  </tr>
-                ))}
-              </tbody>
+              ))}
+              {filteredItems.length === 0 && (
+                <tr>
+                  <td colSpan={selectedStoreCode ? 4 : 5} style={{ padding: 20, textAlign: "center", color: "#94a3b8" }}>
+                    {loading ? "로딩 중..." : summary ? "조회 결과가 없습니다." : "기간을 선택 후 조회하세요."}
+                  </td>
+                </tr>
+              )}
+            </tbody>
+            {filteredItems.length > 0 && (
               <tfoot>
                 <tr style={{ background: "#f0f9ff", fontWeight: 700 }}>
-                  <td style={tdStyle} colSpan={3}>합계</td>
-                  <td style={{ ...tdStyle, textAlign: "right" }}>{fmtNum(totals.totalQty)}</td>
-                  <td style={{ ...tdStyle, textAlign: "right" }}>{fmtNum(totals.totalAmount)}</td>
+                  <td style={{ padding: "10px 12px" }} colSpan={selectedStoreCode ? 2 : 3}>합계</td>
+                  <td style={{ padding: "10px 12px", textAlign: "right" }}>{fmtNum(totals.totalQty)}</td>
+                  <td style={{ padding: "10px 12px", textAlign: "right", color: "#0ea5e9" }}>{fmtNum(totals.totalAmount)}</td>
                 </tr>
               </tfoot>
-            </table>
-          </div>
+            )}
+          </table>
         </div>
-      )}
-
-      {/* 조회 결과 없음 */}
-      {summary && filteredItems.length === 0 && (
-        <div style={{ ...cardStyle, textAlign: "center", color: "#64748b", padding: 20 }}>
-          조회 결과가 없습니다 (필터 조건 확인)
-        </div>
-      )}
+      </div>
     </div>
   );
 }
-
-const thStyle = {
-  padding: "10px 12px",
-  textAlign: "left",
-  fontWeight: 600,
-  color: "#64748b",
-  borderBottom: "1px solid #e5e7eb",
-};
-
-const tdStyle = {
-  padding: "10px 12px",
-  borderBottom: "1px solid #f1f5f9",
-};

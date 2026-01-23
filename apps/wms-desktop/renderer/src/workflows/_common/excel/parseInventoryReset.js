@@ -6,14 +6,13 @@
  * 필수 헤더:
  * - SKU/코드 (sku): SKU 코드
  * - 수량 (qty): 재고 수량
- * - Location (location): 창고 위치 코드
  * - MakerCode/바코드 (makerCode): 바코드/메이커코드
  * - 상품명 (name): 상품명
+ * - 매장/창고 (storeName): 매장명 (설정 > 매장관리의 매장명과 매칭)
  *
  * 선택 헤더:
+ * - Location (location): 창고 위치 코드 (매장인 경우 자동으로 FLOOR 적용)
  * - 상품구분 (productType): 상품 카테고리
- *
- * 주의: storeCode는 엑셀에 포함하지 않음 (UI에서 별도 선택)
  */
 
 export async function parseInventoryResetFile(arrayBuffer, fileName = "") {
@@ -41,7 +40,8 @@ export async function parseInventoryResetFile(arrayBuffer, fileName = "") {
   const MAKER_HEADERS = ["maker코드", "makercode", "바코드", "barcode"].map(normHeader);
   const NAME_HEADERS = ["코드명", "name", "상품명", "productname"].map(normHeader);
   const PRODUCT_TYPE_HEADERS = ["producttype", "상품구분", "카테고리", "category", "아이템", "item", "type"].map(normHeader);
-  const LOC_HEADERS = ["location", "locationcode", "로케이션", "location코드", "랙", "진열", "위치", "loc", "창고"].map(normHeader);
+  const LOC_HEADERS = ["location", "locationcode", "로케이션", "location코드", "랙", "진열", "위치", "loc"].map(normHeader);
+  const STORE_HEADERS = ["매장/창고", "매장", "창고", "store", "storename", "매장명", "지점", "지점명"].map(normHeader);
 
   const headerRowIndex = pickHeaderRowIdx(grid, CODE_HEADERS, QTY_HEADERS);
   if (headerRowIndex < 0) {
@@ -59,8 +59,9 @@ export async function parseInventoryResetFile(arrayBuffer, fileName = "") {
   const idxName = headers.findIndex((x) => NAME_HEADERS.includes(x));
   const idxProductType = headers.findIndex((x) => PRODUCT_TYPE_HEADERS.includes(x));
   const idxLoc = headers.findIndex((x) => LOC_HEADERS.includes(x));
+  const idxStore = headers.findIndex((x) => STORE_HEADERS.includes(x));
 
-  console.log("📄 컬럼 인덱스:", { idxCode, idxQty, idxMaker, idxName, idxProductType, idxLoc });
+  console.log("📄 컬럼 인덱스:", { idxCode, idxQty, idxMaker, idxName, idxProductType, idxLoc, idxStore });
 
   const dataRows = grid.slice(headerRowIndex + 1);
   console.log("📄 데이터 행 개수:", dataRows.length);
@@ -93,18 +94,19 @@ export async function parseInventoryResetFile(arrayBuffer, fileName = "") {
     const makerCode = idxMaker >= 0 ? String(line[idxMaker] ?? "").trim() : "";
     const name = idxName >= 0 ? String(line[idxName] ?? "").trim() : "";
     const productType = idxProductType >= 0 ? String(line[idxProductType] ?? "").trim() : "";
+    const storeName = idxStore >= 0 ? String(line[idxStore] ?? "").trim() : "";
 
-    // 필수 필드 검증
-    if (!location) {
-      errors.push(`행 ${rowNum}: Location이 없습니다.`);
-      continue;
-    }
+    // 필수 필드 검증 (location은 선택 - 매장인 경우 FLOOR 자동 적용)
     if (!makerCode) {
       errors.push(`행 ${rowNum}: MakerCode가 없습니다.`);
       continue;
     }
     if (!name) {
       errors.push(`행 ${rowNum}: 상품명이 없습니다.`);
+      continue;
+    }
+    if (!storeName) {
+      errors.push(`행 ${rowNum}: 매장/창고가 없습니다.`);
       continue;
     }
 
@@ -115,6 +117,7 @@ export async function parseInventoryResetFile(arrayBuffer, fileName = "") {
       makerCode,
       name,
       productType: productType || undefined,
+      storeName,
     });
   }
 

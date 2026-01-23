@@ -1,4 +1,4 @@
-import { Body, Controller, Get, Post, Query } from '@nestjs/common';
+import { Body, Controller, Get, Param, Post, Query } from '@nestjs/common';
 import { InventoryService } from './inventory.service';
 import { InventoryOutDto } from './dto/inventory-out.dto';
 import { InventoryInDto } from './dto/inventory-in.dto';
@@ -92,6 +92,49 @@ export class InventoryController {
     return this.inventory.reset({
       storeCode: dto.storeCode,
       rows: dto.rows,
+    });
+  }
+
+  /**
+   * 전체 매장 재고 조회 (창고/HQ 제외)
+   * GET /inventory/all-stores
+   */
+  @Get('all-stores')
+  async allStores(
+    @Query('q') q?: string,
+    @Query('limit') limit?: string,
+  ) {
+    return this.inventory.summaryAllStores({
+      q,
+      limit: limit ? Number(limit) : undefined,
+    });
+  }
+
+  /**
+   * 매장별 재고 요약 (집계) - 매장별 SKU수, 총수량만 반환
+   * GET /inventory/stores-summary
+   */
+  @Get('stores-summary')
+  async storesSummary() {
+    return this.inventory.storesSummary();
+  }
+
+  /**
+   * 특정 매장 재고 상세 (페이지네이션)
+   * GET /inventory/store/:storeCode
+   */
+  @Get('store/:storeCode')
+  async storeDetail(
+    @Param('storeCode') storeCode: string,
+    @Query('q') q?: string,
+    @Query('offset') offset?: string,
+    @Query('limit') limit?: string,
+  ) {
+    return this.inventory.storeDetail({
+      storeCode,
+      q,
+      offset: offset ? Number(offset) : 0,
+      limit: limit ? Number(limit) : 500,
     });
   }
 }

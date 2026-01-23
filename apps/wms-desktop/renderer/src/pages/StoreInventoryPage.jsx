@@ -1,176 +1,171 @@
 // renderer/src/pages/StoreInventoryPage.jsx
-import React, { useEffect, useMemo, useState } from "react";
+import React, { useCallback, useEffect, useMemo, useState } from "react";
 import { useToasts } from "../lib/toasts.jsx";
 import { inputStyle, primaryBtn } from "../ui/styles";
 
 import { inventoryFlow } from "../workflows/inventory/inventory.workflow";
-import { loadStores, getStoresCache } from "../workflows/_common/storeMap";
 
 export default function StoreInventoryPage() {
   const { push, ToastHost } = useToasts();
 
+  // ========================================
+  // 상태
+  // ========================================
   const [loading, setLoading] = useState(false);
-  const [rows, setRows] = useState([]);
+  const [storeSummary, setStoreSummary] = useState([]); // 매장 요약 목록
+  const [selectedStore, setSelectedStore] = useState(null); // 선택된 매장
+  const [detailItems, setDetailItems] = useState([]); // 상세 재고 목록
+  const [detailTotal, setDetailTotal] = useState(0);
+  const [detailOffset, setDetailOffset] = useState(0);
+  const [detailLoading, setDetailLoading] = useState(false);
 
-  // 매장 목록
-  const [stores, setStores] = useState([]);
-  const [selectedStoreId, setSelectedStoreId] = useState("");
-
-  // 상단 검색(전체 검색)
+  // 검색
   const [q, setQ] = useState("");
 
-  // 빠른 필터(토글)
-  const [hideZero, setHideZero] = useState(false);
-
   // 정렬
-  const [sortKey, setSortKey] = useState("LOC");
+  const [sortKey, setSortKey] = useState("SKU");
   const [sortDir, setSortDir] = useState("ASC");
 
-  // Location 자연정렬
-  function parseLocKey(code) {
-    const s = String(code || "").trim();
-    const m = s.match(/^([A-Za-z]+)[-_ ]?(\d+)$/);
-    if (!m) {
-      return {
-        kind: 1,
-        prefix: s.toUpperCase(),
-        num: Number.POSITIVE_INFINITY,
-        raw: s.toUpperCase(),
-      };
-    }
-    return {
-      kind: 0,
-      prefix: m[1].toUpperCase(),
-      num: Number(m[2]),
-      raw: s.toUpperCase(),
-    };
-  }
+  // ========================================
+  // 초기 로드: 매장 요약
+  // ========================================
+  useEffect(() => {
+    loadStoresSummary();
+  }, []);
 
-  function compareLocation(aCode, bCode) {
-    const a = parseLocKey(aCode);
-    const b = parseLocKey(bCode);
-
-    if (a.kind !== b.kind) return a.kind - b.kind;
-    const p = a.prefix.localeCompare(b.prefix);
-    if (p !== 0) return p;
-    if (a.num !== b.num) return a.num - b.num;
-    return a.raw.localeCompare(b.raw);
-  }
-
-  // 매장 목록 로드
-  async function loadStoreList() {
-    try {
-      await loadStores();
-      const list = getStoresCache();
-      // HQ 제외한 매장만
-      const storeList = list.filter((s) => !s.isHq);
-      setStores(storeList);
-    } catch (e) {
-      console.error("매장 목록 로드 실패:", e);
-    }
-  }
-
-  // 재고 로드
-  async function load() {
-    if (!selectedStoreId) {
-      setRows([]);
-      return;
-    }
-
+  async function loadStoresSummary() {
     setLoading(true);
     try {
-      const list = await inventoryFlow.loadSummary({ limit: 50000, storeId: selectedStoreId });
-      setRows(list);
+      const res = await inventoryFlow.loadStoresSummary();
+      setStoreSummary(res?.items || []);
     } catch (e) {
-      push({ kind: "error", title: "재고 로드 실패", message: e?.message || String(e) });
-      setRows([]);
+      push({ kind: "error", title: "로드 실패", message: e?.message || String(e) });
     } finally {
       setLoading(false);
     }
   }
 
-  useEffect(() => {
-    loadStoreList();
-  }, []);
-
-  useEffect(() => {
-    if (selectedStoreId) {
-      load();
-    } else {
-      setRows([]);
-    }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [selectedStoreId]);
-
-  const filtered = useMemo(() => {
-    let out = rows;
-
-    // 0 숨김
-    if (hideZero) {
-      out = out.filter((r) => Number(r.onHand ?? 0) !== 0);
+  // ========================================
+  // 매장 선택 시 상세 로드
+  // ========================================
+  async function selectStore(store) {
+    if (selectedStore?.storeCode === store?.storeCode) {
+      // 이미 선택된 매장 클릭 → 해제
+      setSelectedStore(null);
+      setDetailItems([]);
+      setDetailTotal(0);
+      setDetailOffset(0);
+      return;
     }
 
-    // 전체 검색
-    const s = (q || "").trim().toLowerCase();
-    if (s) {
-      out = out.filter((r) => {
-        const hay = [r.locationCode, r.skuCode, r.makerCode, r.skuName]
-          .filter(Boolean)
-          .join(" ")
-          .toLowerCase();
-        return hay.includes(s);
+    setSelectedStore(store);
+    setDetailItems([]);
+    setDetailTotal(0);
+    setDetailOffset(0);
+    setQ("");
+
+    if (!store?.storeCode) return;
+
+    setDetailLoading(true);
+    try {
+      const res = await inventoryFlow.loadStoreDetail({
+        storeCode: store.storeCode,
+        offset: 0,
+        limit: 500,
+      });
+      setDetailItems(res?.items || []);
+      setDetailTotal(res?.total || 0);
+      setDetailOffset(res?.offset || 0);
+    } catch (e) {
+      push({ kind: "error", title: "상세 로드 실패", message: e?.message || String(e) });
+    } finally {
+      setDetailLoading(false);
+    }
+  }
+
+  // ========================================
+  // 더 불러오기
+  // ========================================
+  async function loadMore() {
+    if (!selectedStore?.storeCode || detailLoading) return;
+    if (detailItems.length >= detailTotal) return;
+
+    setDetailLoading(true);
+    try {
+      const nextOffset = detailItems.length;
+      const res = await inventoryFlow.loadStoreDetail({
+        storeCode: selectedStore.storeCode,
+        offset: nextOffset,
+        limit: 500,
+      });
+      setDetailItems((prev) => [...prev, ...(res?.items || [])]);
+      setDetailOffset(res?.offset || nextOffset);
+    } catch (e) {
+      push({ kind: "error", title: "추가 로드 실패", message: e?.message || String(e) });
+    } finally {
+      setDetailLoading(false);
+    }
+  }
+
+  // ========================================
+  // 전체 합계 (요약)
+  // ========================================
+  const totalSummary = useMemo(() => {
+    return storeSummary.reduce(
+      (acc, s) => ({
+        skuCount: acc.skuCount + Number(s?.skuCount || 0),
+        totalQty: acc.totalQty + Number(s?.totalQty || 0),
+      }),
+      { skuCount: 0, totalQty: 0 }
+    );
+  }, [storeSummary]);
+
+  // ========================================
+  // 필터 & 정렬된 상세 아이템
+  // ========================================
+  const filteredItems = useMemo(() => {
+    let items = detailItems;
+
+    // 검색어 필터
+    const search = (q || "").trim().toLowerCase();
+    if (search) {
+      items = items.filter((it) => {
+        const hay = [it?.skuCode, it?.makerCode, it?.skuName].filter(Boolean).join(" ").toLowerCase();
+        return hay.includes(search);
       });
     }
 
     // 정렬
     const dir = sortDir === "DESC" ? -1 : 1;
-
-    out = [...out].sort((a, b) => {
+    items = [...items].sort((a, b) => {
       if (sortKey === "QTY") {
-        const av = Number(a.onHand ?? 0);
-        const bv = Number(b.onHand ?? 0);
-        return (av - bv) * dir;
+        return (Number(a.onHand ?? 0) - Number(b.onHand ?? 0)) * dir;
       }
-      if (sortKey === "SKU") {
-        return String(a.skuCode || "").localeCompare(String(b.skuCode || "")) * dir;
-      }
-      // LOC: 자연정렬
-      const c = compareLocation(a.locationCode, b.locationCode);
-      if (c !== 0) return c * dir;
-      return String(a.skuCode || "").localeCompare(String(b.skuCode || "")) * dir;
+      // SKU
+      return String(a.skuCode || "").localeCompare(String(b.skuCode || ""), "ko") * dir;
     });
 
-    return out;
-  }, [rows, hideZero, q, sortKey, sortDir]);
+    return items;
+  }, [detailItems, q, sortKey, sortDir]);
 
-  // 현재 화면 OnHand 합계
-  const sumOnHand = useMemo(() => {
-    return filtered.reduce((acc, r) => acc + Number(r.onHand ?? 0), 0);
-  }, [filtered]);
+  const detailTotals = useMemo(() => {
+    return filteredItems.reduce((acc, it) => acc + Number(it?.onHand || 0), 0);
+  }, [filteredItems]);
 
-  const pillBtn = (active) => ({
-    padding: "7px 10px",
-    borderRadius: 999,
-    border: "1px solid #e5e7eb",
-    background: active ? "#0ea5e9" : "#fff",
-    color: active ? "#fff" : "#0f172a",
-    fontWeight: 800,
-    cursor: "pointer",
-    userSelect: "none",
-  });
-
-  function resetFilters() {
-    setQ("");
-    setHideZero(false);
-    setSortKey("LOC");
-    setSortDir("ASC");
-  }
+  // ========================================
+  // 헬퍼
+  // ========================================
+  const fmtNum = (n) => {
+    const v = Number(n || 0);
+    if (!Number.isFinite(v)) return String(n ?? "");
+    return v.toLocaleString();
+  };
 
   function toggleSort(key) {
-    setSortKey((prevKey) => {
-      if (prevKey === key) {
+    setSortKey((prev) => {
+      if (prev === key) {
         setSortDir((d) => (d === "ASC" ? "DESC" : "ASC"));
-        return prevKey;
+        return prev;
       }
       setSortDir("ASC");
       return key;
@@ -182,241 +177,250 @@ export default function StoreInventoryPage() {
     return sortDir === "ASC" ? <span>▲</span> : <span>▼</span>;
   }
 
-  const thBase = {
-    padding: "10px 12px",
-    fontWeight: 800,
-    fontSize: 12,
-    color: "#64748b",
-    userSelect: "none",
-    whiteSpace: "nowrap",
-  };
+  // ========================================
+  // 스타일
+  // ========================================
+  const thBase = { padding: "10px 12px", fontWeight: 800, fontSize: 12, color: "#64748b", whiteSpace: "nowrap" };
+  const thClickable = { cursor: "pointer" };
 
-  const thClickable = {
+  const cardStyle = (active) => ({
+    padding: "10px 14px",
+    borderRadius: 8,
+    border: active ? "2px solid #3b82f6" : "1px solid #e5e7eb",
+    background: active ? "#dbeafe" : "#fff",
     cursor: "pointer",
-  };
+    textAlign: "left",
+    width: "100%",
+  });
 
-  // 선택된 매장 이름
-  const selectedStoreName = stores.find((s) => s.id === selectedStoreId)?.name || "";
-
+  // ========================================
+  // 렌더링
+  // ========================================
   return (
-    <div style={{ display: "grid", gap: 12 }}>
+    <div style={{ display: "flex", gap: 16, height: "100%" }}>
       <ToastHost />
 
-      {/* Header */}
-      <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 10, flexWrap: "wrap" }}>
-        <div style={{ fontWeight: 900 }}>매장 재고</div>
+      {/* 왼쪽: 매장 카드 목록 */}
+      <div
+        style={{
+          width: 200,
+          minWidth: 200,
+          display: "flex",
+          flexDirection: "column",
+          gap: 8,
+          background: "#f8fafc",
+          borderRadius: 12,
+          padding: 12,
+          border: "1px solid #e5e7eb",
+          overflowY: "auto",
+        }}
+      >
+        <div style={{ fontWeight: 800, fontSize: 13, color: "#64748b", marginBottom: 4 }}>매장 목록</div>
 
-        <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
-          <select
-            value={selectedStoreId}
-            onChange={(e) => setSelectedStoreId(e.target.value)}
-            style={{ ...inputStyle, minWidth: 200, padding: "10px 12px", fontWeight: 700 }}
+        {/* 전체 버튼 */}
+        <button
+          type="button"
+          onClick={() => {
+            setSelectedStore(null);
+            setDetailItems([]);
+          }}
+          style={cardStyle(!selectedStore)}
+        >
+          <div style={{ fontWeight: 700, fontSize: 13, color: "#0f172a" }}>전체</div>
+          <div style={{ fontSize: 11, color: "#64748b" }}>
+            {storeSummary.length}개 매장 | <b style={{ color: "#10b981" }}>{fmtNum(totalSummary.totalQty)}</b>개
+          </div>
+        </button>
+
+        {/* 매장별 카드 */}
+        {storeSummary.map((s) => (
+          <button
+            key={s.storeCode}
+            type="button"
+            onClick={() => selectStore(s)}
+            style={cardStyle(selectedStore?.storeCode === s.storeCode)}
           >
-            <option value="">-- 매장 선택 --</option>
-            {stores.map((s) => (
-              <option key={s.id} value={s.id}>
-                {s.name} ({s.code})
-              </option>
-            ))}
-          </select>
-
-          <input
-            value={q}
-            onChange={(e) => setQ(e.target.value)}
-            placeholder="전체 검색 (Location / SKU / MakerCode / 상품명)"
-            style={{ ...inputStyle, minWidth: 340 }}
-            disabled={!selectedStoreId}
-          />
-
-          <button type="button" style={primaryBtn} onClick={load} disabled={loading || !selectedStoreId}>
-            새로고침
+            <div style={{ fontWeight: 700, fontSize: 13, color: "#0f172a" }}>{s.storeName || s.storeCode}</div>
+            <div style={{ fontSize: 11, color: "#64748b" }}>
+              {fmtNum(s.skuCount)} SKU | <b style={{ color: "#10b981" }}>{fmtNum(s.totalQty)}</b>개
+            </div>
           </button>
-        </div>
+        ))}
+
+        {loading && (
+          <div style={{ fontSize: 12, color: "#94a3b8", textAlign: "center", padding: 10 }}>로딩 중...</div>
+        )}
+
+        {!loading && storeSummary.length === 0 && (
+          <div style={{ fontSize: 12, color: "#94a3b8", textAlign: "center", padding: 10 }}>
+            매장 데이터가 없습니다
+          </div>
+        )}
       </div>
 
-      {/* 매장 미선택 안내 */}
-      {!selectedStoreId && (
-        <div
-          style={{
-            border: "1px solid #fbbf24",
-            borderRadius: 12,
-            padding: 16,
-            background: "#fefce8",
-            color: "#92400e",
-            fontWeight: 600,
-          }}
-        >
-          상단에서 매장을 선택하면 해당 매장의 재고를 조회할 수 있습니다.
-        </div>
-      )}
-
-      {/* Controls */}
-      {selectedStoreId && (
-        <div
-          style={{
-            border: "1px solid #e5e7eb",
-            borderRadius: 12,
-            padding: 12,
-            background: "#fff",
-            display: "flex",
-            gap: 10,
-            alignItems: "center",
-            flexWrap: "wrap",
-            justifyContent: "space-between",
-          }}
-        >
-          <div style={{ display: "flex", gap: 10, alignItems: "center", flexWrap: "wrap" }}>
-            <div
-              style={{
-                padding: "7px 12px",
-                borderRadius: 8,
-                background: "#dbeafe",
-                color: "#1e40af",
-                fontWeight: 800,
-                fontSize: 13,
-              }}
-            >
-              {selectedStoreName}
-            </div>
-
-            <button type="button" style={pillBtn(hideZero)} onClick={() => setHideZero((v) => !v)} title="OnHand=0 숨김">
-              0 숨김
-            </button>
-
-            <select
-              value={sortKey}
-              onChange={(e) => setSortKey(e.target.value)}
-              style={{ ...inputStyle, padding: "8px 10px", minWidth: 160 }}
-              title="정렬 기준"
-            >
-              <option value="LOC">정렬: Location</option>
-              <option value="SKU">정렬: SKU</option>
-              <option value="QTY">정렬: OnHand</option>
-            </select>
-
-            <select
-              value={sortDir}
-              onChange={(e) => setSortDir(e.target.value)}
-              style={{ ...inputStyle, padding: "8px 10px", minWidth: 120 }}
-              title="정렬 방향"
-            >
-              <option value="ASC">오름차순</option>
-              <option value="DESC">내림차순</option>
-            </select>
-
+      {/* 오른쪽: 테이블 */}
+      <div style={{ flex: 1, display: "flex", flexDirection: "column", gap: 12, minWidth: 0 }}>
+        {/* Header */}
+        <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 10, flexWrap: "wrap" }}>
+          <div style={{ fontWeight: 900, fontSize: 16 }}>
+            {selectedStore ? `${selectedStore.storeName || selectedStore.storeCode} 재고` : "매장 재고 현황"}
+          </div>
+          <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
+            <input
+              value={q}
+              onChange={(e) => setQ(e.target.value)}
+              placeholder="검색 (SKU/메이커코드)"
+              style={{ ...inputStyle, minWidth: 180 }}
+              disabled={!selectedStore}
+            />
             <button
               type="button"
-              style={{ ...primaryBtn, background: "#fff", color: "#0f172a", border: "1px solid #e5e7eb" }}
-              onClick={resetFilters}
+              style={{ ...primaryBtn, padding: "8px 14px" }}
+              onClick={loadStoresSummary}
+              disabled={loading}
             >
-              필터 초기화
+              새로고침
             </button>
           </div>
-
-          <div style={{ fontSize: 12, color: "#64748b" }}>
-            rows: <b>{filtered.length.toLocaleString()}</b>
-          </div>
         </div>
-      )}
 
-      {/* Table */}
-      {selectedStoreId && (
-        <div style={{ border: "1px solid #e5e7eb", borderRadius: 12, overflow: "auto", background: "#fff" }}>
-          <table
+        {/* 정보 바 */}
+        {selectedStore && (
+          <div
             style={{
-              width: "fit-content",
-              borderCollapse: "collapse",
-              tableLayout: "fixed",
-              minWidth: 0,
+              border: "1px solid #e5e7eb",
+              borderRadius: 10,
+              padding: 10,
+              background: "#fff",
+              display: "flex",
+              gap: 10,
+              alignItems: "center",
+              justifyContent: "space-between",
+              flexWrap: "wrap",
+              fontSize: 12,
+              color: "#64748b",
             }}
           >
-            <thead style={{ background: "#f8fafc" }}>
-              <tr>
-                <th
-                  style={{ ...thBase, ...thClickable, textAlign: "left", width: 120 }}
-                  onClick={() => toggleSort("LOC")}
-                  title="정렬: Location (자연정렬)"
-                >
-                  <span style={{ display: "inline-flex", gap: 8, alignItems: "center" }}>
-                    <span>Location</span>
-                    {sortIcon("LOC")}
-                  </span>
-                </th>
+            <div>
+              <b>{selectedStore.storeName}</b> ({selectedStore.storeCode})
+            </div>
+            <div>
+              로드: <b>{detailItems.length.toLocaleString()}</b> / 전체: <b>{detailTotal.toLocaleString()}</b> |
+              필터: <b>{filteredItems.length.toLocaleString()}</b> |
+              수량합: <b style={{ color: "#10b981" }}>{fmtNum(detailTotals)}</b>
+            </div>
+          </div>
+        )}
 
-                <th
-                  style={{ ...thBase, ...thClickable, textAlign: "left", width: 210 }}
-                  onClick={() => toggleSort("SKU")}
-                  title="정렬: SKU"
-                >
-                  <span style={{ display: "inline-flex", gap: 8, alignItems: "center" }}>
-                    <span>SKU</span>
-                    {sortIcon("SKU")}
-                  </span>
-                </th>
-
-                <th style={{ ...thBase, textAlign: "left", width: 160 }}>MakerCode</th>
-
-                <th style={{ ...thBase, textAlign: "left", width: 380 }}>상품명</th>
-
-                <th
-                  style={{ ...thBase, ...thClickable, textAlign: "right", width: 160 }}
-                  onClick={() => toggleSort("QTY")}
-                  title="정렬: OnHand"
-                >
-                  <div style={{ display: "flex", justifyContent: "flex-end", gap: 10, alignItems: "baseline" }}>
-                    <span style={{ display: "inline-flex", gap: 8, alignItems: "center" }}>
-                      <span>OnHand</span>
-                      {sortIcon("QTY")}
-                    </span>
-                    <span style={{ fontSize: 12, fontWeight: 900, color: "#0f172a" }}>
-                      Σ {sumOnHand.toLocaleString()}
-                    </span>
-                  </div>
-                </th>
-              </tr>
-            </thead>
-
-            <tbody>
-              {filtered.map((r) => (
-                <tr key={`${r.skuId ?? ""}-${r.locationId ?? ""}-${r.skuCode ?? ""}`} style={{ borderTop: "1px solid #e5e7eb" }}>
-                  <td style={{ padding: "10px 12px", width: 120, fontFamily: "Consolas, monospace", whiteSpace: "nowrap" }}>
-                    {r.locationCode || "-"}
-                  </td>
-                  <td style={{ padding: "10px 12px", width: 210, fontFamily: "Consolas, monospace", whiteSpace: "nowrap" }}>
-                    {r.skuCode || "-"}
-                  </td>
-                  <td style={{ padding: "10px 12px", width: 160, fontFamily: "Consolas, monospace", whiteSpace: "nowrap" }}>
-                    {r.makerCode || "-"}
-                  </td>
-                  <td
-                    style={{
-                      padding: "10px 12px",
-                      width: 380,
-                      overflow: "hidden",
-                      textOverflow: "ellipsis",
-                      whiteSpace: "nowrap",
-                    }}
-                    title={r.skuName || ""}
-                  >
-                    {r.skuName || "-"}
-                  </td>
-                  <td style={{ padding: "10px 12px", width: 160, textAlign: "right", fontWeight: 900 }}>
-                    {Number(r.onHand ?? 0)}
-                  </td>
-                </tr>
-              ))}
-
-              {filtered.length === 0 ? (
+        {/* Table */}
+        <div style={{ border: "1px solid #e5e7eb", borderRadius: 10, overflow: "auto", background: "#fff", flex: 1 }}>
+          {selectedStore ? (
+            <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 12 }}>
+              <thead style={{ background: "#f8fafc", position: "sticky", top: 0 }}>
                 <tr>
-                  <td colSpan={5} style={{ padding: 14, textAlign: "center", color: "#94a3b8" }}>
-                    {loading ? "로딩 중..." : "재고 데이터가 없습니다."}
-                  </td>
+                  <th style={{ ...thBase, textAlign: "left", width: 50 }}>#</th>
+                  <th style={{ ...thBase, ...thClickable, textAlign: "left" }} onClick={() => toggleSort("SKU")}>
+                    SKU {sortIcon("SKU")}
+                  </th>
+                  <th style={{ ...thBase, textAlign: "left" }}>메이커코드</th>
+                  <th style={{ ...thBase, textAlign: "left" }}>상품명</th>
+                  <th style={{ ...thBase, ...thClickable, textAlign: "right", width: 100 }} onClick={() => toggleSort("QTY")}>
+                    수량 {sortIcon("QTY")}
+                  </th>
                 </tr>
-              ) : null}
-            </tbody>
-          </table>
+              </thead>
+              <tbody>
+                {filteredItems.map((it, idx) => (
+                  <tr key={`${it.skuCode}-${idx}`} style={{ borderTop: "1px solid #f1f5f9" }}>
+                    <td style={{ padding: "8px 12px" }}>{idx + 1}</td>
+                    <td style={{ padding: "8px 12px", fontFamily: "Consolas, monospace" }}>{it.skuCode || "-"}</td>
+                    <td style={{ padding: "8px 12px", fontFamily: "Consolas, monospace" }}>{it.makerCode || "-"}</td>
+                    <td style={{ padding: "8px 12px" }}>{it.skuName || "-"}</td>
+                    <td style={{ padding: "8px 12px", textAlign: "right", fontWeight: 700, color: "#10b981" }}>
+                      {fmtNum(it.onHand)}
+                    </td>
+                  </tr>
+                ))}
+                {filteredItems.length === 0 && (
+                  <tr>
+                    <td colSpan={5} style={{ padding: 20, textAlign: "center", color: "#94a3b8" }}>
+                      {detailLoading ? "로딩 중..." : "재고 데이터가 없습니다."}
+                    </td>
+                  </tr>
+                )}
+              </tbody>
+              {filteredItems.length > 0 && (
+                <tfoot>
+                  <tr style={{ background: "#ecfdf5", fontWeight: 700 }}>
+                    <td style={{ padding: "10px 12px" }} colSpan={4}>합계</td>
+                    <td style={{ padding: "10px 12px", textAlign: "right", color: "#10b981" }}>{fmtNum(detailTotals)}</td>
+                  </tr>
+                </tfoot>
+              )}
+            </table>
+          ) : (
+            // 매장 미선택 시: 요약 테이블
+            <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 12 }}>
+              <thead style={{ background: "#f8fafc", position: "sticky", top: 0 }}>
+                <tr>
+                  <th style={{ ...thBase, textAlign: "left", width: 50 }}>#</th>
+                  <th style={{ ...thBase, textAlign: "left" }}>매장명</th>
+                  <th style={{ ...thBase, textAlign: "left" }}>매장코드</th>
+                  <th style={{ ...thBase, textAlign: "right" }}>SKU 수</th>
+                  <th style={{ ...thBase, textAlign: "right" }}>총 수량</th>
+                </tr>
+              </thead>
+              <tbody>
+                {storeSummary.map((s, idx) => (
+                  <tr
+                    key={s.storeCode}
+                    style={{ borderTop: "1px solid #f1f5f9", cursor: "pointer" }}
+                    onClick={() => selectStore(s)}
+                  >
+                    <td style={{ padding: "8px 12px" }}>{idx + 1}</td>
+                    <td style={{ padding: "8px 12px", fontWeight: 600 }}>{s.storeName || "-"}</td>
+                    <td style={{ padding: "8px 12px", fontFamily: "Consolas, monospace" }}>{s.storeCode || "-"}</td>
+                    <td style={{ padding: "8px 12px", textAlign: "right" }}>{fmtNum(s.skuCount)}</td>
+                    <td style={{ padding: "8px 12px", textAlign: "right", fontWeight: 700, color: "#10b981" }}>
+                      {fmtNum(s.totalQty)}
+                    </td>
+                  </tr>
+                ))}
+                {storeSummary.length === 0 && (
+                  <tr>
+                    <td colSpan={5} style={{ padding: 20, textAlign: "center", color: "#94a3b8" }}>
+                      {loading ? "로딩 중..." : "매장 데이터가 없습니다."}
+                    </td>
+                  </tr>
+                )}
+              </tbody>
+              {storeSummary.length > 0 && (
+                <tfoot>
+                  <tr style={{ background: "#ecfdf5", fontWeight: 700 }}>
+                    <td style={{ padding: "10px 12px" }} colSpan={3}>합계</td>
+                    <td style={{ padding: "10px 12px", textAlign: "right" }}>{fmtNum(totalSummary.skuCount)}</td>
+                    <td style={{ padding: "10px 12px", textAlign: "right", color: "#10b981" }}>{fmtNum(totalSummary.totalQty)}</td>
+                  </tr>
+                </tfoot>
+              )}
+            </table>
+          )}
         </div>
-      )}
+
+        {/* 더 불러오기 버튼 */}
+        {selectedStore && detailItems.length < detailTotal && (
+          <div style={{ textAlign: "center" }}>
+            <button
+              type="button"
+              style={{ ...primaryBtn, padding: "8px 20px" }}
+              onClick={loadMore}
+              disabled={detailLoading}
+            >
+              {detailLoading ? "로딩 중..." : `더 불러오기 (${detailItems.length} / ${detailTotal})`}
+            </button>
+          </div>
+        )}
+      </div>
     </div>
   );
 }

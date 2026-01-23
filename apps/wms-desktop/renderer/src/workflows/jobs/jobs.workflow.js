@@ -163,13 +163,19 @@ export const jobsFlow = {
     };
   },
 
-  // ✅ (추가) 마지막 스캔 취소(UNDO) — 다른 로직/시그니처 안 건드림
-  undoLast: async ({ jobId }) => {
-    const res = await jobsApi.undoLast(jobId);
+  // ✅ UNDO 전 음수 발생 여부 체크
+  checkUndo: async ({ jobId }) => {
+    if (!jobId) throw new Error("jobId is required");
+    return jobsApi.checkUndo(jobId);
+  },
+
+  // ✅ (추가) 마지막 스캔 취소(UNDO) — force 옵션 추가
+  undoLast: async ({ jobId, force = false }) => {
+    const res = await jobsApi.undoLast(jobId, { force });
     return {
       ok: true,
       result: res,
-      toast: { kind: "info", title: "UNDO", message: "마지막 스캔을 취소했어" },
+      toast: { kind: "info", title: "UNDO", message: force ? "강제 취소 완료 (음수 재고 발생)" : "마지막 스캔을 취소했어" },
       resetScan: true,
       reloadJob: true,
     };
@@ -272,11 +278,12 @@ export const jobsFlow = {
   /** =========================
    * ✅ Outbound Scan (출고)
    * ========================= */
-  scanOutbound: async ({ jobId, value, qty = 1, locationCode = "", confirm }) => {
+  scanOutbound: async ({ jobId, value, qty = 1, locationCode = "", confirm, force = false }) => {
     const body = {
       value,
       qty,
       ...(locationCode ? { locationCode } : {}),
+      ...(force ? { force: true } : {}),
     };
 
     try {
@@ -284,12 +291,43 @@ export const jobsFlow = {
       return {
         ok: true,
         lastScan: res,
-        toast: { kind: "success", title: "출고 처리", message: `${value} +${qty}` },
+        toast: { kind: force ? "warn" : "success", title: force ? "강제 출고" : "출고 처리", message: force ? `${value} +${qty} (음수 재고 발생)` : `${value} +${qty}` },
         resetScan: true,
         reloadJob: true,
       };
     } catch (e) {
       const msg = e?.message || String(e);
+
+      // ✅ 음수 재고 에러 처리
+      if (msg.includes("NEGATIVE_INVENTORY") || msg.includes("재고 부족") || msg.includes("음수")) {
+        // 에러에서 상세 정보 파싱 시도
+        let detail = "";
+        try {
+          const match = msg.match(/현재:\s*(-?\d+).*출고:\s*(\d+).*예상:\s*(-?\d+)/);
+          if (match) {
+            detail = `\n\n현재 재고: ${match[1]}\n출고 수량: ${match[2]}\n예상 결과: ${match[3]}`;
+          }
+        } catch {}
+
+        const forceOk = confirm
+          ? confirm(`⚠️ 재고 부족으로 음수가 발생합니다!${detail}\n\n강제로 출고하시겠습니까?`)
+          : false;
+
+        if (!forceOk) {
+          return { ok: false, error: "재고 부족 - 사용자 취소", resetScan: true };
+        }
+
+        // force=true로 재시도
+        const res2 = await jobsApi.scan(jobId, { ...body, force: true, forceReason: "사용자 확인 후 강제 출고 (재고 부족)" });
+        return {
+          ok: true,
+          lastScan: res2,
+          toast: { kind: "warn", title: "강제 출고", message: `${value} +${qty} (음수 재고 발생)` },
+          resetScan: true,
+          reloadJob: true,
+        };
+      }
+
       if (!is409(msg)) throw new Error(msg);
 
       // 409 → 승인/오버픽 루트(프로젝트 기본 패턴 유지)
@@ -343,7 +381,7 @@ export const jobsFlow = {
    * - receive가 없는 환경(구버전 백엔드)에서는 기존 /items/scan 유지.
    * - 반품 기본 로케이션은 RET-01
    * ========================= */
-  scanInbound: async ({ jobId, value, qty = 1, locationCode = "", confirm }) => {
+  scanInbound: async ({ jobId, value, qty = 1, locationCode = "", confirm, force = false }) => {
     // ✅ 반품 기본 로케이션: 비어있으면 RET-01
     const loc = String(locationCode || "").trim() || "RET-01";
 
@@ -351,6 +389,7 @@ export const jobsFlow = {
       value,
       qty,
       locationCode: loc,
+      ...(force ? { force: true } : {}),
     };
 
     // ✅ receive 라우트 지원 여부에 따라 분기
@@ -363,12 +402,43 @@ export const jobsFlow = {
       return {
         ok: true,
         lastScan: res,
-        toast: { kind: "success", title: "입고 처리", message: `${value} +${qty}` },
+        toast: { kind: force ? "warn" : "success", title: force ? "강제 입고" : "입고 처리", message: force ? `${value} +${qty} (음수 재고 발생)` : `${value} +${qty}` },
         resetScan: true,
         reloadJob: true,
       };
     } catch (e) {
       const msg = e?.message || String(e);
+
+      // ✅ 음수 재고 에러 처리 (반품 시 매장 재고 부족)
+      if (msg.includes("NEGATIVE_INVENTORY") || msg.includes("재고 부족") || msg.includes("음수")) {
+        // 에러에서 상세 정보 파싱 시도
+        let detail = "";
+        try {
+          const match = msg.match(/현재:\s*(-?\d+).*반품:\s*(\d+).*예상:\s*(-?\d+)/);
+          if (match) {
+            detail = `\n\n현재 재고: ${match[1]}\n반품 수량: ${match[2]}\n예상 결과: ${match[3]}`;
+          }
+        } catch {}
+
+        const forceOk = confirm
+          ? confirm(`⚠️ 매장 재고 부족으로 음수가 발생합니다!${detail}\n\n강제로 반품 처리하시겠습니까?`)
+          : false;
+
+        if (!forceOk) {
+          return { ok: false, error: "재고 부족 - 사용자 취소", resetScan: true };
+        }
+
+        // force=true로 재시도
+        const res2 = await apiCall(jobId, { ...body, force: true, forceReason: "사용자 확인 후 강제 반품 (매장 재고 부족)" });
+        return {
+          ok: true,
+          lastScan: res2,
+          toast: { kind: "warn", title: "강제 반품", message: `${value} +${qty} (매장 음수 재고 발생)` },
+          resetScan: true,
+          reloadJob: true,
+        };
+      }
+
       if (!is409(msg)) throw new Error(msg);
 
       const full = await jobsApi.get(jobId);
@@ -429,8 +499,8 @@ export const jobsFlow = {
     return jobsApi.undoUntil(jobId, txId);
   },
 
-  undoAll: async ({ jobId }) => {
+  undoAll: async ({ jobId, force = false }) => {
     if (!jobId) throw new Error("jobId is required");
-    return jobsApi.undoAll(jobId);
+    return jobsApi.undoAll(jobId, { force });
   },
 };

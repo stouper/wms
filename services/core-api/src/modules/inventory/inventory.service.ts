@@ -286,6 +286,90 @@ export class InventoryService {
     return rows.slice(0, take);
   }
 
+  /**
+   * 전체 매장 재고 조회 (창고/HQ 제외)
+   * - 매장명 포함하여 반환
+   */
+  async summaryAllStores(params: { q?: string; limit?: number }) {
+    const q = this.norm(params.q ?? '');
+    const take = this.clampLimit(params.limit ?? 50000, 1, 50000);
+
+    // HQ가 아닌 매장 목록 조회
+    const stores = await this.prisma.store.findMany({
+      where: { isHq: false } as any,
+      select: { id: true, code: true, name: true } as any,
+    }) as any[];
+
+    if (stores.length === 0) {
+      return { items: [], stores: [] };
+    }
+
+    const storeIds = stores.map((s: any) => s.id);
+    const storeMap = new Map<string, { code: string; name: string }>();
+    for (const s of stores) {
+      storeMap.set(s.id, { code: s.code, name: s.name });
+    }
+
+    const where: any = {
+      location: { storeId: { in: storeIds } },
+    };
+
+    if (q) {
+      where.OR = [
+        { sku: { sku: { contains: q, mode: 'insensitive' } } as any },
+        { sku: { makerCode: { contains: q, mode: 'insensitive' } } as any },
+        { sku: { name: { contains: q, mode: 'insensitive' } } as any },
+        { location: { code: { contains: q, mode: 'insensitive' } } as any },
+      ];
+    }
+
+    const invRows = await this.prisma.inventory.findMany({
+      where,
+      take,
+      select: {
+        id: true,
+        skuId: true,
+        locationId: true,
+        qty: true,
+        sku: { select: { sku: true, makerCode: true, name: true, productType: true } } as any,
+        location: { select: { code: true, storeId: true } } as any,
+      },
+    } as any);
+
+    const rows = invRows
+      .map((r: any) => {
+        const storeId = r?.location?.storeId ?? null;
+        const storeInfo = storeId ? storeMap.get(storeId) : null;
+        return {
+          skuId: r.skuId ?? null,
+          locationId: r.locationId ?? null,
+          skuCode: r?.sku?.sku ?? null,
+          makerCode: r?.sku?.makerCode ?? null,
+          skuName: r?.sku?.name ?? null,
+          productType: r?.sku?.productType ?? null,
+          locationCode: r?.location?.code ?? null,
+          storeCode: storeInfo?.code ?? null,
+          storeName: storeInfo?.name ?? null,
+          onHand: Number(r?.qty ?? 0),
+        };
+      })
+      .filter((x: any) => x.skuCode && x.locationCode);
+
+    // 매장명 → SKU → Location 순 정렬
+    rows.sort((a: any, b: any) => {
+      const s = String(a.storeName || '').localeCompare(String(b.storeName || ''), 'ko');
+      if (s !== 0) return s;
+      const c = String(a.skuCode).localeCompare(String(b.skuCode));
+      if (c !== 0) return c;
+      return String(a.locationCode).localeCompare(String(b.locationCode));
+    });
+
+    return {
+      items: rows,
+      stores: stores.map((s: any) => ({ code: s.code, name: s.name })),
+    };
+  }
+
   async onHandByCodes(params: { skuCode: string; locationCode: string }) {
     const skuCode = this.normUpper(params.skuCode);
     const locationCode = this.norm(params.locationCode);
@@ -798,5 +882,177 @@ export class InventoryService {
     if (u === 'ACC' || u === 'ACCESSORY' || u === 'ACCESSORIES') return 'ACCESSORY';
     if (u === 'SET') return 'SET';
     return s;
+  }
+
+  /**
+   * 매장별 재고 요약 (집계)
+   * - 매장별 SKU수, 총수량만 반환 (가벼운 응답)
+   */
+  async storesSummary() {
+    // 모든 매장 조회 (HQ 포함)
+    const stores = await this.prisma.store.findMany({
+      select: { id: true, code: true, name: true, isHq: true } as any,
+    }) as any[];
+
+    const storeMap = new Map<string, { code: string; name: string; isHq: boolean }>();
+    for (const s of stores) {
+      storeMap.set(s.id, { code: s.code, name: s.name, isHq: s.isHq });
+    }
+
+    // 매장별 집계 (SQL 집계)
+    const agg = await this.prisma.inventory.groupBy({
+      by: ['locationId'],
+      _sum: { qty: true },
+      _count: { skuId: true },
+    } as any) as any[];
+
+    // Location → Store 매핑
+    const locationIds = agg.map((a: any) => a.locationId);
+    const locations = await this.prisma.location.findMany({
+      where: { id: { in: locationIds } } as any,
+      select: { id: true, storeId: true } as any,
+    }) as any[];
+
+    const locToStore = new Map<string, string>();
+    for (const loc of locations) {
+      locToStore.set(loc.id, loc.storeId);
+    }
+
+    // 매장별 합산
+    const storeSummary = new Map<string, { skuCount: number; totalQty: number }>();
+    for (const a of agg) {
+      const storeId = locToStore.get(a.locationId);
+      if (!storeId) continue;
+
+      if (!storeSummary.has(storeId)) {
+        storeSummary.set(storeId, { skuCount: 0, totalQty: 0 });
+      }
+
+      const entry = storeSummary.get(storeId)!;
+      entry.skuCount += Number(a._count?.skuId ?? 0);
+      entry.totalQty += Number(a._sum?.qty ?? 0);
+    }
+
+    // 결과 변환
+    const items = [];
+    for (const [storeId, summary] of storeSummary.entries()) {
+      const storeInfo = storeMap.get(storeId);
+      if (!storeInfo) continue;
+
+      items.push({
+        storeCode: storeInfo.code,
+        storeName: storeInfo.name,
+        isHq: storeInfo.isHq,
+        skuCount: summary.skuCount,
+        totalQty: summary.totalQty,
+      });
+    }
+
+    // HQ가 아닌 매장도 포함 (재고 없어도)
+    for (const [storeId, storeInfo] of storeMap.entries()) {
+      if (!storeSummary.has(storeId)) {
+        items.push({
+          storeCode: storeInfo.code,
+          storeName: storeInfo.name,
+          isHq: storeInfo.isHq,
+          skuCount: 0,
+          totalQty: 0,
+        });
+      }
+    }
+
+    // 정렬: HQ 먼저, 그 다음 매장명 순
+    items.sort((a, b) => {
+      if (a.isHq && !b.isHq) return -1;
+      if (!a.isHq && b.isHq) return 1;
+      return (a.storeName || '').localeCompare(b.storeName || '', 'ko');
+    });
+
+    return { items };
+  }
+
+  /**
+   * 특정 매장 재고 상세 (페이지네이션)
+   */
+  async storeDetail(params: {
+    storeCode: string;
+    q?: string;
+    offset?: number;
+    limit?: number;
+  }) {
+    const storeCode = this.norm(params.storeCode);
+    const q = this.norm(params.q ?? '');
+    const offset = Math.max(0, Number(params.offset) || 0);
+    const limit = this.clampLimit(params.limit ?? 500, 1, 2000);
+
+    if (!storeCode) {
+      throw new BadRequestException('storeCode is required');
+    }
+
+    // Store 조회
+    const store = await this.prisma.store.findFirst({
+      where: { code: storeCode } as any,
+      select: { id: true, code: true, name: true, isHq: true } as any,
+    }) as any;
+
+    if (!store) {
+      throw new BadRequestException(`Store not found: ${storeCode}`);
+    }
+
+    const where: any = {
+      location: { storeId: store.id },
+    };
+
+    if (q) {
+      where.OR = [
+        { sku: { sku: { contains: q, mode: 'insensitive' } } as any },
+        { sku: { makerCode: { contains: q, mode: 'insensitive' } } as any },
+        { sku: { name: { contains: q, mode: 'insensitive' } } as any },
+        { location: { code: { contains: q, mode: 'insensitive' } } as any },
+      ];
+    }
+
+    // 전체 건수
+    const total = await this.prisma.inventory.count({ where } as any);
+
+    // 페이지네이션 조회
+    const invRows = await this.prisma.inventory.findMany({
+      where,
+      skip: offset,
+      take: limit,
+      orderBy: [
+        { location: { code: 'asc' } },
+        { sku: { sku: 'asc' } },
+      ] as any,
+      select: {
+        id: true,
+        skuId: true,
+        locationId: true,
+        qty: true,
+        sku: { select: { sku: true, makerCode: true, name: true, productType: true } } as any,
+        location: { select: { code: true } } as any,
+      },
+    } as any);
+
+    const items = invRows.map((r: any) => ({
+      skuId: r.skuId ?? null,
+      locationId: r.locationId ?? null,
+      skuCode: r?.sku?.sku ?? null,
+      makerCode: r?.sku?.makerCode ?? null,
+      skuName: r?.sku?.name ?? null,
+      productType: r?.sku?.productType ?? null,
+      locationCode: r?.location?.code ?? null,
+      onHand: Number(r?.qty ?? 0),
+    }));
+
+    return {
+      storeCode: store.code,
+      storeName: store.name,
+      isHq: store.isHq,
+      total,
+      offset,
+      limit,
+      items,
+    };
   }
 }
