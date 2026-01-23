@@ -1,0 +1,29 @@
+{
+  "project_info": {
+    "project_number": "827314599653",
+    "project_id": "eska-office",
+    "storage_bucket": "eska-office.firebasestorage.app"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:827314599653:android:cf7720f7de7a5432e6c60c",
+        "android_client_info": {
+          "package_name": "com.eska.office"
+        }
+      },
+      "oauth_client": [],
+      "api_key": [
+        {
+          "current_key": "AIzaSyDzMUZsJoZ9CG7XEvma-XavvvlKFRRQIIk"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": []
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}

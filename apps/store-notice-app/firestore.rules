@@ -1,0 +1,281 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    // ============================================================
+    // Helper Functions
+    // ============================================================
+
+    function isAuthenticated() {
+      return request.auth != null;
+    }
+
+    function currentUserId() {
+      return request.auth.uid;
+    }
+
+    function isOwner(userId) {
+      return isAuthenticated() && currentUserId() == userId;
+    }
+
+    // ✅ Multi-tenant: Get user's companyId
+    function getUserCompany() {
+      return get(/databases/$(database)/documents/users/$(currentUserId())).data.companyId;
+    }
+
+    // ✅ Multi-tenant: Check if user is admin (OWNER/EXEC/MANAGER)
+    function isAdmin() {
+      return isAuthenticated() &&
+        exists(/databases/$(database)/documents/users/$(currentUserId())) &&
+        get(/databases/$(database)/documents/users/$(currentUserId())).data.role in ['OWNER', 'EXEC', 'MANAGER'];
+    }
+
+    // ✅ Multi-tenant: Check if user is ACTIVE
+    function isActive() {
+      return isAuthenticated() &&
+        get(/databases/$(database)/documents/users/$(currentUserId())).data.status == 'ACTIVE';
+    }
+
+    // ✅ Multi-tenant: Same company check
+    function isSameCompany(companyId) {
+      return isAuthenticated() && getUserCompany() == companyId;
+    }
+
+    // ============================================================
+    // companies
+    // ============================================================
+    match /companies/{companyId} {
+      // Anyone can create a company (signup flow)
+      allow create: if isAuthenticated()
+        && request.resource.data.createdBy == currentUserId()
+        && request.resource.data.inviteCode is string
+        && request.resource.data.name is string;
+
+      // Members can read their own company
+      allow read: if isAuthenticated() && isSameCompany(companyId);
+
+      // Only admins can update
+      allow update: if isAdmin() && isSameCompany(companyId);
+
+      // No deletion
+      allow delete: if false;
+    }
+
+    // ============================================================
+    // users
+    // ============================================================
+    match /users/{userId} {
+      // Read: own profile OR admin in same company
+      allow read: if isAuthenticated() && (
+        isOwner(userId) ||
+        (isAdmin() && isSameCompany(resource.data.companyId))
+      );
+
+      // Create: during signup with companyId + status (role set by Function)
+      allow create: if isAuthenticated()
+        && isOwner(userId)
+        && request.resource.data.companyId is string
+        && request.resource.data.status in ['PENDING', 'ACTIVE']
+        && request.resource.data.role in ['OWNER', 'EXEC', 'MANAGER', 'SALES', 'STORE', 'ETC'];
+
+      // Update:
+      // - Self: limited fields only (name, email, expoPushToken, etc.)
+      // - Admin: can change status, role, storeId, department
+      allow update: if isAuthenticated() && (
+        // Admin can approve/modify users in same company
+        (isAdmin() && isSameCompany(resource.data.companyId)) ||
+        // User can update own non-critical fields
+        (isOwner(userId) &&
+          !('companyId' in request.resource.data.diff(resource.data).affectedKeys()) &&
+          !('status' in request.resource.data.diff(resource.data).affectedKeys()) &&
+          !('role' in request.resource.data.diff(resource.data).affectedKeys())
+        )
+      );
+
+      allow delete: if isAdmin() && isSameCompany(resource.data.companyId);
+    }
+
+    // ============================================================
+    // stores
+    // ============================================================
+    match /stores/{storeId} {
+      // Read: active users in same company
+      allow read: if isActive() && isSameCompany(resource.data.companyId);
+
+      // Write: admins only in same company
+      allow create, update, delete: if isAdmin() && (
+        (request.resource != null && isSameCompany(request.resource.data.companyId)) ||
+        (resource != null && isSameCompany(resource.data.companyId))
+      );
+    }
+
+    // ============================================================
+    // departments
+    // ============================================================
+    match /departments/{departmentId} {
+      // Read: active users in same company
+      allow read: if isActive() && isSameCompany(resource.data.companyId);
+
+      // Write: admins only in same company
+      allow create, update, delete: if isAdmin() && (
+        (request.resource != null && isSameCompany(request.resource.data.companyId)) ||
+        (resource != null && isSameCompany(resource.data.companyId))
+      );
+    }
+
+    // ============================================================
+    // messages
+    // ============================================================
+    match /messages/{messageId} {
+      // Read: active users in same company
+      allow read: if isActive() && isSameCompany(resource.data.companyId);
+
+      // Create: admins only, must attach their companyId
+      allow create: if isAdmin() &&
+        request.resource.data.companyId == getUserCompany();
+
+      // Update/Delete: admins only in same company
+      allow update, delete: if isAdmin() &&
+        isSameCompany(resource.data.companyId);
+    }
+
+    // ============================================================
+    // receipts
+    // ============================================================
+    match /receipts/{receiptId} {
+      // Read: owner or admin in same company
+      allow read: if isAuthenticated() &&
+        isSameCompany(resource.data.companyId) &&
+        (resource.data.userId == currentUserId() || isAdmin());
+
+      // Create: server only (via Functions)
+      allow create: if false;
+
+      // Update: user can mark as read, admin can modify anything
+      allow update: if isAuthenticated() &&
+        isSameCompany(resource.data.companyId) &&
+        (
+          isAdmin() ||
+          (resource.data.userId == currentUserId() &&
+           request.resource.data.diff(resource.data).affectedKeys().hasOnly(['read', 'readAt']) &&
+           request.resource.data.read == true)
+        );
+
+      allow delete: if isAdmin() && isSameCompany(resource.data.companyId);
+    }
+
+    // ============================================================
+    // pushLogs (server only)
+    // ============================================================
+    match /pushLogs/{logId} {
+      allow read: if isAdmin() && isSameCompany(resource.data.companyId);
+      allow create, update, delete: if false;
+    }
+
+    // ============================================================
+    // boardPosts (게시판)
+    // ============================================================
+    match /boardPosts/{postId} {
+      // Read: active users in same company
+      allow read: if isActive() && isSameCompany(resource.data.companyId);
+
+      // Create: active users, must attach their companyId and authorId
+      allow create: if isActive() &&
+        request.resource.data.companyId == getUserCompany() &&
+        request.resource.data.authorId == currentUserId();
+
+      // Update: author or admin in same company
+      allow update: if isAuthenticated() &&
+        isSameCompany(resource.data.companyId) &&
+        (resource.data.authorId == currentUserId() || isAdmin());
+
+      // Delete: author or admin in same company
+      allow delete: if isAuthenticated() &&
+        isSameCompany(resource.data.companyId) &&
+        (resource.data.authorId == currentUserId() || isAdmin());
+    }
+
+    // ============================================================
+    // approvals (결재 문서)
+    // ============================================================
+    match /approvals/{approvalId} {
+      // Simplified: authenticated users can read
+      // (Client handles company filtering)
+      allow read: if isAuthenticated();
+
+      // Create: authenticated users
+      // (Client attaches correct companyId and authorId)
+      allow create: if isAuthenticated() &&
+        request.resource.data.companyId is string &&
+        request.resource.data.authorId == currentUserId();
+
+      // Update: authenticated users
+      // (Client handles approval logic validation)
+      allow update: if isAuthenticated();
+
+      // Delete: authenticated users
+      // (Client validates author and DRAFT status)
+      allow delete: if isAuthenticated();
+    }
+
+    // ============================================================
+    // events (일정)
+    // ============================================================
+    match /events/{eventId} {
+      // Read: authenticated users
+      // (Client handles company filtering)
+      allow read: if isAuthenticated();
+
+      // Create: authenticated users
+      // (Client attaches correct companyId and createdBy)
+      allow create: if isAuthenticated() &&
+        request.resource.data.companyId is string &&
+        request.resource.data.createdBy == currentUserId();
+
+      // Update: authenticated users
+      allow update: if isAuthenticated();
+
+      // Delete: authenticated users
+      allow delete: if isAuthenticated();
+    }
+
+    // ============================================================
+    // inventory (매장재고)
+    // ============================================================
+    match /inventory/{itemId} {
+      // Read: active users in same company
+      allow read: if isActive() && isSameCompany(resource.data.companyId);
+
+      // Create: admins only, must attach their companyId
+      allow create: if isAdmin() &&
+        request.resource.data.companyId == getUserCompany();
+
+      // Update/Delete: admins only in same company
+      allow update, delete: if isAdmin() &&
+        isSameCompany(resource.data.companyId);
+    }
+
+    // ============================================================
+    // sales (매출등록)
+    // ============================================================
+    match /sales/{recordId} {
+      // Read: active users in same company
+      allow read: if isActive() && isSameCompany(resource.data.companyId);
+
+      // Create: admins only, must attach their companyId
+      allow create: if isAdmin() &&
+        request.resource.data.companyId == getUserCompany();
+
+      // Update/Delete: admins only in same company
+      allow update, delete: if isAdmin() &&
+        isSameCompany(resource.data.companyId);
+    }
+
+    // ============================================================
+    // Deny all others
+    // ============================================================
+    match /{document=**} {
+      allow read, write: if false;
+    }
+  }
+}

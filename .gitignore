@@ -18,3 +18,16 @@ node_modules/
 # 빌드 캐시/트레이스
 **/.rscinfo
 **/trace
+
+# Expo/React Native (store-notice-app)
+**/.expo/
+**/android/
+**/ios/
+*.jks
+*.p8
+*.p12
+*.mobileprovision
+
+# Windows
+nul
+**/nul

@@ -2,7 +2,7 @@
   "name": "repo",
   "private": true,
   "workspaces": [
-    "apps/*",
+    "apps/wms-desktop",
     "packages/*",
     "services/*"
   ],

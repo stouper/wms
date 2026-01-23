@@ -31,7 +31,15 @@
       "Bash(git add:*)",
       "Bash(git cat-file:*)",
       "Bash(ls:*)",
-      "Bash(ssh:*)"
+      "Bash(ssh:*)",
+      "Bash(git commit:*)",
+      "Bash(git push:*)",
+      "Bash(xargs basename:*)",
+      "Bash(npm install:*)",
+      "Bash(robocopy:*)",
+      "Bash(xcopy \"C:\\\\store-notice-app\" \"C:\\\\repo\\\\wms\\\\apps\\\\store-notice-app\"\" /E /I /H /Y)",
+      "Bash(powershell:*)",
+      "Bash(dir /b \"C:\\\\store-notice-app\")"
     ]
   }
 }

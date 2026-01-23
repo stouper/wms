@@ -1,0 +1,61 @@
+{
+  "expo": {
+    "name": "ESKA notice",
+    "slug": "store-notice-app",
+    "version": "1.0.0",
+    "orientation": "portrait",
+    "icon": "./assets/images/icon.png",
+    "scheme": "storenoticeapp",
+    "userInterfaceStyle": "automatic",
+
+    "android": {
+      "package": "com.donhwa.noticeapp",               // ★ Firebase와 일치
+      "googleServicesFile": "./google-services.json",  // ★ 루트에 둔 파일 경로
+      "versionCode": 22,                                // ★ 게시판 파일 첨부 권한 추가
+      "adaptiveIcon": {
+        "foregroundImage": "./assets/images/icon.png",
+        "backgroundColor": "#FFFFFF"
+      },
+      "edgeToEdgeEnabled": true
+    },
+
+    "plugins": [
+      "expo-router",
+      [
+        "expo-splash-screen",
+        {
+          "image": "./assets/images/splash-icon.png",
+          "imageWidth": 200,
+          "resizeMode": "contain",
+          "backgroundColor": "#ffffff"
+        }
+      ],
+      [
+        "expo-notifications",
+        {
+          "mode": "production",
+          "icon": "./assets/images/notification-icon.png",
+          "color": "#ffffff"
+        }
+      ],
+      [
+        "expo-image-picker",
+        {
+          "photosPermission": "앱에서 게시판에 이미지를 업로드하기 위해 사진에 접근합니다.",
+          "cameraPermission": "앱에서 사진을 촬영하여 게시판에 업로드하기 위해 카메라에 접근합니다."
+        }
+      ],
+      [
+        "expo-document-picker",
+        {
+          "iCloudContainerEnvironment": "Production"
+        }
+      ]
+    ],
+
+    "extra": {
+      "router": {},
+      "eas": { "projectId": "e3475c65-a28e-416f-a07d-c8efccc5ca2e" }
+    }
+  }
+}
