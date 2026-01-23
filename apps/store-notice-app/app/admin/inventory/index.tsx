@@ -17,7 +17,7 @@ import {
 } from "react-native";
 import { useRouter } from "expo-router";
 import { SafeAreaView } from "react-native-safe-area-context";
-import { BarCodeScanner } from "expo-barcode-scanner";
+import { CameraView, useCameraPermissions } from "expo-camera";
 
 // WMS API URL
 const WMS_API_URL = "https://backend.dheska.com";
@@ -56,8 +56,8 @@ export default function InventoryPage() {
 
   // 바코드 스캐너
   const [scannerVisible, setScannerVisible] = useState(false);
-  const [hasPermission, setHasPermission] = useState<boolean | null>(null);
   const [scanned, setScanned] = useState(false);
+  const [permission, requestPermission] = useCameraPermissions();
 
   // 매장 목록 불러오기 (앱 시작시)
   useEffect(() => {
@@ -142,29 +142,30 @@ export default function InventoryPage() {
 
   // 바코드 스캐너 열기
   const openScanner = async () => {
-    const { status } = await BarCodeScanner.requestPermissionsAsync();
-    setHasPermission(status === "granted");
-
-    if (status === "granted") {
-      setScanned(false);
-      setScannerVisible(true);
-    } else {
-      Alert.alert("권한 필요", "바코드 스캔을 위해 카메라 권한이 필요합니다");
+    if (!permission?.granted) {
+      const result = await requestPermission();
+      if (!result.granted) {
+        Alert.alert("권한 필요", "바코드 스캔을 위해 카메라 권한이 필요합니다");
+        return;
+      }
     }
+    setScanned(false);
+    setScannerVisible(true);
   };
 
   // 바코드 스캔 처리
-  const handleBarCodeScanned = ({ type, data }: { type: string; data: string }) => {
+  const handleBarCodeScanned = (result: { type: string; data: string }) => {
+    if (scanned) return;
     setScanned(true);
     setScannerVisible(false);
 
     // 스캔된 바코드로 검색 (makerCode 매칭)
-    setSearchText(data);
+    setSearchText(result.data);
 
     // 매칭되는 상품 확인
-    const matched = inventory.filter((item) => item.makerCode === data);
+    const matched = inventory.filter((item) => item.makerCode === result.data);
     if (matched.length === 0) {
-      Alert.alert("알림", `바코드 "${data}"와 일치하는 상품이 없습니다`);
+      Alert.alert("알림", `바코드 "${result.data}"와 일치하는 상품이 없습니다`);
     }
   };
 
@@ -301,9 +302,13 @@ export default function InventoryPage() {
       {/* 바코드 스캐너 모달 */}
       <Modal visible={scannerVisible} animationType="slide">
         <View style={styles.scannerContainer}>
-          <BarCodeScanner
-            onBarCodeScanned={scanned ? undefined : handleBarCodeScanned}
+          <CameraView
             style={StyleSheet.absoluteFillObject}
+            facing="back"
+            barcodeScannerSettings={{
+              barcodeTypes: ["ean13", "ean8", "upc_a", "upc_e", "code128", "code39", "code93", "itf14", "qr"],
+            }}
+            onBarcodeScanned={scanned ? undefined : handleBarCodeScanned}
           />
           <View style={styles.scannerOverlay}>
             <View style={styles.scannerFrame} />
