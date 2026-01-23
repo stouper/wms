@@ -125,9 +125,7 @@ export default function InventoryPage() {
       const filtered = inventory.filter(
         (item) =>
           item.productName?.toLowerCase().includes(searchText.toLowerCase()) ||
-          item.skuCode?.toLowerCase().includes(searchText.toLowerCase()) ||
-          item.makerCode?.toLowerCase().includes(searchText.toLowerCase()) ||
-          item.locationName?.toLowerCase().includes(searchText.toLowerCase())
+          item.skuCode?.toLowerCase().includes(searchText.toLowerCase())
       );
       setFilteredInventory(filtered);
     }
@@ -143,9 +141,6 @@ export default function InventoryPage() {
           <Text style={styles.productName}>{item.productName}</Text>
           {item.skuCode && (
             <Text style={styles.skuCode}>SKU: {item.skuCode}</Text>
-          )}
-          {item.makerCode && (
-            <Text style={styles.skuCode}>제조사: {item.makerCode}</Text>
           )}
         </View>
         <View style={styles.quantityBox}>
