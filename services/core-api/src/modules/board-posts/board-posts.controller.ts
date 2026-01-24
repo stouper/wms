@@ -20,6 +20,22 @@ interface FileAttachment {
   size: number;
 }
 
+// Prisma include된 결과 타입
+interface BoardPostWithAuthor {
+  id: string;
+  title: string;
+  content: string;
+  authorId: string;
+  images: unknown;
+  files: unknown;
+  createdAt: Date;
+  updatedAt: Date;
+  author: {
+    id: string;
+    name: string;
+  };
+}
+
 @Controller('board-posts')
 export class BoardPostsController {
   constructor(
@@ -30,10 +46,10 @@ export class BoardPostsController {
   // GET /board-posts - 게시글 목록 조회
   @Get()
   async findAll(@Query('limit') limit?: string, @Query('offset') offset?: string) {
-    const posts = await this.boardPostsService.findAll(
+    const posts = (await this.boardPostsService.findAll(
       limit ? parseInt(limit, 10) : 50,
       offset ? parseInt(offset, 10) : 0,
-    );
+    )) as BoardPostWithAuthor[];
 
     const total = await this.boardPostsService.count();
 
@@ -101,13 +117,13 @@ export class BoardPostsController {
     }
 
     try {
-      const post = await this.boardPostsService.create({
+      const post = (await this.boardPostsService.create({
         title: body.title,
         content: body.content,
         authorId: employee.id,
         images: body.images,
         files: body.files,
-      });
+      })) as BoardPostWithAuthor;
 
       return {
         success: true,
@@ -170,12 +186,12 @@ export class BoardPostsController {
     }
 
     try {
-      const post = await this.boardPostsService.update(id, {
+      const post = (await this.boardPostsService.update(id, {
         title: body.title,
         content: body.content,
         images: body.images,
         files: body.files,
-      });
+      })) as BoardPostWithAuthor;
 
       return {
         success: true,

@@ -1,5 +1,6 @@
 import { Injectable } from '@nestjs/common';
 import { PrismaService } from '../../prisma/prisma.service';
+import { Prisma } from '@prisma/client';
 
 interface FileAttachment {
   name: string;
@@ -57,8 +58,8 @@ export class BoardPostsService {
         title: data.title,
         content: data.content,
         authorId: data.authorId,
-        images: data.images || [],
-        files: data.files || [],
+        images: (data.images || []) as Prisma.InputJsonValue,
+        files: (data.files || []) as Prisma.InputJsonValue,
       },
       include: {
         author: {
@@ -81,14 +82,16 @@ export class BoardPostsService {
       files?: FileAttachment[];
     },
   ) {
+    const updateData: Prisma.BoardPostUpdateInput = {};
+
+    if (data.title !== undefined) updateData.title = data.title;
+    if (data.content !== undefined) updateData.content = data.content;
+    if (data.images !== undefined) updateData.images = data.images as Prisma.InputJsonValue;
+    if (data.files !== undefined) updateData.files = data.files as Prisma.InputJsonValue;
+
     return this.prisma.boardPost.update({
       where: { id },
-      data: {
-        ...(data.title !== undefined && { title: data.title }),
-        ...(data.content !== undefined && { content: data.content }),
-        ...(data.images !== undefined && { images: data.images }),
-        ...(data.files !== undefined && { files: data.files }),
-      },
+      data: updateData,
       include: {
         author: {
           select: {

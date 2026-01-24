@@ -10,7 +10,6 @@ import {
   View,
   StyleSheet,
   Pressable,
-  RefreshControl,
 } from "react-native";
 import Card from "../../../components/ui/Card";
 import EmptyState from "../../../components/ui/EmptyState";
@@ -32,7 +31,6 @@ export default function AdminPending() {
   const router = useRouter();
 
   const [loading, setLoading] = useState(true);
-  const [refreshing, setRefreshing] = useState(false);
   const [list, setList] = useState<EmployeeInfo[]>([]);
   const [stores, setStores] = useState<StoreInfo[]>([]);
   const [departments, setDepartments] = useState<DepartmentInfo[]>([]);
@@ -64,7 +62,7 @@ export default function AdminPending() {
         if (emp.isHq) {
           roleInit[emp.id] = "HQ_WMS";
         } else {
-          roleInit[emp.id] = "STORE_STAFF";
+          roleInit[emp.id] = "STORE_MANAGER"; // 부서관리가 기본
         }
         storeInit[emp.id] = emp.storeId || "";
         deptInit[emp.id] = emp.departmentId || "";
@@ -77,16 +75,10 @@ export default function AdminPending() {
       Alert.alert("오류", e?.message ?? "대기 목록을 불러오지 못했습니다.");
     } finally {
       setLoading(false);
-      setRefreshing(false);
     }
   }, []);
 
   useEffect(() => {
-    fetchData();
-  }, [fetchData]);
-
-  const onRefresh = useCallback(() => {
-    setRefreshing(true);
     fetchData();
   }, [fetchData]);
 
@@ -96,9 +88,15 @@ export default function AdminPending() {
       const storeId = storeInputs[employeeId] || undefined;
       const departmentId = deptInputs[employeeId] || undefined;
 
-      // 매장 직원인데 매장 미선택
-      if ((role === "STORE_MANAGER" || role === "STORE_STAFF") && !storeId) {
+      // 매장관리(STORE_STAFF)인데 매장 미선택
+      if (role === "STORE_STAFF" && !storeId) {
         Alert.alert("입력 오류", "매장을 선택해 주세요.");
+        return;
+      }
+
+      // 부서관리(STORE_MANAGER)인데 부서 미선택
+      if (role === "STORE_MANAGER" && !departmentId) {
+        Alert.alert("입력 오류", "부서를 선택해 주세요.");
         return;
       }
 
@@ -149,34 +147,22 @@ export default function AdminPending() {
     );
   };
 
-  const isHqRole = (role: EmployeeRole) => {
-    return role === "HQ_ADMIN" || role === "HQ_WMS" || role === "SALES";
-  };
-
   const getRoleLabel = (role: EmployeeRole) => {
     switch (role) {
       case "HQ_ADMIN": return "본사 관리자";
       case "HQ_WMS": return "본사 물류팀";
       case "SALES": return "영업직";
-      case "STORE_MANAGER": return "매장 관리자";
-      case "STORE_STAFF": return "매장 직원";
+      case "STORE_MANAGER": return "부서관리";
+      case "STORE_STAFF": return "매장관리";
       default: return role;
     }
   };
 
   return (
     <View style={styles.root}>
-      <ScrollView
-        contentContainerStyle={styles.container}
-        refreshControl={
-          <RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor="#1E5BFF" />
-        }
-      >
+      <ScrollView contentContainerStyle={styles.container}>
         <View style={styles.header}>
           <Text style={styles.title}>승인 대기 사용자</Text>
-          <Pressable onPress={onRefresh} style={styles.refreshBtn}>
-            <Text style={styles.refreshText}>새로고침</Text>
-          </Pressable>
         </View>
 
         {loading && (
@@ -197,7 +183,7 @@ export default function AdminPending() {
 
         {!loading &&
           list.map((user) => {
-            const role = roleInputs[user.id] || "STORE_STAFF";
+            const role = roleInputs[user.id] || "STORE_MANAGER";
             const storeId = storeInputs[user.id] || "";
             const departmentId = deptInputs[user.id] || "";
             const userIsHq = user.isHq;
@@ -208,11 +194,11 @@ export default function AdminPending() {
                   <Text style={styles.userName}>{user.name || "(이름 없음)"}</Text>
                   <Text style={styles.userEmail}>{user.email}</Text>
                   {user.phone && (
-                    <Text style={styles.userInfo}>📞 {user.phone}</Text>
+                    <Text style={styles.userInfo}>{user.phone}</Text>
                   )}
                   <View style={[styles.badge, { backgroundColor: userIsHq ? "#1E5BFF" : "#10B981" }]}>
                     <Text style={styles.badgeText}>
-                      {userIsHq ? "🏢 본사" : "🏪 매장"}
+                      {userIsHq ? "본사" : "매장"}
                     </Text>
                   </View>
                 </View>
@@ -237,9 +223,9 @@ export default function AdminPending() {
                         ))}
                       </>
                     ) : (
-                      // 매장 직원용 역할
+                      // 매장 직원용 역할: 부서관리 먼저
                       <>
-                        {(["STORE_STAFF", "STORE_MANAGER"] as EmployeeRole[]).map((r) => (
+                        {(["STORE_MANAGER", "STORE_STAFF"] as EmployeeRole[]).map((r) => (
                           <Pressable
                             key={r}
                             onPress={() => setRoleInputs((p) => ({ ...p, [user.id]: r }))}
@@ -255,63 +241,121 @@ export default function AdminPending() {
                   </View>
                 </View>
 
-                {/* 부서 선택 (본사 직원인 경우만) */}
+                {/* 본사 직원: 부서 선택 */}
                 {userIsHq && (
                   <View style={{ marginBottom: 16 }}>
-                    <Text style={styles.label}>부서 (필수)</Text>
-                    <View style={styles.optionWrap}>
+                    <Text style={styles.label}>부서 선택</Text>
+                    <View style={styles.optionGrid}>
                       {departments.map((dept) => (
                         <Pressable
                           key={dept.id}
                           onPress={() => setDeptInputs((p) => ({ ...p, [user.id]: dept.id }))}
                           style={[
-                            styles.optionChip,
-                            departmentId === dept.id && styles.optionChipActive,
+                            styles.optionCard,
+                            departmentId === dept.id && styles.optionCardActive,
                           ]}
                         >
                           <Text
                             style={[
-                              styles.optionText,
-                              departmentId === dept.id && styles.optionTextActive,
+                              styles.optionCardText,
+                              departmentId === dept.id && styles.optionCardTextActive,
                             ]}
+                            numberOfLines={1}
                           >
-                            🏢 {dept.name}
+                            {dept.name}
                           </Text>
+                          {dept.employeeCount !== undefined && (
+                            <Text style={[
+                              styles.optionCardCount,
+                              departmentId === dept.id && styles.optionCardCountActive,
+                            ]}>
+                              {dept.employeeCount}명
+                            </Text>
+                          )}
                         </Pressable>
                       ))}
                       {departments.length === 0 && (
-                        <Text style={styles.muted}>등록된 부서가 없습니다</Text>
+                        <Text style={styles.emptyOptionText}>등록된 부서가 없습니다</Text>
                       )}
                     </View>
                   </View>
                 )}
 
-                {/* 매장 선택 (매장 직원인 경우만) */}
-                {!userIsHq && (
+                {/* 매장 직원 - 부서관리(STORE_MANAGER): 부서 선택 */}
+                {!userIsHq && role === "STORE_MANAGER" && (
                   <View style={{ marginBottom: 16 }}>
-                    <Text style={styles.label}>매장 (필수)</Text>
-                    <View style={styles.optionWrap}>
+                    <Text style={styles.label}>부서 선택</Text>
+                    <View style={styles.optionGrid}>
+                      {departments.map((dept) => (
+                        <Pressable
+                          key={dept.id}
+                          onPress={() => setDeptInputs((p) => ({ ...p, [user.id]: dept.id }))}
+                          style={[
+                            styles.optionCard,
+                            departmentId === dept.id && styles.optionCardActive,
+                          ]}
+                        >
+                          <Text
+                            style={[
+                              styles.optionCardText,
+                              departmentId === dept.id && styles.optionCardTextActive,
+                            ]}
+                            numberOfLines={1}
+                          >
+                            {dept.name}
+                          </Text>
+                          {dept.employeeCount !== undefined && (
+                            <Text style={[
+                              styles.optionCardCount,
+                              departmentId === dept.id && styles.optionCardCountActive,
+                            ]}>
+                              {dept.employeeCount}명
+                            </Text>
+                          )}
+                        </Pressable>
+                      ))}
+                      {departments.length === 0 && (
+                        <Text style={styles.emptyOptionText}>등록된 부서가 없습니다</Text>
+                      )}
+                    </View>
+                  </View>
+                )}
+
+                {/* 매장 직원 - 매장관리(STORE_STAFF): 매장 선택 */}
+                {!userIsHq && role === "STORE_STAFF" && (
+                  <View style={{ marginBottom: 16 }}>
+                    <Text style={styles.label}>매장 선택</Text>
+                    <View style={styles.optionGrid}>
                       {stores.map((st) => (
                         <Pressable
                           key={st.id}
                           onPress={() => setStoreInputs((p) => ({ ...p, [user.id]: st.id }))}
                           style={[
-                            styles.optionChip,
-                            storeId === st.id && styles.optionChipActive,
+                            styles.optionCard,
+                            storeId === st.id && styles.optionCardActive,
                           ]}
                         >
                           <Text
                             style={[
-                              styles.optionText,
-                              storeId === st.id && styles.optionTextActive,
+                              styles.optionCardText,
+                              storeId === st.id && styles.optionCardTextActive,
                             ]}
+                            numberOfLines={1}
                           >
-                            🏪 {st.name || st.code}
+                            {st.name || st.code}
                           </Text>
+                          {st.employeeCount !== undefined && (
+                            <Text style={[
+                              styles.optionCardCount,
+                              storeId === st.id && styles.optionCardCountActive,
+                            ]}>
+                              {st.employeeCount}명
+                            </Text>
+                          )}
                         </Pressable>
                       ))}
                       {stores.length === 0 && (
-                        <Text style={styles.muted}>등록된 매장이 없습니다</Text>
+                        <Text style={styles.emptyOptionText}>등록된 매장이 없습니다</Text>
                       )}
                     </View>
                   </View>
@@ -324,7 +368,7 @@ export default function AdminPending() {
                     style={styles.approveBtn}
                     android_ripple={{ color: "#0ea5e9" }}
                   >
-                    <Text style={styles.approveBtnText}>✓ 승인</Text>
+                    <Text style={styles.approveBtnText}>승인</Text>
                   </Pressable>
 
                   <Pressable
@@ -332,7 +376,7 @@ export default function AdminPending() {
                     style={styles.rejectBtn}
                     android_ripple={{ color: "#6b7280" }}
                   >
-                    <Text style={styles.rejectBtnText}>✕ 거부</Text>
+                    <Text style={styles.rejectBtnText}>거부</Text>
                   </Pressable>
                 </View>
               </Card>
@@ -348,21 +392,9 @@ const styles = StyleSheet.create({
   container: { paddingHorizontal: 16, paddingTop: 8, gap: 12, paddingBottom: 40 },
 
   header: {
-    flexDirection: "row",
-    justifyContent: "space-between",
-    alignItems: "center",
     marginBottom: 8,
   },
   title: { color: "#E6E7EB", fontSize: 20, fontWeight: "700" },
-  refreshBtn: {
-    paddingHorizontal: 12,
-    paddingVertical: 8,
-    borderRadius: 10,
-    backgroundColor: "#1A1D24",
-    borderWidth: 1,
-    borderColor: "#2A2F3A",
-  },
-  refreshText: { color: "#E6E7EB", fontWeight: "700", fontSize: 12 },
 
   center: {
     alignItems: "center",
@@ -385,7 +417,7 @@ const styles = StyleSheet.create({
   },
   badgeText: { color: "#fff", fontSize: 12, fontWeight: "700" },
 
-  label: { color: "#A9AFBC", fontSize: 13, marginBottom: 8, fontWeight: "600" },
+  label: { color: "#E6E7EB", fontSize: 14, marginBottom: 10, fontWeight: "700" },
 
   roleGrid: { flexDirection: "row", flexWrap: "wrap", gap: 8 },
   roleChip: {
@@ -400,18 +432,50 @@ const styles = StyleSheet.create({
   roleText: { color: "#A9AFBC", fontWeight: "700", fontSize: 13 },
   roleTextActive: { color: "#fff" },
 
-  optionWrap: { flexDirection: "row", flexWrap: "wrap", gap: 8 },
-  optionChip: {
-    paddingVertical: 10,
-    paddingHorizontal: 14,
-    borderRadius: 20,
+  // 2열 그리드 스타일
+  optionGrid: {
+    flexDirection: "row",
+    flexWrap: "wrap",
+    gap: 8,
+  },
+  optionCard: {
+    width: "48%",
     backgroundColor: "#1A1D24",
+    borderRadius: 10,
     borderWidth: 1,
     borderColor: "#2A2F3A",
+    paddingVertical: 14,
+    paddingHorizontal: 12,
+    alignItems: "center",
   },
-  optionChipActive: { backgroundColor: "#10b981", borderColor: "#10b981" },
-  optionText: { color: "#A9AFBC", fontWeight: "700", fontSize: 12 },
-  optionTextActive: { color: "#fff" },
+  optionCardActive: {
+    backgroundColor: "#1E5BFF",
+    borderColor: "#1E5BFF",
+  },
+  optionCardText: {
+    color: "#E6E7EB",
+    fontSize: 14,
+    fontWeight: "600",
+    marginBottom: 4,
+  },
+  optionCardTextActive: {
+    color: "#fff",
+    fontWeight: "700",
+  },
+  optionCardCount: {
+    color: "#64748b",
+    fontSize: 12,
+  },
+  optionCardCountActive: {
+    color: "#B8D0FF",
+  },
+  emptyOptionText: {
+    color: "#64748b",
+    fontSize: 13,
+    textAlign: "center",
+    paddingVertical: 20,
+    width: "100%",
+  },
 
   actions: { flexDirection: "row", gap: 10 },
   approveBtn: {

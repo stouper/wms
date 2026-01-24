@@ -47,6 +47,7 @@ export default function InventoryPage() {
   const [stores, setStores] = useState<WmsStore[]>([]);
   const [storesLoading, setStoresLoading] = useState(false);
   const [selectedStoreCode, setSelectedStoreCode] = useState<string | null>(null);
+  const [pendingCount, setPendingCount] = useState(0);
 
   // 재고 목록
   const [inventory, setInventory] = useState<InventoryItem[]>([]);
@@ -326,6 +327,42 @@ export default function InventoryPage() {
           </View>
         </View>
       </Modal>
+
+      {/* 하단 네비게이션 바 */}
+      <SafeAreaView edges={["bottom"]} style={styles.bottomNavContainer}>
+        <View style={styles.bottomNav}>
+          <Pressable
+            onPress={() => router.push("/admin")}
+            style={styles.navButton}
+          >
+            <Text style={styles.navIcon}>🏠</Text>
+            <Text style={styles.navText}>홈</Text>
+          </Pressable>
+
+          <Pressable
+            onPress={() => router.push("/admin/organization")}
+            style={styles.navButton}
+          >
+            <Text style={styles.navIcon}>📊</Text>
+            <Text style={styles.navText}>조직도</Text>
+          </Pressable>
+
+          <Pressable
+            onPress={() => router.push("/admin/settings")}
+            style={styles.navButton}
+          >
+            <View style={styles.navIconContainer}>
+              <Text style={styles.navIcon}>⚙️</Text>
+              {pendingCount > 0 && (
+                <View style={styles.navBadge}>
+                  <Text style={styles.navBadgeText}>{pendingCount}</Text>
+                </View>
+              )}
+            </View>
+            <Text style={styles.navText}>설정</Text>
+          </Pressable>
+        </View>
+      </SafeAreaView>
     </SafeAreaView>
   );
 }
@@ -382,6 +419,7 @@ const styles = StyleSheet.create({
     flex: 1,
     paddingHorizontal: 8,
     paddingVertical: 8,
+    paddingBottom: 80,
   },
   storeCard: {
     backgroundColor: "#1A1D24",
@@ -481,7 +519,7 @@ const styles = StyleSheet.create({
   },
   inventoryList: {
     paddingHorizontal: 16,
-    paddingBottom: 20,
+    paddingBottom: 100,
     gap: 8,
   },
   inventoryCard: {
@@ -599,5 +637,58 @@ const styles = StyleSheet.create({
     color: "#fff",
     fontSize: 16,
     fontWeight: "700",
+  },
+
+  // 하단 네비게이션
+  bottomNavContainer: {
+    position: "absolute",
+    bottom: 0,
+    left: 0,
+    right: 0,
+    backgroundColor: "#1A1D24",
+  },
+  bottomNav: {
+    flexDirection: "row",
+    backgroundColor: "#1A1D24",
+    borderTopWidth: 1,
+    borderTopColor: "#2A2F3A",
+    paddingVertical: 4,
+    paddingHorizontal: 16,
+  },
+  navButton: {
+    flex: 1,
+    alignItems: "center",
+    paddingVertical: 4,
+  },
+  navIconContainer: {
+    position: "relative",
+  },
+  navIcon: {
+    fontSize: 16,
+    marginBottom: 2,
+    opacity: 0.5,
+  },
+  navBadge: {
+    position: "absolute",
+    top: -3,
+    right: -6,
+    backgroundColor: "#EF4444",
+    minWidth: 12,
+    height: 12,
+    borderRadius: 6,
+    alignItems: "center",
+    justifyContent: "center",
+    paddingHorizontal: 3,
+  },
+  navBadgeText: {
+    color: "#fff",
+    fontSize: 8,
+    fontWeight: "900",
+  },
+  navText: {
+    color: "#A9AFBC",
+    fontSize: 9,
+    fontWeight: "600",
+    opacity: 0.5,
   },
 });
