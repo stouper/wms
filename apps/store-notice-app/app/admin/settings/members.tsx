@@ -159,12 +159,6 @@ export default function MembersManagement() {
 
   // 삭제
   const handleDelete = (member: EmployeeInfo) => {
-    // HQ_ADMIN은 삭제 불가
-    if (member.role === "HQ_ADMIN") {
-      Alert.alert("알림", "관리자 계정은 삭제할 수 없습니다.");
-      return;
-    }
-
     Alert.alert(
       "삭제 확인",
       `"${member.name}" 회원을 삭제하시겠습니까?`,
@@ -194,12 +188,6 @@ export default function MembersManagement() {
 
   // 수정 모달 열기
   const openEditModal = (member: EmployeeInfo) => {
-    // HQ_ADMIN은 수정 불가
-    if (member.role === "HQ_ADMIN") {
-      Alert.alert("알림", "관리자 계정은 수정할 수 없습니다.");
-      return;
-    }
-
     setEditingMember(member);
     setEditName(member.name);
     setEditPhone(member.phone || "");
@@ -339,8 +327,8 @@ export default function MembersManagement() {
                             </View>
                           )}
 
-                          {/* 관리자가 아니고 PENDING이 아닌 경우만 수정/삭제 버튼 표시 */}
-                          {!isAdmin && member.status !== "PENDING" && (
+                          {/* PENDING이 아닌 경우 수정/삭제 버튼 표시 */}
+                          {member.status !== "PENDING" && (
                             <View style={styles.actionsInDetail}>
                               <Pressable
                                 onPress={() => openEditModal(member)}
