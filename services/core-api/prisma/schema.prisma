@@ -76,6 +76,7 @@ model Employee {
   store       Store?      @relation(fields: [storeId], references: [id], onDelete: SetNull)
   department  Department? @relation(fields: [departmentId], references: [id], onDelete: SetNull)
   events      Event[]
+  boardPosts  BoardPost[]
 
   @@index([storeId], map: "Employee_storeId_idx")
   @@index([departmentId], map: "Employee_departmentId_idx")
@@ -377,4 +378,27 @@ model Event {
 
   @@index([date], map: "Event_date_idx")
   @@index([createdById], map: "Event_createdById_idx")
+}
+
+// ==========================================
+// 게시판 (Firebase → PostgreSQL 마이그레이션)
+// ==========================================
+model BoardPost {
+  id          String   @id @default(cuid())
+  title       String
+  content     String   @db.Text
+
+  // 작성자 (Employee 연결)
+  authorId    String
+  author      Employee @relation(fields: [authorId], references: [id], onDelete: Cascade)
+
+  // 첨부파일 (JSON 배열로 저장)
+  images      Json?    // ["url1", "url2", ...]
+  files       Json?    // [{name, url, type, size}, ...]
+
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  @@index([authorId], map: "BoardPost_authorId_idx")
+  @@index([createdAt], map: "BoardPost_createdAt_idx")
 }

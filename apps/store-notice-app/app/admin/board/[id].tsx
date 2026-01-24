@@ -1,7 +1,7 @@
 // app/admin/board/[id].tsx
-// 게시판 상세 페이지
+// ✅ PostgreSQL 연동: 게시판 상세 (Firebase → PostgreSQL 마이그레이션 완료)
 
-import React, { useEffect, useState } from "react";
+import React, { useEffect, useState, useCallback } from "react";
 import {
   View,
   ScrollView,
@@ -15,63 +15,47 @@ import {
 } from "react-native";
 import { useRouter, useLocalSearchParams } from "expo-router";
 import { SafeAreaView } from "react-native-safe-area-context";
-import { doc, onSnapshot, deleteDoc } from "firebase/firestore";
-import { db } from "../../../firebaseConfig";
 import Card from "../../../components/ui/Card";
-
-interface BoardPost {
-  id: string;
-  title: string;
-  content: string;
-  authorId: string;
-  authorName: string;
-  companyId: string;
-  createdAt: any;
-  images?: string[];
-  files?: Array<{
-    name: string;
-    url: string;
-    type: string;
-    size: number;
-  }>;
-}
+import {
+  getBoardPost,
+  deleteBoardPost,
+  BoardPostInfo,
+  FileAttachment,
+} from "../../../lib/authApi";
 
 export default function BoardDetail() {
   const router = useRouter();
   const { id } = useLocalSearchParams();
-  const [post, setPost] = useState<BoardPost | null>(null);
+  const [post, setPost] = useState<BoardPostInfo | null>(null);
   const [loading, setLoading] = useState(true);
 
-  useEffect(() => {
+  const loadPost = useCallback(async () => {
     if (!id || typeof id !== "string") return;
 
-    const unsub = onSnapshot(
-      doc(db, "boardPosts", id),
-      (snapshot) => {
-        if (snapshot.exists()) {
-          setPost({
-            id: snapshot.id,
-            ...snapshot.data(),
-          } as BoardPost);
-        } else {
-          Alert.alert("오류", "게시글을 찾을 수 없습니다.", [
-            {
-              text: "확인",
-              onPress: () => router.push("/admin/board"),
-            },
-          ]);
-        }
-        setLoading(false);
-      },
-      (error) => {
-        console.error("Error fetching post:", error);
-        Alert.alert("오류", "게시글을 불러오는데 실패했습니다.");
-        setLoading(false);
+    setLoading(true);
+    try {
+      const data = await getBoardPost(id);
+      if (data) {
+        setPost(data);
+      } else {
+        Alert.alert("오류", "게시글을 찾을 수 없습니다.", [
+          {
+            text: "확인",
+            onPress: () => router.push("/admin/board"),
+          },
+        ]);
       }
-    );
+    } catch (error) {
+      console.error("Error fetching post:", error);
+      Alert.alert("오류", "게시글을 불러오는데 실패했습니다.");
+    } finally {
+      setLoading(false);
+    }
+  }, [id, router]);
 
-    return () => unsub();
-  }, [id]);
+  useEffect(() => {
+    loadPost();
+  }, [loadPost]);
 
   const handleDelete = async () => {
     if (!id || typeof id !== "string") return;
@@ -83,13 +67,17 @@ export default function BoardDetail() {
         style: "destructive",
         onPress: async () => {
           try {
-            await deleteDoc(doc(db, "boardPosts", id));
-            Alert.alert("완료", "게시글이 삭제되었습니다.", [
-              {
-                text: "확인",
-                onPress: () => router.push("/admin/board"),
-              },
-            ]);
+            const result = await deleteBoardPost(id);
+            if (result.success) {
+              Alert.alert("완료", "게시글이 삭제되었습니다.", [
+                {
+                  text: "확인",
+                  onPress: () => router.push("/admin/board"),
+                },
+              ]);
+            } else {
+              Alert.alert("오류", result.error || "게시글 삭제에 실패했습니다.");
+            }
           } catch (error) {
             console.error("Delete error:", error);
             Alert.alert("오류", "게시글 삭제에 실패했습니다.");
@@ -113,9 +101,9 @@ export default function BoardDetail() {
     }
   };
 
-  const formatDate = (timestamp: any) => {
-    if (!timestamp) return "";
-    const date = timestamp.toDate ? timestamp.toDate() : new Date(timestamp);
+  const formatDate = (dateStr: string) => {
+    if (!dateStr) return "";
+    const date = new Date(dateStr);
     return date.toLocaleDateString("ko-KR", {
       year: "numeric",
       month: "long",
@@ -204,7 +192,7 @@ export default function BoardDetail() {
           <Card>
             <Text style={styles.sectionTitle}>첨부 파일</Text>
             <View style={styles.fileList}>
-              {post.files.map((file, index) => (
+              {post.files.map((file: FileAttachment, index: number) => (
                 <Pressable
                   key={index}
                   onPress={() => openFile(file.url)}

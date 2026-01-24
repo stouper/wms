@@ -1,7 +1,8 @@
 // app/admin/board/new.tsx
-// 게시판 글 작성 페이지 (이미지 & 파일 첨부 가능)
+// ✅ PostgreSQL 연동: 게시판 글 작성 (Firebase → PostgreSQL 마이그레이션 완료)
+// 참고: 이미지/파일 업로드는 Firebase Storage 사용 유지
 
-import React, { useEffect, useState } from "react";
+import React, { useEffect, useState, useCallback } from "react";
 import {
   View,
   ScrollView,
@@ -17,10 +18,13 @@ import { useRouter } from "expo-router";
 import { SafeAreaView } from "react-native-safe-area-context";
 import * as ImagePicker from "expo-image-picker";
 import * as DocumentPicker from "expo-document-picker";
-import { collection, addDoc, serverTimestamp, doc, onSnapshot, query, where } from "firebase/firestore";
-import { auth, db } from "../../../firebaseConfig";
 import Card from "../../../components/ui/Card";
 import { uploadFile } from "../../../lib/uploadFile";
+import {
+  createBoardPost,
+  getEmployees,
+  FileAttachment,
+} from "../../../lib/authApi";
 
 interface AttachedFile {
   name: string;
@@ -37,42 +41,21 @@ export default function BoardNew() {
   const [files, setFiles] = useState<AttachedFile[]>([]);
   const [uploading, setUploading] = useState(false);
   const [uploadProgress, setUploadProgress] = useState(0);
-  const [myCompanyId, setMyCompanyId] = useState<string | null>(null);
-  const [myName, setMyName] = useState<string>("");
   const [pendingCount, setPendingCount] = useState(0);
 
-  // 내 정보 가져오기 + pendingCount
-  useEffect(() => {
-    const uid = auth.currentUser?.uid;
-    if (!uid) return;
-
-    let unsubPending: (() => void) | undefined;
-
-    const unsub = onSnapshot(doc(db, "users", uid), (snap) => {
-      if (snap.exists()) {
-        const data = snap.data();
-        setMyCompanyId(data?.companyId || null);
-        setMyName(data?.name || "익명");
-
-        const companyId = data?.companyId;
-        if (companyId) {
-          const pendingQuery = query(
-            collection(db, "users"),
-            where("companyId", "==", companyId),
-            where("status", "==", "PENDING")
-          );
-          unsubPending = onSnapshot(pendingQuery, (snapshot) => {
-            setPendingCount(snapshot.size);
-          });
-        }
-      }
-    });
-
-    return () => {
-      unsub();
-      unsubPending?.();
-    };
+  // PENDING 사용자 수 로드
+  const loadPendingCount = useCallback(async () => {
+    try {
+      const employees = await getEmployees("PENDING");
+      setPendingCount(employees.length);
+    } catch (error) {
+      console.error("loadPendingCount error:", error);
+    }
   }, []);
+
+  useEffect(() => {
+    loadPendingCount();
+  }, [loadPendingCount]);
 
   // 이미지 선택
   const pickImages = async () => {
@@ -141,56 +124,50 @@ export default function BoardNew() {
       return;
     }
 
-    if (!myCompanyId) {
-      Alert.alert("오류", "회사 정보를 불러오는 중입니다.");
-      return;
-    }
-
-    const uid = auth.currentUser?.uid;
-    if (!uid) {
-      Alert.alert("오류", "로그인 정보를 확인해주세요.");
-      return;
-    }
-
     setUploading(true);
     setUploadProgress(0);
 
     try {
       const uploadedImageUrls: string[] = [];
-      const uploadedFiles: Array<{ name: string; url: string; type: string; size: number }> = [];
+      const uploadedFiles: FileAttachment[] = [];
+      const totalItems = images.length + files.length;
 
-      // 이미지 업로드
+      // 이미지 업로드 (Firebase Storage)
       if (images.length > 0) {
         for (let i = 0; i < images.length; i++) {
           const imageUri = images[i];
           const fileName = `${Date.now()}_${i}.jpg`;
           const result = await uploadFile(
             imageUri,
-            `board/${myCompanyId}/images`,
+            `board/images`,
             fileName,
             (progress) => {
-              const totalProgress =
-                ((i + progress / 100) / (images.length + files.length)) * 100;
-              setUploadProgress(Math.round(totalProgress));
+              if (totalItems > 0) {
+                const totalProgress =
+                  ((i + progress / 100) / totalItems) * 100;
+                setUploadProgress(Math.round(totalProgress));
+              }
             }
           );
           uploadedImageUrls.push(result.url);
         }
       }
 
-      // 파일 업로드
+      // 파일 업로드 (Firebase Storage)
       if (files.length > 0) {
         for (let i = 0; i < files.length; i++) {
           const file = files[i];
           const fileName = `${Date.now()}_${file.name}`;
           const result = await uploadFile(
             file.uri,
-            `board/${myCompanyId}/files`,
+            `board/files`,
             fileName,
             (progress) => {
-              const totalProgress =
-                ((images.length + i + progress / 100) / (images.length + files.length)) * 100;
-              setUploadProgress(Math.round(totalProgress));
+              if (totalItems > 0) {
+                const totalProgress =
+                  ((images.length + i + progress / 100) / totalItems) * 100;
+                setUploadProgress(Math.round(totalProgress));
+              }
             }
           );
           uploadedFiles.push({
@@ -202,24 +179,24 @@ export default function BoardNew() {
         }
       }
 
-      // Firestore에 게시글 저장
-      await addDoc(collection(db, "boardPosts"), {
+      // PostgreSQL에 게시글 저장
+      const result = await createBoardPost({
         title: title.trim(),
         content: content.trim(),
-        authorId: uid,
-        authorName: myName,
-        companyId: myCompanyId,
-        images: uploadedImageUrls,
-        files: uploadedFiles,
-        createdAt: serverTimestamp(),
+        images: uploadedImageUrls.length > 0 ? uploadedImageUrls : undefined,
+        files: uploadedFiles.length > 0 ? uploadedFiles : undefined,
       });
 
-      Alert.alert("완료", "게시글이 작성되었습니다.", [
-        {
-          text: "확인",
-          onPress: () => router.push("/admin/board"),
-        },
-      ]);
+      if (result.success) {
+        Alert.alert("완료", "게시글이 작성되었습니다.", [
+          {
+            text: "확인",
+            onPress: () => router.push("/admin/board"),
+          },
+        ]);
+      } else {
+        Alert.alert("오류", result.error || "게시글 저장에 실패했습니다.");
+      }
     } catch (error) {
       console.error("Save error:", error);
       Alert.alert("오류", "게시글 저장에 실패했습니다.");

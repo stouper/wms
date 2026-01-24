@@ -491,3 +491,144 @@ export async function deleteEvent(id: string): Promise<{ success: boolean; error
     return { success: false, error: error?.message || 'Network error' };
   }
 }
+
+// ==========================================
+// 게시판 API (PostgreSQL)
+// ==========================================
+
+export interface FileAttachment {
+  name: string;
+  url: string;
+  type: string;
+  size: number;
+}
+
+export interface BoardPostInfo {
+  id: string;
+  title: string;
+  content: string;
+  authorId: string;
+  authorName: string;
+  images: string[] | null;
+  files: FileAttachment[] | null;
+  createdAt: string;
+  updatedAt: string;
+}
+
+// 게시글 목록 조회
+export async function getBoardPosts(
+  limit = 50,
+  offset = 0
+): Promise<{ rows: BoardPostInfo[]; total: number }> {
+  try {
+    const response = await fetch(
+      `${API_BASE_URL}/board-posts?limit=${limit}&offset=${offset}`
+    );
+    if (!response.ok) return { rows: [], total: 0 };
+
+    return await response.json();
+  } catch (error) {
+    console.error('getBoardPosts error:', error);
+    return { rows: [], total: 0 };
+  }
+}
+
+// 게시글 단건 조회
+export async function getBoardPost(id: string): Promise<BoardPostInfo | null> {
+  try {
+    const response = await fetch(`${API_BASE_URL}/board-posts/${id}`);
+    if (!response.ok) return null;
+
+    return await response.json();
+  } catch (error) {
+    console.error('getBoardPost error:', error);
+    return null;
+  }
+}
+
+// 게시글 생성
+export async function createBoardPost(data: {
+  title: string;
+  content: string;
+  images?: string[];
+  files?: FileAttachment[];
+}): Promise<{ success: boolean; post?: BoardPostInfo; error?: string }> {
+  try {
+    const user = auth.currentUser;
+    if (!user) {
+      return { success: false, error: 'Not logged in' };
+    }
+
+    const response = await fetch(`${API_BASE_URL}/board-posts`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        firebaseUid: user.uid,
+        title: data.title,
+        content: data.content,
+        images: data.images,
+        files: data.files,
+      }),
+    });
+
+    return await response.json();
+  } catch (error: any) {
+    console.error('createBoardPost error:', error);
+    return { success: false, error: error?.message || 'Network error' };
+  }
+}
+
+// 게시글 수정
+export async function updateBoardPost(
+  id: string,
+  data: {
+    title?: string;
+    content?: string;
+    images?: string[];
+    files?: FileAttachment[];
+  }
+): Promise<{ success: boolean; post?: BoardPostInfo; error?: string }> {
+  try {
+    const user = auth.currentUser;
+    if (!user) {
+      return { success: false, error: 'Not logged in' };
+    }
+
+    const response = await fetch(`${API_BASE_URL}/board-posts/${id}`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        firebaseUid: user.uid,
+        ...data,
+      }),
+    });
+
+    return await response.json();
+  } catch (error: any) {
+    console.error('updateBoardPost error:', error);
+    return { success: false, error: error?.message || 'Network error' };
+  }
+}
+
+// 게시글 삭제
+export async function deleteBoardPost(id: string): Promise<{ success: boolean; error?: string }> {
+  try {
+    const user = auth.currentUser;
+    if (!user) {
+      return { success: false, error: 'Not logged in' };
+    }
+
+    const response = await fetch(`${API_BASE_URL}/board-posts/${id}`, {
+      method: 'DELETE',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        firebaseUid: user.uid,
+      }),
+    });
+
+    return await response.json();
+  } catch (error: any) {
+    console.error('deleteBoardPost error:', error);
+    return { success: false, error: error?.message || 'Network error' };
+  }
+}

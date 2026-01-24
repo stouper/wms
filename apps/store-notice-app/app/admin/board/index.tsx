@@ -1,7 +1,7 @@
 // app/admin/board/index.tsx
-// 게시판 목록 페이지
+// ✅ PostgreSQL 연동: 게시판 목록 (Firebase → PostgreSQL 마이그레이션 완료)
 
-import React, { useEffect, useState } from "react";
+import React, { useEffect, useState, useCallback } from "react";
 import {
   View,
   ScrollView,
@@ -13,106 +13,51 @@ import {
 } from "react-native";
 import { useRouter } from "expo-router";
 import { SafeAreaView } from "react-native-safe-area-context";
-import {
-  collection,
-  query,
-  where,
-  orderBy,
-  onSnapshot,
-  doc,
-  deleteDoc,
-} from "firebase/firestore";
-import { auth, db } from "../../../firebaseConfig";
 import Card from "../../../components/ui/Card";
-
-interface BoardPost {
-  id: string;
-  title: string;
-  content: string;
-  authorId: string;
-  authorName: string;
-  companyId: string;
-  createdAt: any;
-  images?: string[];
-  files?: Array<{
-    name: string;
-    url: string;
-    type: string;
-    size: number;
-  }>;
-}
+import {
+  getBoardPosts,
+  deleteBoardPost,
+  getEmployees,
+  BoardPostInfo,
+} from "../../../lib/authApi";
 
 export default function BoardList() {
   const router = useRouter();
-  const [posts, setPosts] = useState<BoardPost[]>([]);
+  const [posts, setPosts] = useState<BoardPostInfo[]>([]);
   const [loading, setLoading] = useState(true);
-  const [myCompanyId, setMyCompanyId] = useState<string | null>(null);
   const [pendingCount, setPendingCount] = useState(0);
 
-  // 내 companyId 가져오기 + pendingCount
-  useEffect(() => {
-    const uid = auth.currentUser?.uid;
-    if (!uid) return;
-
-    let unsubPending: (() => void) | undefined;
-
-    const unsub = onSnapshot(doc(db, "users", uid), (snap) => {
-      if (snap.exists()) {
-        const companyId = (snap.data() as any)?.companyId;
-        setMyCompanyId(companyId || null);
-
-        if (companyId) {
-          // PENDING 사용자 수 실시간 가져오기
-          const pendingQuery = query(
-            collection(db, "users"),
-            where("companyId", "==", companyId),
-            where("status", "==", "PENDING")
-          );
-          unsubPending = onSnapshot(pendingQuery, (snapshot) => {
-            setPendingCount(snapshot.size);
-          });
-        }
-      }
-    });
-
-    return () => {
-      unsub();
-      unsubPending?.();
-    };
+  // PENDING 사용자 수 로드
+  const loadPendingCount = useCallback(async () => {
+    try {
+      const employees = await getEmployees("PENDING");
+      setPendingCount(employees.length);
+    } catch (error) {
+      console.error("loadPendingCount error:", error);
+    }
   }, []);
 
-  // 게시글 목록 가져오기 (같은 회사만)
   useEffect(() => {
-    if (!myCompanyId) return;
+    loadPendingCount();
+  }, [loadPendingCount]);
 
-    const q = query(
-      collection(db, "boardPosts"),
-      where("companyId", "==", myCompanyId),
-      orderBy("createdAt", "desc")
-    );
+  // 게시글 목록 로드
+  const loadPosts = useCallback(async () => {
+    setLoading(true);
+    try {
+      const result = await getBoardPosts(50, 0);
+      setPosts(result.rows);
+    } catch (error) {
+      console.error("Error fetching posts:", error);
+      Alert.alert("오류", "게시글 목록을 불러오는데 실패했습니다.");
+    } finally {
+      setLoading(false);
+    }
+  }, []);
 
-    const unsub = onSnapshot(
-      q,
-      (snapshot) => {
-        const postList: BoardPost[] = [];
-        snapshot.forEach((doc) => {
-          postList.push({
-            id: doc.id,
-            ...doc.data(),
-          } as BoardPost);
-        });
-        setPosts(postList);
-        setLoading(false);
-      },
-      (error) => {
-        console.error("Error fetching posts:", error);
-        Alert.alert("오류", "게시글 목록을 불러오는데 실패했습니다.");
-        setLoading(false);
-      }
-    );
-
-    return () => unsub();
-  }, [myCompanyId]);
+  useEffect(() => {
+    loadPosts();
+  }, [loadPosts]);
 
   const handleDelete = async (postId: string) => {
     Alert.alert("삭제 확인", "이 게시글을 삭제하시겠습니까?", [
@@ -122,8 +67,13 @@ export default function BoardList() {
         style: "destructive",
         onPress: async () => {
           try {
-            await deleteDoc(doc(db, "boardPosts", postId));
-            Alert.alert("완료", "게시글이 삭제되었습니다.");
+            const result = await deleteBoardPost(postId);
+            if (result.success) {
+              Alert.alert("완료", "게시글이 삭제되었습니다.");
+              loadPosts();
+            } else {
+              Alert.alert("오류", result.error || "게시글 삭제에 실패했습니다.");
+            }
           } catch (error) {
             console.error("Delete error:", error);
             Alert.alert("오류", "게시글 삭제에 실패했습니다.");
@@ -133,9 +83,9 @@ export default function BoardList() {
     ]);
   };
 
-  const formatDate = (timestamp: any) => {
-    if (!timestamp) return "";
-    const date = timestamp.toDate ? timestamp.toDate() : new Date(timestamp);
+  const formatDate = (dateStr: string) => {
+    if (!dateStr) return "";
+    const date = new Date(dateStr);
     return date.toLocaleDateString("ko-KR", {
       year: "numeric",
       month: "long",

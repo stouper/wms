@@ -33,6 +33,9 @@ import { DepartmentsModule } from './modules/departments/departments.module';
 // ✅ Events (달력 이벤트)
 import { EventsModule } from './modules/events/events.module';
 
+// ✅ BoardPosts (게시판)
+import { BoardPostsModule } from './modules/board-posts/board-posts.module';
+
 @Module({
   imports: [
     ConfigModule.forRoot({ isGlobal: true }),
@@ -64,6 +67,9 @@ import { EventsModule } from './modules/events/events.module';
 
     // ✅ 달력 이벤트
     EventsModule,
+
+    // ✅ 게시판
+    BoardPostsModule,
   ],
   controllers: [],
   providers: [],
