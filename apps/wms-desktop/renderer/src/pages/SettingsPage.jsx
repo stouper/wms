@@ -1469,11 +1469,8 @@ export default function SettingsPage() {
                             fontWeight: 600,
                             color: emp.isHq ? "#0ea5e9" : "#64748b"
                           }}>
-                            {emp.role === "HQ_ADMIN" ? "본사관리자" :
-                             emp.role === "HQ_WMS" ? "본사WMS" :
-                             emp.role === "SALES" ? "영업" :
-                             emp.role === "STORE_MANAGER" ? "매장관리자" :
-                             emp.role === "STORE_STAFF" ? "매장직원" : emp.role}
+                            {emp.role === "ADMIN" ? (emp.isHq ? "관리자" : "관리자") :
+                             emp.role === "STAFF" ? (emp.isHq ? "직원" : "직원") : emp.role}
                           </span>
                         </td>
                         <td style={tdStyle}>

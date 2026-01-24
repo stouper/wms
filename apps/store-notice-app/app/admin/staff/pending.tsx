@@ -25,7 +25,7 @@ import {
   DepartmentInfo,
 } from "../../../lib/authApi";
 
-type EmployeeRole = "HQ_ADMIN" | "HQ_WMS" | "SALES" | "STORE_MANAGER" | "STORE_STAFF";
+type EmployeeRole = "ADMIN" | "STAFF";
 
 export default function AdminPending() {
   const router = useRouter();
@@ -58,12 +58,8 @@ export default function AdminPending() {
       const deptInit: Record<string, string> = {};
 
       employees.forEach((emp) => {
-        // isHq 기반으로 기본 역할 설정
-        if (emp.isHq) {
-          roleInit[emp.id] = "HQ_WMS";
-        } else {
-          roleInit[emp.id] = "STORE_MANAGER"; // 부서관리가 기본
-        }
+        // 모든 신규 직원은 STAFF로 시작
+        roleInit[emp.id] = "STAFF";
         storeInit[emp.id] = emp.storeId || "";
         deptInit[emp.id] = emp.departmentId || "";
       });
@@ -85,24 +81,21 @@ export default function AdminPending() {
   const approve = async (employeeId: string) => {
     try {
       const role = roleInputs[employeeId];
+      const user = list.find(u => u.id === employeeId);
+      if (!user) return;
+
       const storeId = storeInputs[employeeId] || undefined;
       const departmentId = deptInputs[employeeId] || undefined;
 
-      // 매장관리(STORE_STAFF)인데 매장 미선택
-      if (role === "STORE_STAFF" && !storeId) {
+      // 본사(isHq=true)면 부서 필수 선택
+      if (user.isHq && !departmentId) {
+        Alert.alert("입력 오류", "부서를 선택해 주세요.");
+        return;
+      }
+
+      // 매장(isHq=false)면 매장 필수 선택
+      if (!user.isHq && !storeId) {
         Alert.alert("입력 오류", "매장을 선택해 주세요.");
-        return;
-      }
-
-      // 부서관리(STORE_MANAGER)인데 부서 미선택
-      if (role === "STORE_MANAGER" && !departmentId) {
-        Alert.alert("입력 오류", "부서를 선택해 주세요.");
-        return;
-      }
-
-      // 본사 직원인데 부서 미선택
-      if ((role === "HQ_ADMIN" || role === "HQ_WMS" || role === "SALES") && !departmentId) {
-        Alert.alert("입력 오류", "부서를 선택해 주세요.");
         return;
       }
 
@@ -149,11 +142,8 @@ export default function AdminPending() {
 
   const getRoleLabel = (role: EmployeeRole) => {
     switch (role) {
-      case "HQ_ADMIN": return "본사 관리자";
-      case "HQ_WMS": return "본사 물류팀";
-      case "SALES": return "영업직";
-      case "STORE_MANAGER": return "부서관리";
-      case "STORE_STAFF": return "매장관리";
+      case "ADMIN": return "관리자";
+      case "STAFF": return "직원";
       default: return role;
     }
   };
@@ -207,41 +197,21 @@ export default function AdminPending() {
                 <View style={{ marginBottom: 12 }}>
                   <Text style={styles.label}>역할</Text>
                   <View style={styles.roleGrid}>
-                    {userIsHq ? (
-                      // 본사 직원용 역할
-                      <>
-                        {(["HQ_WMS", "SALES", "HQ_ADMIN"] as EmployeeRole[]).map((r) => (
-                          <Pressable
-                            key={r}
-                            onPress={() => setRoleInputs((p) => ({ ...p, [user.id]: r }))}
-                            style={[styles.roleChip, role === r && styles.roleChipActive]}
-                          >
-                            <Text style={[styles.roleText, role === r && styles.roleTextActive]}>
-                              {getRoleLabel(r)}
-                            </Text>
-                          </Pressable>
-                        ))}
-                      </>
-                    ) : (
-                      // 매장 직원용 역할: 부서관리 먼저
-                      <>
-                        {(["STORE_MANAGER", "STORE_STAFF"] as EmployeeRole[]).map((r) => (
-                          <Pressable
-                            key={r}
-                            onPress={() => setRoleInputs((p) => ({ ...p, [user.id]: r }))}
-                            style={[styles.roleChip, role === r && styles.roleChipActive]}
-                          >
-                            <Text style={[styles.roleText, role === r && styles.roleTextActive]}>
-                              {getRoleLabel(r)}
-                            </Text>
-                          </Pressable>
-                        ))}
-                      </>
-                    )}
+                    {(["STAFF", "ADMIN"] as EmployeeRole[]).map((r) => (
+                      <Pressable
+                        key={r}
+                        onPress={() => setRoleInputs((p) => ({ ...p, [user.id]: r }))}
+                        style={[styles.roleChip, role === r && styles.roleChipActive]}
+                      >
+                        <Text style={[styles.roleText, role === r && styles.roleTextActive]}>
+                          {getRoleLabel(r)}
+                        </Text>
+                      </Pressable>
+                    ))}
                   </View>
                 </View>
 
-                {/* 본사 직원: 부서 선택 */}
+                {/* 본사 직원: 부서 선택 필수 */}
                 {userIsHq && (
                   <View style={{ marginBottom: 16 }}>
                     <Text style={styles.label}>부서 선택</Text>
@@ -281,48 +251,8 @@ export default function AdminPending() {
                   </View>
                 )}
 
-                {/* 매장 직원 - 부서관리(STORE_MANAGER): 부서 선택 */}
-                {!userIsHq && role === "STORE_MANAGER" && (
-                  <View style={{ marginBottom: 16 }}>
-                    <Text style={styles.label}>부서 선택</Text>
-                    <View style={styles.optionGrid}>
-                      {departments.map((dept) => (
-                        <Pressable
-                          key={dept.id}
-                          onPress={() => setDeptInputs((p) => ({ ...p, [user.id]: dept.id }))}
-                          style={[
-                            styles.optionCard,
-                            departmentId === dept.id && styles.optionCardActive,
-                          ]}
-                        >
-                          <Text
-                            style={[
-                              styles.optionCardText,
-                              departmentId === dept.id && styles.optionCardTextActive,
-                            ]}
-                            numberOfLines={1}
-                          >
-                            {dept.name}
-                          </Text>
-                          {dept.employeeCount !== undefined && (
-                            <Text style={[
-                              styles.optionCardCount,
-                              departmentId === dept.id && styles.optionCardCountActive,
-                            ]}>
-                              {dept.employeeCount}명
-                            </Text>
-                          )}
-                        </Pressable>
-                      ))}
-                      {departments.length === 0 && (
-                        <Text style={styles.emptyOptionText}>등록된 부서가 없습니다</Text>
-                      )}
-                    </View>
-                  </View>
-                )}
-
-                {/* 매장 직원 - 매장관리(STORE_STAFF): 매장 선택 */}
-                {!userIsHq && role === "STORE_STAFF" && (
+                {/* 매장 직원: 매장 선택 필수 */}
+                {!userIsHq && (
                   <View style={{ marginBottom: 16 }}>
                     <Text style={styles.label}>매장 선택</Text>
                     <View style={styles.optionGrid}>

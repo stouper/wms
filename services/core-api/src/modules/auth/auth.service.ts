@@ -193,8 +193,8 @@ export class AuthService {
           phone: data.phone,
           isHq: data.isHq,
           status: EmployeeStatus.PENDING,
-          // 기본 역할 설정: 본사면 HQ_WMS, 매장이면 STORE_STAFF
-          role: data.isHq ? 'HQ_WMS' : 'STORE_STAFF',
+          // 기본 역할 설정: 모두 STAFF로 시작 (승인 시 ADMIN으로 변경 가능)
+          role: 'STAFF',
         },
         include: { store: true, department: true },
       });

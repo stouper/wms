@@ -15,13 +15,10 @@ enum JobType {
   ADJUST
 }
 
-// 직원 역할 (본사/매장 통합)
+// 직원 역할 (isHq 플래그와 함께 사용)
 enum EmployeeRole {
-  HQ_ADMIN       // 본사 관리자
-  HQ_WMS         // 본사 물류팀
-  SALES          // 영업직
-  STORE_MANAGER  // 매장 관리자
-  STORE_STAFF    // 매장 직원
+  ADMIN   // 관리자 (isHq=true: 본사 관리자, isHq=false: 매장 관리자)
+  STAFF   // 직원 (isHq=true: 본사 직원, isHq=false: 매장 직원)
 }
 
 // 직원 상태
@@ -67,7 +64,7 @@ model Employee {
   email       String?            // 이메일
   pushToken   String?            // FCM 푸시 토큰
 
-  role        EmployeeRole   @default(STORE_STAFF)
+  role        EmployeeRole   @default(STAFF)
   status      EmployeeStatus @default(PENDING)
 
   createdAt   DateTime @default(now())

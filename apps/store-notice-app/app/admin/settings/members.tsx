@@ -61,10 +61,12 @@ export default function MembersManagement() {
     try {
       const allEmployees = await getEmployees();
 
-      // HQ_ADMIN을 최상단에 정렬
+      // 본사 관리자(ADMIN + isHq)를 최상단에 정렬
       allEmployees.sort((a, b) => {
-        if (a.role === "HQ_ADMIN") return -1;
-        if (b.role === "HQ_ADMIN") return 1;
+        const aIsAdmin = a.role === "ADMIN" && a.isHq;
+        const bIsAdmin = b.role === "ADMIN" && b.isHq;
+        if (aIsAdmin && !bIsAdmin) return -1;
+        if (!aIsAdmin && bIsAdmin) return 1;
         return 0;
       });
 
@@ -231,15 +233,12 @@ export default function MembersManagement() {
     }
   };
 
-  const getRoleLabel = (role: string) => {
-    const labels: Record<string, string> = {
-      HQ_ADMIN: "본사 관리자",
-      HQ_WMS: "본사 물류",
-      SALES: "영업",
-      STORE_MANAGER: "매장 관리자",
-      STORE_STAFF: "매장 직원",
+  const getRoleLabel = (role: string, isHq: boolean) => {
+    const labels: Record<string, Record<string, string>> = {
+      ADMIN: { true: "관리자", false: "관리자" },
+      STAFF: { true: "직원", false: "직원" },
     };
-    return labels[role] || role;
+    return labels[role]?.[isHq ? "true" : "false"] || role;
   };
 
   const getStatusLabel = (status: string) => {
@@ -278,7 +277,7 @@ export default function MembersManagement() {
         {!loading &&
           members.map((member) => {
             const isExpanded = expandedMemberId === member.id;
-            const isAdmin = member.role === "HQ_ADMIN";
+            const isAdmin = member.role === "ADMIN" && member.isHq;
 
             return (
               <Card key={member.id}>
@@ -311,7 +310,7 @@ export default function MembersManagement() {
                             이메일: {member.email}
                           </Text>
                           <Text style={styles.memberDetail}>
-                            역할: {getRoleLabel(member.role)}
+                            역할: {getRoleLabel(member.role, member.isHq)}
                           </Text>
                           {member.storeName && (
                             <Text style={styles.memberDetail}>
@@ -342,7 +341,7 @@ export default function MembersManagement() {
                             </View>
                           )}
 
-                          {/* HQ_ADMIN이 아니고 PENDING이 아닌 경우만 수정/삭제 버튼 표시 */}
+                          {/* 관리자가 아니고 PENDING이 아닌 경우만 수정/삭제 버튼 표시 */}
                           {!isAdmin && member.status !== "PENDING" && (
                             <View style={styles.actionsInDetail}>
                               <Pressable
