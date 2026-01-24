@@ -242,7 +242,7 @@ export class MessagesController {
 
     // 본인 또는 관리자만 삭제 가능
     const isOwner = existingMsg.authorId === employee.id;
-    const isAdmin = employee.role === 'HQ_ADMIN' || employee.role === 'HQ_WMS';
+    const isAdmin = employee.role === 'ADMIN' && employee.isHq;
 
     if (!isOwner && !isAdmin) {
       return { success: false, error: '삭제 권한이 없습니다.' };
