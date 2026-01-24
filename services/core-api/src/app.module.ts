@@ -30,6 +30,9 @@ import { AuthModule } from './modules/auth/auth.module';
 // ✅ Departments (본사 부서 관리)
 import { DepartmentsModule } from './modules/departments/departments.module';
 
+// ✅ Events (달력 이벤트)
+import { EventsModule } from './modules/events/events.module';
+
 @Module({
   imports: [
     ConfigModule.forRoot({ isGlobal: true }),
@@ -58,6 +61,9 @@ import { DepartmentsModule } from './modules/departments/departments.module';
 
     // ✅ 본사 부서 관리
     DepartmentsModule,
+
+    // ✅ 달력 이벤트
+    EventsModule,
   ],
   controllers: [],
   providers: [],

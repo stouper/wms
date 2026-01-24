@@ -1,7 +1,7 @@
 // app/admin/calendar/index.tsx
-// 캘린더 및 일정 관리 페이지
+// ✅ PostgreSQL 연동: 달력 이벤트 (Firebase → PostgreSQL 마이그레이션 완료)
 
-import React, { useState, useEffect } from "react";
+import React, { useState, useEffect, useCallback } from "react";
 import {
   View,
   Text,
@@ -15,28 +15,21 @@ import {
 } from "react-native";
 import { useRouter } from "expo-router";
 import { SafeAreaView } from "react-native-safe-area-context";
-import {
-  collection,
-  query,
-  where,
-  getDocs,
-  addDoc,
-  deleteDoc,
-  doc,
-  getDoc,
-  serverTimestamp,
-  onSnapshot,
-} from "firebase/firestore";
-import { db, auth } from "../../../firebaseConfig";
 import Card from "../../../components/ui/Card";
-import { Event } from "../../../lib/eventTypes";
+import {
+  getEvents,
+  createEvent,
+  deleteEvent,
+  EventInfo,
+  getEmployees,
+} from "../../../lib/authApi";
 
 export default function CalendarPage() {
   const router = useRouter();
   const [currentDate, setCurrentDate] = useState(new Date());
   const [selectedDate, setSelectedDate] = useState<string | null>(null);
-  const [events, setEvents] = useState<Event[]>([]);
-  const [eventsOnSelectedDate, setEventsOnSelectedDate] = useState<Event[]>([]);
+  const [events, setEvents] = useState<EventInfo[]>([]);
+  const [eventsOnSelectedDate, setEventsOnSelectedDate] = useState<EventInfo[]>([]);
   const [loading, setLoading] = useState(true);
 
   // 일정 등록 모달
@@ -45,63 +38,24 @@ export default function CalendarPage() {
   const [description, setDescription] = useState("");
   const [submitting, setSubmitting] = useState(false);
 
-  const [myCompanyId, setMyCompanyId] = useState<string | null>(null);
-  const [myName, setMyName] = useState("");
   const [pendingCount, setPendingCount] = useState(0);
 
-  useEffect(() => {
-    loadUserData();
+  // PENDING 사용자 수 로드
+  const loadPendingCount = useCallback(async () => {
+    try {
+      const employees = await getEmployees("PENDING");
+      setPendingCount(employees.length);
+    } catch (error) {
+      console.error("loadPendingCount error:", error);
+    }
   }, []);
 
   useEffect(() => {
-    if (myCompanyId) {
-      const uid = auth.currentUser?.uid;
-      if (!uid) return;
+    loadPendingCount();
+  }, [loadPendingCount]);
 
-      // PENDING 사용자 수 실시간 가져오기
-      const pendingQuery = query(
-        collection(db, "users"),
-        where("companyId", "==", myCompanyId),
-        where("status", "==", "PENDING")
-      );
-      const unsubPending = onSnapshot(pendingQuery, (snapshot) => {
-        setPendingCount(snapshot.size);
-      });
-
-      return () => unsubPending();
-    }
-  }, [myCompanyId]);
-
-  useEffect(() => {
-    if (myCompanyId) {
-      loadEvents();
-    }
-  }, [myCompanyId, currentDate]);
-
-  useEffect(() => {
-    if (selectedDate) {
-      const filtered = events.filter((e) => e.date === selectedDate);
-      setEventsOnSelectedDate(filtered);
-    } else {
-      setEventsOnSelectedDate([]);
-    }
-  }, [selectedDate, events]);
-
-  const loadUserData = async () => {
-    const uid = auth.currentUser?.uid;
-    if (!uid) return;
-
-    const userDoc = await getDoc(doc(db, "users", uid));
-    if (userDoc.exists()) {
-      const data = userDoc.data();
-      setMyCompanyId(data.companyId);
-      setMyName(data.name || "");
-    }
-  };
-
-  const loadEvents = async () => {
-    if (!myCompanyId) return;
-
+  // 이벤트 로드
+  const loadEvents = useCallback(async () => {
     setLoading(true);
     try {
       const startOfMonth = new Date(
@@ -118,29 +72,27 @@ export default function CalendarPage() {
       const startDateStr = formatDate(startOfMonth);
       const endDateStr = formatDate(endOfMonth);
 
-      // companyId만 필터링하고 클라이언트에서 날짜 필터링
-      const q = query(
-        collection(db, "events"),
-        where("companyId", "==", myCompanyId)
-      );
-
-      const snapshot = await getDocs(q);
-      const eventsList: Event[] = [];
-      snapshot.forEach((doc) => {
-        const data = doc.data();
-        // 클라이언트에서 날짜 필터링
-        if (data.date >= startDateStr && data.date <= endDateStr) {
-          eventsList.push({ id: doc.id, ...data } as Event);
-        }
-      });
-
+      const eventsList = await getEvents(startDateStr, endDateStr);
       setEvents(eventsList);
     } catch (error) {
       console.error("일정 로드 실패:", error);
     } finally {
       setLoading(false);
     }
-  };
+  }, [currentDate]);
+
+  useEffect(() => {
+    loadEvents();
+  }, [loadEvents]);
+
+  useEffect(() => {
+    if (selectedDate) {
+      const filtered = events.filter((e) => e.date === selectedDate);
+      setEventsOnSelectedDate(filtered);
+    } else {
+      setEventsOnSelectedDate([]);
+    }
+  }, [selectedDate, events]);
 
   const formatDate = (date: Date): string => {
     const year = date.getFullYear();
@@ -160,29 +112,25 @@ export default function CalendarPage() {
       return;
     }
 
-    if (!selectedDate || !myCompanyId) return;
+    if (!selectedDate) return;
 
     setSubmitting(true);
     try {
-      const uid = auth.currentUser?.uid;
-      if (!uid) return;
-
-      await addDoc(collection(db, "events"), {
-        companyId: myCompanyId,
+      const result = await createEvent({
         title: title.trim(),
-        description: description.trim(),
+        description: description.trim() || undefined,
         date: selectedDate,
-        createdBy: uid,
-        createdByName: myName,
-        createdAt: serverTimestamp(),
-        updatedAt: serverTimestamp(),
       });
 
-      Alert.alert("완료", "일정이 등록되었습니다.");
-      setTitle("");
-      setDescription("");
-      setShowAddModal(false);
-      loadEvents();
+      if (result.success) {
+        Alert.alert("완료", "일정이 등록되었습니다.");
+        setTitle("");
+        setDescription("");
+        setShowAddModal(false);
+        loadEvents();
+      } else {
+        Alert.alert("오류", result.error || "일정 등록에 실패했습니다.");
+      }
     } catch (error) {
       console.error("일정 등록 실패:", error);
       Alert.alert("오류", "일정 등록에 실패했습니다.");
@@ -199,9 +147,13 @@ export default function CalendarPage() {
         style: "destructive",
         onPress: async () => {
           try {
-            await deleteDoc(doc(db, "events", eventId));
-            Alert.alert("완료", "일정이 삭제되었습니다.");
-            loadEvents();
+            const result = await deleteEvent(eventId);
+            if (result.success) {
+              Alert.alert("완료", "일정이 삭제되었습니다.");
+              loadEvents();
+            } else {
+              Alert.alert("오류", result.error || "일정 삭제에 실패했습니다.");
+            }
           } catch (error) {
             console.error("일정 삭제 실패:", error);
             Alert.alert("오류", "일정 삭제에 실패했습니다.");
@@ -232,8 +184,8 @@ export default function CalendarPage() {
     const daysInMonth = lastDay.getDate();
     const startDayOfWeek = firstDay.getDay();
 
-    const days = [];
-    const weeks = [];
+    const days: (number | null)[] = [];
+    const weeks: (number | null)[][] = [];
 
     // 빈 칸 채우기 (이전 달)
     for (let i = 0; i < startDayOfWeek; i++) {
@@ -292,16 +244,12 @@ export default function CalendarPage() {
 
               const dateStr = formatDate(new Date(year, month, day));
               const hasEvent = events.some((e) => e.date === dateStr);
-              const isToday =
-                formatDate(new Date()) === dateStr;
+              const isToday = formatDate(new Date()) === dateStr;
 
               return (
                 <Pressable
                   key={dayIndex}
-                  style={[
-                    styles.dayCell,
-                    isToday && styles.todayCell,
-                  ]}
+                  style={[styles.dayCell, isToday && styles.todayCell]}
                   onPress={() => handleDatePress(dateStr)}
                 >
                   <Text
@@ -327,7 +275,7 @@ export default function CalendarPage() {
   return (
     <SafeAreaView style={styles.safe} edges={["top"]}>
       <ScrollView contentContainerStyle={styles.container}>
-        <Text style={styles.title}>📅 일정 관리</Text>
+        <Text style={styles.title}>일정 관리</Text>
 
         {loading ? (
           <View style={styles.loadingContainer}>
@@ -348,7 +296,10 @@ export default function CalendarPage() {
                       <Text style={styles.eventTitle} numberOfLines={1}>
                         {event.title}
                         {event.description && (
-                          <Text style={styles.eventDescription}> - {event.description}</Text>
+                          <Text style={styles.eventDescription}>
+                            {" "}
+                            - {event.description}
+                          </Text>
                         )}
                       </Text>
                     </View>

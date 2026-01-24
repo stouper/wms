@@ -75,6 +75,7 @@ model Employee {
 
   store       Store?      @relation(fields: [storeId], references: [id], onDelete: SetNull)
   department  Department? @relation(fields: [departmentId], references: [id], onDelete: SetNull)
+  events      Event[]
 
   @@index([storeId], map: "Employee_storeId_idx")
   @@index([departmentId], map: "Employee_departmentId_idx")
@@ -356,4 +357,24 @@ model CjShipment {
 
   @@index([invcNo])
   @@index([custUseNo])
+}
+
+// ==========================================
+// 달력 이벤트 (Firebase → PostgreSQL 마이그레이션)
+// ==========================================
+model Event {
+  id          String   @id @default(cuid())
+  title       String
+  description String?
+  date        DateTime @db.Date  // 날짜만 저장 (시간 무시)
+
+  // 작성자 (Employee 연결)
+  createdById String
+  createdBy   Employee @relation(fields: [createdById], references: [id], onDelete: Cascade)
+
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  @@index([date], map: "Event_date_idx")
+  @@index([createdById], map: "Event_createdById_idx")
 }

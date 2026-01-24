@@ -380,3 +380,114 @@ export async function registerEmployee(data: RegisterEmployeeData): Promise<Auth
     return { success: false, error: error?.message || 'Network error' };
   }
 }
+
+// ==========================================
+// 달력 이벤트 API (PostgreSQL)
+// ==========================================
+
+export interface EventInfo {
+  id: string;
+  title: string;
+  description: string | null;
+  date: string; // YYYY-MM-DD
+  createdById: string;
+  createdByName: string;
+  createdAt: string;
+  updatedAt: string;
+}
+
+// 이벤트 목록 조회 (날짜 범위)
+export async function getEvents(startDate: string, endDate: string): Promise<EventInfo[]> {
+  try {
+    const response = await fetch(
+      `${API_BASE_URL}/events?startDate=${startDate}&endDate=${endDate}`
+    );
+    if (!response.ok) return [];
+
+    const data = await response.json();
+    return data.rows || [];
+  } catch (error) {
+    console.error('getEvents error:', error);
+    return [];
+  }
+}
+
+// 이벤트 생성
+export async function createEvent(data: {
+  title: string;
+  description?: string;
+  date: string;
+}): Promise<{ success: boolean; event?: EventInfo; error?: string }> {
+  try {
+    const user = auth.currentUser;
+    if (!user) {
+      return { success: false, error: 'Not logged in' };
+    }
+
+    const response = await fetch(`${API_BASE_URL}/events`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        firebaseUid: user.uid,
+        title: data.title,
+        description: data.description,
+        date: data.date,
+      }),
+    });
+
+    return await response.json();
+  } catch (error: any) {
+    console.error('createEvent error:', error);
+    return { success: false, error: error?.message || 'Network error' };
+  }
+}
+
+// 이벤트 수정
+export async function updateEvent(
+  id: string,
+  data: { title?: string; description?: string; date?: string }
+): Promise<{ success: boolean; event?: EventInfo; error?: string }> {
+  try {
+    const user = auth.currentUser;
+    if (!user) {
+      return { success: false, error: 'Not logged in' };
+    }
+
+    const response = await fetch(`${API_BASE_URL}/events/${id}`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        firebaseUid: user.uid,
+        ...data,
+      }),
+    });
+
+    return await response.json();
+  } catch (error: any) {
+    console.error('updateEvent error:', error);
+    return { success: false, error: error?.message || 'Network error' };
+  }
+}
+
+// 이벤트 삭제
+export async function deleteEvent(id: string): Promise<{ success: boolean; error?: string }> {
+  try {
+    const user = auth.currentUser;
+    if (!user) {
+      return { success: false, error: 'Not logged in' };
+    }
+
+    const response = await fetch(`${API_BASE_URL}/events/${id}`, {
+      method: 'DELETE',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        firebaseUid: user.uid,
+      }),
+    });
+
+    return await response.json();
+  } catch (error: any) {
+    console.error('deleteEvent error:', error);
+    return { success: false, error: error?.message || 'Network error' };
+  }
+}
