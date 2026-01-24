@@ -61,12 +61,10 @@ export default function MembersManagement() {
     try {
       const allEmployees = await getEmployees();
 
-      // 본사 관리자(ADMIN + isHq)를 최상단에 정렬
+      // ADMIN 역할을 최상단에 정렬
       allEmployees.sort((a, b) => {
-        const aIsAdmin = a.role === "ADMIN" && a.isHq;
-        const bIsAdmin = b.role === "ADMIN" && b.isHq;
-        if (aIsAdmin && !bIsAdmin) return -1;
-        if (!aIsAdmin && bIsAdmin) return 1;
+        if (a.role === "ADMIN" && b.role !== "ADMIN") return -1;
+        if (a.role !== "ADMIN" && b.role === "ADMIN") return 1;
         return 0;
       });
 
@@ -277,7 +275,7 @@ export default function MembersManagement() {
         {!loading &&
           members.map((member) => {
             const isExpanded = expandedMemberId === member.id;
-            const isAdmin = member.role === "ADMIN" && member.isHq;
+            const isAdmin = member.role === "ADMIN";
 
             return (
               <Card key={member.id}>

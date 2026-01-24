@@ -87,14 +87,14 @@ export default function AdminPending() {
       const storeId = storeInputs[employeeId] || undefined;
       const departmentId = deptInputs[employeeId] || undefined;
 
-      // 본사(isHq=true)면 부서 필수 선택
-      if (user.isHq && !departmentId) {
+      // ADMIN 역할 → 부서 필수 선택
+      if (role === "ADMIN" && !departmentId) {
         Alert.alert("입력 오류", "부서를 선택해 주세요.");
         return;
       }
 
-      // 매장(isHq=false)면 매장 필수 선택
-      if (!user.isHq && !storeId) {
+      // STAFF 역할 → 매장 필수 선택
+      if (role === "STAFF" && !storeId) {
         Alert.alert("입력 오류", "매장을 선택해 주세요.");
         return;
       }
@@ -211,8 +211,8 @@ export default function AdminPending() {
                   </View>
                 </View>
 
-                {/* 본사 직원: 부서 선택 필수 */}
-                {userIsHq && (
+                {/* ADMIN 역할: 부서 선택 필수 */}
+                {role === "ADMIN" && (
                   <View style={{ marginBottom: 16 }}>
                     <Text style={styles.label}>부서 선택</Text>
                     <View style={styles.optionGrid}>
@@ -251,8 +251,8 @@ export default function AdminPending() {
                   </View>
                 )}
 
-                {/* 매장 직원: 매장 선택 필수 */}
-                {!userIsHq && (
+                {/* STAFF 역할: 매장 선택 필수 */}
+                {role === "STAFF" && (
                   <View style={{ marginBottom: 16 }}>
                     <Text style={styles.label}>매장 선택</Text>
                     <View style={styles.optionGrid}>

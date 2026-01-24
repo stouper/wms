@@ -7,9 +7,9 @@ import { onAuthStateChanged } from "firebase/auth";
 import { auth } from "../firebaseConfig";
 import { authenticateWithCoreApi, EmployeeInfo } from "../lib/authApi";
 
-// Employee role + isHq → admin 여부 판단
-const isAdminRole = (role: string, isHq: boolean): boolean => {
-  return role === "ADMIN" && isHq;
+// Employee role → admin 여부 판단 (ADMIN 역할이면 /admin)
+const isAdminRole = (role: string): boolean => {
+  return role === "ADMIN";
 };
 
 export default function Index() {
@@ -76,8 +76,8 @@ export default function Index() {
       return;
     }
 
-    // Employee role + isHq로 분기
-    const isAdmin = isAdminRole(employee.role, employee.isHq);
+    // Employee role로 분기 (ADMIN → /admin, STAFF → /staff)
+    const isAdmin = isAdminRole(employee.role);
     const target = isAdmin ? "/admin" : "/staff";
 
     if (pathname !== target) {
