@@ -113,6 +113,24 @@ function endOfDay(d: Date): Date {
   return new Date(d.getFullYear(), d.getMonth(), d.getDate(), 23, 59, 59, 999);
 }
 
+/**
+ * 날짜를 당일 00:00:00으로 정규화
+ */
+function startOfDay(d: Date): Date {
+  return new Date(d.getFullYear(), d.getMonth(), d.getDate(), 0, 0, 0, 0);
+}
+
+/**
+ * 두 날짜가 같은 날인지 확인
+ */
+function isSameDay(d1: Date, d2: Date): boolean {
+  return (
+    d1.getFullYear() === d2.getFullYear() &&
+    d1.getMonth() === d2.getMonth() &&
+    d1.getDate() === d2.getDate()
+  );
+}
+
 // 헤더 파싱 키워드 정의
 const HEADER_KEYWORDS = {
   storeName: ['매장명', 'storeName', 'store_name', '매장', '지점', '지점명'],
@@ -399,6 +417,12 @@ export class SalesService {
   }) {
     const saleDate = parseYYYYMMDD(data.saleDate);
 
+    // 🔒 당일 매출만 등록 가능 (과거 날짜 차단)
+    const today = startOfDay(new Date());
+    if (saleDate < today) {
+      throw new BadRequestException('과거 날짜의 매출은 등록할 수 없습니다');
+    }
+
     const sale = await this.prisma.salesRaw.create({
       data: {
         storeCode: data.storeCode,
@@ -453,6 +477,12 @@ export class SalesService {
       throw new BadRequestException('Sale not found');
     }
 
+    // 🔒 당일 매출만 수정 가능
+    const today = new Date();
+    if (!isSameDay(existing.saleDate, today)) {
+      throw new BadRequestException('당일 매출만 수정 가능합니다');
+    }
+
     const updateData: any = {};
 
     if (data.storeCode !== undefined) updateData.storeCode = data.storeCode;
@@ -495,6 +525,12 @@ export class SalesService {
 
     if (!existing) {
       throw new BadRequestException('Sale not found');
+    }
+
+    // 🔒 당일 매출만 삭제 가능
+    const today = new Date();
+    if (!isSameDay(existing.saleDate, today)) {
+      throw new BadRequestException('당일 매출만 삭제 가능합니다');
     }
 
     await this.prisma.salesRaw.delete({

@@ -132,6 +132,14 @@ export default function StaffSalesPage() {
       return;
     }
 
+    // 🔒 과거 날짜 입력 차단
+    const inputDate = new Date(saleDate).toISOString().split("T")[0];
+    const today = new Date().toISOString().split("T")[0];
+    if (inputDate < today) {
+      Alert.alert("입력 오류", "과거 날짜의 매출은 등록할 수 없습니다");
+      return;
+    }
+
     try {
       if (editingRecord) {
         // 기존 항목 수정
@@ -167,9 +175,10 @@ export default function StaffSalesPage() {
       setDescription("");
       setSaleDate(new Date().toISOString().split("T")[0]);
       loadSales();
-    } catch (error) {
+    } catch (error: any) {
       console.error("저장 실패:", error);
-      Alert.alert("오류", "저장에 실패했습니다");
+      const errorMsg = error?.response?.data?.message || error?.message || "저장에 실패했습니다";
+      Alert.alert("오류", errorMsg);
     }
   };
 
@@ -185,9 +194,10 @@ export default function StaffSalesPage() {
             await deleteSale(id);
             Alert.alert("완료", "매출이 삭제되었습니다.");
             loadSales();
-          } catch (error) {
+          } catch (error: any) {
             console.error("삭제 실패:", error);
-            Alert.alert("오류", "삭제에 실패했습니다");
+            const errorMsg = error?.response?.data?.message || error?.message || "삭제에 실패했습니다";
+            Alert.alert("오류", errorMsg);
           }
         },
       },
@@ -239,6 +249,13 @@ export default function StaffSalesPage() {
     return num.toLocaleString("ko-KR");
   };
 
+  // 당일 매출인지 확인 (수정/삭제 가능 여부)
+  const isToday = (dateStr: string) => {
+    const recordDate = new Date(dateStr).toISOString().split("T")[0];
+    const today = new Date().toISOString().split("T")[0];
+    return recordDate === today;
+  };
+
   // 일별 매출합계 계산
   const getDailySalesTotal = (date: string) => {
     return filteredSalesRecords
@@ -249,37 +266,56 @@ export default function StaffSalesPage() {
       .reduce((sum, r) => sum + r.amount, 0);
   };
 
-  const SalesCard = ({ record }: { record: SalesRecordInfo }) => (
-    <Pressable
-      onPress={() => handleEdit(record)}
-      style={styles.salesCard}
-    >
-      <View style={styles.salesHeader}>
-        <View style={{ flex: 1 }}>
-          {record.codeName && (
-            <Text style={styles.description} numberOfLines={1}>
-              {record.codeName}
-            </Text>
-          )}
-          {record.productType && record.productType !== "일반" && (
-            <View style={styles.categoryBadge}>
-              <Text style={styles.categoryText}>{record.productType}</Text>
-            </View>
+  const SalesCard = ({ record }: { record: SalesRecordInfo }) => {
+    const canEdit = isToday(record.saleDate);
+
+    return (
+      <Pressable
+        onPress={() => canEdit && handleEdit(record)}
+        style={[styles.salesCard, !canEdit && styles.salesCardLocked]}
+        disabled={!canEdit}
+      >
+        <View style={styles.salesHeader}>
+          <View style={{ flex: 1 }}>
+            {!canEdit && (
+              <View style={styles.lockBadge}>
+                <Text style={styles.lockText}>🔒 잠김</Text>
+              </View>
+            )}
+            {record.codeName && (
+              <Text
+                style={[styles.description, !canEdit && styles.descriptionLocked]}
+                numberOfLines={1}
+              >
+                {record.codeName}
+              </Text>
+            )}
+            {record.productType && record.productType !== "일반" && (
+              <View style={styles.categoryBadge}>
+                <Text style={styles.categoryText}>{record.productType}</Text>
+              </View>
+            )}
+          </View>
+          {canEdit && (
+            <Pressable
+              onPress={() => handleDelete(record.id)}
+              style={styles.deleteBtn}
+            >
+              <Text style={styles.deleteBtnText}>✕</Text>
+            </Pressable>
           )}
         </View>
-        <Pressable
-          onPress={() => handleDelete(record.id)}
-          style={styles.deleteBtn}
-        >
-          <Text style={styles.deleteBtnText}>✕</Text>
-        </Pressable>
-      </View>
-      <View style={styles.salesFooter}>
-        <Text style={styles.amountLabel}>매출액</Text>
-        <Text style={styles.amountValue}>₩{formatAmount(record.amount)}</Text>
-      </View>
-    </Pressable>
-  );
+        <View style={styles.salesFooter}>
+          <Text style={[styles.amountLabel, !canEdit && styles.textLocked]}>
+            매출액
+          </Text>
+          <Text style={[styles.amountValue, !canEdit && styles.amountValueLocked]}>
+            ₩{formatAmount(record.amount)}
+          </Text>
+        </View>
+      </Pressable>
+    );
+  };
 
   // 일별 그룹화
   const groupedByDate = new Map<string, SalesRecordInfo[]>();
@@ -821,5 +857,32 @@ const styles = StyleSheet.create({
   },
   categoryOptionTextSelected: {
     color: "#fff",
+  },
+  // 🔒 잠금 상태 스타일
+  salesCardLocked: {
+    opacity: 0.6,
+    backgroundColor: "#14161A",
+  },
+  lockBadge: {
+    backgroundColor: "#64748b20",
+    paddingHorizontal: 6,
+    paddingVertical: 2,
+    borderRadius: 4,
+    alignSelf: "flex-start",
+    marginBottom: 4,
+  },
+  lockText: {
+    color: "#64748b",
+    fontSize: 10,
+    fontWeight: "600",
+  },
+  descriptionLocked: {
+    color: "#64748b",
+  },
+  textLocked: {
+    color: "#64748b",
+  },
+  amountValueLocked: {
+    color: "#64748b",
   },
 });
