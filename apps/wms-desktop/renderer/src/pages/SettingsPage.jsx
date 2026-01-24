@@ -31,6 +31,15 @@ export default function SettingsPage() {
   const [locError, setLocError] = useState("");
   const [editingLoc, setEditingLoc] = useState(null);
 
+  // 부서 관리
+  const [departments, setDepartments] = useState([]);
+  const [deptsLoading, setDeptsLoading] = useState(false);
+  const [deptsVisible, setDeptsVisible] = useState(false);
+  const [newDeptCode, setNewDeptCode] = useState("");
+  const [newDeptName, setNewDeptName] = useState("");
+  const [deptError, setDeptError] = useState("");
+  const [editingDept, setEditingDept] = useState(null);
+
   // 재고 초기화 (전체 교체)
   const [resetStoreCode, setResetStoreCode] = useState("");
   const [resetFile, setResetFile] = useState(null);
@@ -267,6 +276,79 @@ export default function SettingsPage() {
       await loadLocations();
     } catch (e) {
       alert(e?.message || "Location 삭제 실패");
+    }
+  }
+
+  // 부서 목록 로드
+  async function loadDepartments() {
+    setDeptsLoading(true);
+    try {
+      const res = await http.get("/departments");
+      setDepartments(res?.rows || []);
+      setDeptsVisible(true);
+    } catch (e) {
+      console.error("부서 목록 로드 실패:", e);
+    } finally {
+      setDeptsLoading(false);
+    }
+  }
+
+  // 부서 추가
+  async function handleAddDept() {
+    const code = (newDeptCode || "").trim();
+    const name = (newDeptName || "").trim();
+
+    if (!code || !name) {
+      setDeptError("부서코드와 부서명을 모두 입력해주세요");
+      return;
+    }
+
+    setDeptError("");
+    try {
+      const res = await http.post("/departments", { code, name });
+      if (!res.success) {
+        setDeptError(res.error || "부서 추가 실패");
+        return;
+      }
+      setNewDeptCode("");
+      setNewDeptName("");
+      await loadDepartments();
+    } catch (e) {
+      setDeptError(e?.message || "부서 추가 실패");
+    }
+  }
+
+  // 부서 수정
+  async function handleUpdateDept() {
+    if (!editingDept) return;
+
+    const code = (editingDept.code || "").trim();
+    const name = (editingDept.name || "").trim();
+
+    if (!code || !name) {
+      setDeptError("부서코드와 부서명을 모두 입력해주세요");
+      return;
+    }
+
+    setDeptError("");
+    try {
+      await http.patch(`/departments/${editingDept.id}`, { code, name, isActive: editingDept.isActive });
+      setEditingDept(null);
+      await loadDepartments();
+    } catch (e) {
+      setDeptError(e?.message || "부서 수정 실패");
+    }
+  }
+
+  // 부서 삭제
+  async function handleDeleteDept(id, name) {
+    if (!confirm(`부서 "${name}"을(를) 삭제하시겠습니까?\n\n⚠️ 소속 직원은 부서가 해제됩니다.`)) return;
+
+    try {
+      await http.delete(`/departments/${id}`);
+      await loadDepartments();
+    } catch (e) {
+      alert(e?.message || "부서 삭제 실패");
     }
   }
 
@@ -956,6 +1038,169 @@ export default function SettingsPage() {
                   ))}
                 </tbody>
               </table>
+            )}
+          </>
+        )}
+      </div>
+
+      {/* 부서 관리 */}
+      <div style={cardStyle}>
+        <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 10 }}>
+          <div style={{ display: "flex", gap: 6, alignItems: "center" }}>
+            <span style={{ fontSize: 13, fontWeight: 700 }}>부서 관리</span>
+            <input
+              type="text"
+              value={newDeptCode}
+              onChange={(e) => setNewDeptCode(e.target.value)}
+              placeholder="부서코드"
+              style={{ ...inputSmall, width: 100 }}
+            />
+            <input
+              type="text"
+              value={newDeptName}
+              onChange={(e) => setNewDeptName(e.target.value)}
+              placeholder="부서명"
+              style={{ ...inputSmall, width: 120 }}
+              onKeyDown={(e) => e.key === "Enter" && handleAddDept()}
+            />
+          </div>
+          <div style={{ display: "flex", gap: 6, alignItems: "center" }}>
+            <button
+              type="button"
+              onClick={handleAddDept}
+              style={{ ...primaryBtn, padding: "6px 12px", fontSize: 12 }}
+            >
+              추가
+            </button>
+            <button
+              type="button"
+              onClick={loadDepartments}
+              disabled={deptsLoading}
+              style={{ ...smallBtnStyle, background: "#3b82f6", color: "#fff", border: "none" }}
+            >
+              {deptsLoading ? "..." : "조회"}
+            </button>
+          </div>
+        </div>
+
+        {deptError && (
+          <div style={{ marginBottom: 8, fontSize: 11, color: "#ef4444" }}>
+            {deptError}
+          </div>
+        )}
+
+        {/* 부서 목록 */}
+        {deptsVisible && (
+          <>
+            {deptsLoading ? (
+              <div style={{ fontSize: 12, color: "#64748b", marginTop: 8 }}>로딩 중...</div>
+            ) : departments.length === 0 ? (
+              <div style={{ fontSize: 12, color: "#64748b", marginTop: 8 }}>등록된 부서가 없습니다.</div>
+            ) : (
+              <>
+                <div style={{ fontSize: 12, color: "#64748b", marginTop: 8, marginBottom: 4 }}>
+                  총 <b style={{ color: "#0ea5e9" }}>{departments.length}</b>개 부서
+                </div>
+                <table style={{ width: "100%", borderCollapse: "collapse" }}>
+                  <thead>
+                    <tr style={{ background: "#f8fafc" }}>
+                      <th style={{ ...thStyle, width: 60 }}>#</th>
+                      <th style={thStyle}>코드</th>
+                      <th style={thStyle}>부서명</th>
+                      <th style={thStyle}>직원수</th>
+                      <th style={thStyle}>상태</th>
+                      <th style={{ ...thStyle, width: 100 }}>관리</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {departments.map((d, idx) => (
+                      <tr key={d.id}>
+                        <td style={{ ...tdStyle, color: "#94a3b8", fontSize: 11 }}>{idx + 1}</td>
+                        <td style={tdStyle}>
+                          {editingDept?.id === d.id ? (
+                            <input
+                              type="text"
+                              value={editingDept.code}
+                              onChange={(e) => setEditingDept({ ...editingDept, code: e.target.value })}
+                              style={{ ...inputSmall, width: 80 }}
+                            />
+                          ) : (
+                            <b>{d.code}</b>
+                          )}
+                        </td>
+                        <td style={tdStyle}>
+                          {editingDept?.id === d.id ? (
+                            <input
+                              type="text"
+                              value={editingDept.name || ""}
+                              onChange={(e) => setEditingDept({ ...editingDept, name: e.target.value })}
+                              style={{ ...inputSmall, width: "100%" }}
+                            />
+                          ) : (
+                            d.name || "-"
+                          )}
+                        </td>
+                        <td style={tdStyle}>
+                          <span style={{ color: "#64748b" }}>{d.employeeCount || 0}명</span>
+                        </td>
+                        <td style={tdStyle}>
+                          {editingDept?.id === d.id ? (
+                            <select
+                              value={editingDept.isActive ? "active" : "inactive"}
+                              onChange={(e) => setEditingDept({ ...editingDept, isActive: e.target.value === "active" })}
+                              style={{ ...inputSmall, width: 80 }}
+                            >
+                              <option value="active">활성</option>
+                              <option value="inactive">비활성</option>
+                            </select>
+                          ) : d.isActive ? (
+                            <span style={{ color: "#16a34a", fontWeight: 600, fontSize: 11 }}>활성</span>
+                          ) : (
+                            <span style={{ color: "#94a3b8", fontSize: 11 }}>비활성</span>
+                          )}
+                        </td>
+                        <td style={tdStyle}>
+                          {editingDept?.id === d.id ? (
+                            <div style={{ display: "flex", gap: 4, whiteSpace: "nowrap" }}>
+                              <button
+                                type="button"
+                                onClick={handleUpdateDept}
+                                style={{ ...smallBtnStyle, background: "#3b82f6", color: "#fff", border: "none", padding: "4px 8px", whiteSpace: "nowrap" }}
+                              >
+                                저장
+                              </button>
+                              <button
+                                type="button"
+                                onClick={() => setEditingDept(null)}
+                                style={{ ...smallBtnStyle, padding: "4px 8px", whiteSpace: "nowrap" }}
+                              >
+                                취소
+                              </button>
+                            </div>
+                          ) : (
+                            <div style={{ display: "flex", gap: 4, whiteSpace: "nowrap" }}>
+                              <button
+                                type="button"
+                                onClick={() => setEditingDept({ id: d.id, code: d.code, name: d.name || "", isActive: d.isActive })}
+                                style={{ ...smallBtnStyle, padding: "4px 8px", whiteSpace: "nowrap" }}
+                              >
+                                수정
+                              </button>
+                              <button
+                                type="button"
+                                onClick={() => handleDeleteDept(d.id, d.name)}
+                                style={{ ...smallBtnStyle, color: "#ef4444", padding: "4px 8px", whiteSpace: "nowrap" }}
+                              >
+                                삭제
+                              </button>
+                            </div>
+                          )}
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </>
             )}
           </>
         )}
