@@ -77,6 +77,8 @@ model Employee {
   department  Department? @relation(fields: [departmentId], references: [id], onDelete: SetNull)
   events      Event[]
   boardPosts  BoardPost[]
+  messages    Message[]   @relation("MessageAuthor")
+  receipts    Receipt[]   @relation("ReceiptEmployee")
 
   @@index([storeId], map: "Employee_storeId_idx")
   @@index([departmentId], map: "Employee_departmentId_idx")
@@ -401,4 +403,62 @@ model BoardPost {
 
   @@index([authorId], map: "BoardPost_authorId_idx")
   @@index([createdAt], map: "BoardPost_createdAt_idx")
+}
+
+// ==========================================
+// 공지 메시지 (Firebase → PostgreSQL 마이그레이션)
+// ==========================================
+
+// 공지 대상 타입
+enum MessageTargetType {
+  ALL       // 전체
+  STORE     // 특정 매장
+  HQ_DEPT   // 본사 부서
+}
+
+model Message {
+  id          String   @id @default(cuid())
+  title       String
+  body        String   @db.Text
+
+  // 대상 설정
+  targetType     MessageTargetType @default(ALL)
+  targetStoreIds Json?    // ["storeId1", "storeId2", ...] - STORE 타입용
+  targetDeptCodes Json?   // ["부서명1", "부서명2", ...] - HQ_DEPT 타입용
+
+  // 작성자 (Employee 연결)
+  authorId    String
+  author      Employee @relation("MessageAuthor", fields: [authorId], references: [id], onDelete: Cascade)
+
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  receipts    Receipt[]
+
+  @@index([authorId], map: "Message_authorId_idx")
+  @@index([createdAt], map: "Message_createdAt_idx")
+  @@index([targetType], map: "Message_targetType_idx")
+}
+
+// 공지 수신/읽음 기록
+model Receipt {
+  id          String   @id @default(cuid())
+  messageId   String
+  employeeId  String   // 수신자
+
+  read        Boolean  @default(false)
+  readAt      DateTime?
+
+  // 발송 시점의 푸시 토큰 (재발송용)
+  pushTokenAtSend String?
+
+  createdAt   DateTime @default(now())
+
+  message     Message  @relation(fields: [messageId], references: [id], onDelete: Cascade)
+  employee    Employee @relation("ReceiptEmployee", fields: [employeeId], references: [id], onDelete: Cascade)
+
+  @@unique([messageId, employeeId], map: "Receipt_messageId_employeeId_key")
+  @@index([messageId], map: "Receipt_messageId_idx")
+  @@index([employeeId], map: "Receipt_employeeId_idx")
+  @@index([read], map: "Receipt_read_idx")
 }

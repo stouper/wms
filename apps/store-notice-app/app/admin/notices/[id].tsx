@@ -1,20 +1,7 @@
 // app/admin/notices/[id].tsx
-// ✅ Multi-tenant: companyId로 message/receipt 필터링 + 신규 스키마 반영
+// ✅ PostgreSQL 연동: 공지 상세 (Firebase → PostgreSQL 마이그레이션 완료)
 
 import { useLocalSearchParams, useRouter } from "expo-router";
-import {
-  Timestamp,
-  collection,
-  doc,
-  getDoc,
-  getDocs,
-  query,
-  serverTimestamp,
-  updateDoc,
-  where,
-  onSnapshot,
-} from "firebase/firestore";
-import { getFunctions, httpsCallable } from "firebase/functions";
 import React, { useCallback, useEffect, useMemo, useState } from "react";
 import {
   ActivityIndicator,
@@ -27,30 +14,15 @@ import {
   View,
 } from "react-native";
 import Card from "../../../components/ui/Card";
-import { auth, db } from "../../../firebaseConfig";
-
-// --- Types ---
-type Receipt = {
-  id: string;
-  userId: string;
-  messageId?: string;
-  companyId?: string;
-  read: boolean;
-  readAt?: Timestamp | null;
-  expoPushTokenAtSend?: string | null;
-};
-
-type User = {
-  id: string;
-  name?: string;
-  storeId?: string | null;
-  department?: string | null;
-  role?: "OWNER" | "MANAGER" | "SALES";
-  status?: "PENDING" | "ACTIVE" | "REJECTED" | "DISABLED";
-  expoPushToken?: string | null;
-};
-
-type TargetType = "ALL" | "STORE" | "HQ_DEPT";
+import {
+  getMessage,
+  updateMessage,
+  deleteMessage,
+  getUnreadRecipients,
+  MessageInfo,
+  ReceiptInfo,
+  MessageTargetType,
+} from "../../../lib/authApi";
 
 export default function AdminNoticeDetail() {
   const params = useLocalSearchParams();
@@ -61,9 +33,6 @@ export default function AdminNoticeDetail() {
 
   const router = useRouter();
 
-  // ✅ 내 companyId
-  const [myCompanyId, setMyCompanyId] = useState<string | null>(null);
-
   // --- States ---
   const [loading, setLoading] = useState(true);
   const [isDeleted, setIsDeleted] = useState(false);
@@ -71,14 +40,13 @@ export default function AdminNoticeDetail() {
   const [title, setTitle] = useState("");
   const [body, setBody] = useState("");
 
-  // ✅ 타겟 표시용 상태
-  const [targetType, setTargetType] = useState<TargetType>("ALL");
+  // 타겟 표시용 상태
+  const [targetType, setTargetType] = useState<MessageTargetType>("ALL");
   const [targetStoreIds, setTargetStoreIds] = useState<string[] | null>(null);
   const [targetDeptCodes, setTargetDeptCodes] = useState<string[] | null>(null);
 
-  const [reads, setReads] = useState<Receipt[]>([]);
-  const [unreads, setUnreads] = useState<Receipt[]>([]);
-  const [users, setUsers] = useState<Record<string, User>>({});
+  const [reads, setReads] = useState<ReceiptInfo[]>([]);
+  const [unreads, setUnreads] = useState<ReceiptInfo[]>([]);
   const [opLoading, setOpLoading] = useState(false);
   const [isEditing, setIsEditing] = useState(false);
   const [editTitle, setEditTitle] = useState("");
@@ -86,9 +54,9 @@ export default function AdminNoticeDetail() {
 
   const listData = useMemo(() => [...reads, ...unreads], [reads, unreads]);
 
-  // ✅ 동적 매장/부서 레이블 (간단히 ID/코드 그대로 표시)
+  // 동적 매장/부서 레이블
   const targetSummary = useMemo(() => {
-    const t: TargetType =
+    const t: MessageTargetType =
       targetType === "STORE" || targetType === "HQ_DEPT" ? targetType : "ALL";
 
     if (t === "ALL") return "대상: 전체";
@@ -107,60 +75,18 @@ export default function AdminNoticeDetail() {
     return `대상: 본사부서 · ${names}`;
   }, [targetType, targetStoreIds, targetDeptCodes]);
 
-  // ✅ 내 companyId 가져오기
-  useEffect(() => {
-    const uid = auth.currentUser?.uid;
-    if (!uid) return;
-
-    const unsub = onSnapshot(doc(db, "users", uid), (snap) => {
-      if (snap.exists()) {
-        const companyId = (snap.data() as any)?.companyId;
-        setMyCompanyId(companyId || null);
-      }
-    });
-
-    return () => unsub();
-  }, []);
-
   // --- Data Loading ---
   useEffect(() => {
-    if (!messageId || !myCompanyId) return;
-    let cancelled = false;
+    if (!messageId) return;
 
     async function load() {
       try {
         setLoading(true);
 
-        // 1) 메시지 본문 로드 + companyId 검증
-        const m = await getDoc(doc(db, "messages", messageId));
-        if (cancelled) return;
+        // 메시지 상세 조회 (receipts 포함)
+        const msg = await getMessage(messageId);
 
-        if (m.exists()) {
-          const d = m.data() as any;
-
-          // ✅ companyId 검증
-          if (d?.companyId !== myCompanyId) {
-            Alert.alert("권한 없음", "다른 회사의 공지입니다.", [
-              { text: "확인", onPress: () => router.replace("/admin") },
-            ]);
-            setIsDeleted(true);
-            return;
-          }
-
-          const loadedTitle = d?.title ?? "";
-          const loadedBody = d?.body ?? "";
-
-          setTitle(loadedTitle);
-          setBody(loadedBody);
-          setEditTitle(loadedTitle);
-          setEditBody(loadedBody);
-
-          // ✅ 타겟 필드 로드(없으면 ALL 취급)
-          const t: TargetType = d?.targetType ?? "ALL";
-          setTargetType(t);
-          setTargetStoreIds(d?.targetStoreIds ?? null);
-          setTargetDeptCodes(d?.targetDeptCodes ?? null);
-        } else {
+        if (!msg) {
           setIsDeleted(true);
           Alert.alert("안내", "삭제된 공지입니다.", [
             { text: "확인", onPress: () => router.replace("/admin") },
@@ -168,48 +94,29 @@ export default function AdminNoticeDetail() {
           return;
         }
 
-        // 2) Receipts 로드 (같은 회사만)
-        const rq = query(
-          collection(db, "receipts"),
-          where("messageId", "==", messageId),
-          where("companyId", "==", myCompanyId)
-        );
-        const rs = await getDocs(rq);
-        if (cancelled) return;
+        setTitle(msg.title);
+        setBody(msg.body);
+        setEditTitle(msg.title);
+        setEditBody(msg.body);
 
-        const all: Receipt[] = rs.docs.map((d) => ({ id: d.id, ...(d.data() as any) }));
-        setReads(all.filter((r) => r.read));
-        setUnreads(all.filter((r) => !r.read));
+        // 타겟 필드 로드
+        setTargetType(msg.targetType ?? "ALL");
+        setTargetStoreIds(msg.targetStoreIds ?? null);
+        setTargetDeptCodes(msg.targetDeptCodes ?? null);
 
-        // 3) 사용자 정보 캐싱 (같은 회사 검증은 이미 receipt가 같은 회사이므로 생략 가능)
-        const uids = Array.from(new Set(all.map((r) => r.userId))).filter(Boolean);
-        const nextUsers: Record<string, User> = {};
-        await Promise.all(
-          uids.map(async (uid) => {
-            const u = await getDoc(doc(db, "users", uid));
-            if (u.exists()) {
-              const userData = u.data() as any;
-              // 같은 회사인지 한 번 더 확인 (안전장치)
-              if (userData?.companyId === myCompanyId) {
-                nextUsers[uid] = { id: u.id, ...userData };
-              }
-            }
-          })
-        );
-        if (!cancelled) setUsers(nextUsers);
+        // 읽음/미읽음 분류
+        setReads(msg.reads || []);
+        setUnreads(msg.unreads || []);
       } catch (e: any) {
         console.error("[AdminNoticeDetail] load error:", e);
         Alert.alert("오류", e?.message ?? "데이터를 불러오지 못했습니다.");
       } finally {
-        if (!cancelled) setLoading(false);
+        setLoading(false);
       }
     }
 
     load();
-    return () => {
-      cancelled = true;
-    };
-  }, [messageId, myCompanyId, router]);
+  }, [messageId, router]);
 
   // --- Handlers ---
   const toggleEdit = useCallback(() => {
@@ -227,15 +134,19 @@ export default function AdminNoticeDetail() {
     }
     try {
       setOpLoading(true);
-      await updateDoc(doc(db, "messages", messageId), {
+      const result = await updateMessage(messageId, {
         title: editTitle.trim(),
         body: editBody.trim(),
-        updatedAt: serverTimestamp(),
       });
-      setTitle(editTitle.trim());
-      setBody(editBody.trim());
-      setIsEditing(false);
-      Alert.alert("완료", "공지가 수정되었습니다.");
+
+      if (result.success) {
+        setTitle(editTitle.trim());
+        setBody(editBody.trim());
+        setIsEditing(false);
+        Alert.alert("완료", "공지가 수정되었습니다.");
+      } else {
+        Alert.alert("오류", result.error || "수정 실패");
+      }
     } catch (e: any) {
       Alert.alert("오류", e?.message ?? "수정 실패");
     } finally {
@@ -252,9 +163,12 @@ export default function AdminNoticeDetail() {
         onPress: async () => {
           try {
             setOpLoading(true);
-            const fn = httpsCallable(getFunctions(), "deleteNotice");
-            await fn({ messageId });
-            router.replace("/admin");
+            const result = await deleteMessage(messageId);
+            if (result.success) {
+              router.replace("/admin");
+            } else {
+              Alert.alert("오류", result.error || "삭제 실패");
+            }
           } catch (e: any) {
             Alert.alert("오류", e?.message ?? "삭제 실패");
           } finally {
@@ -268,16 +182,19 @@ export default function AdminNoticeDetail() {
   const resendToUnreads = useCallback(async () => {
     try {
       setOpLoading(true);
-      const targetTokens: string[] = [];
 
-      for (const r of unreads) {
-        const u = users[r.userId];
-        // ✅ ACTIVE 상태이고 STAFF 역할인 경우만
-        if (u?.status === "ACTIVE" && !["OWNER", "MANAGER"].includes(u.role || "")) {
-          const token = u.expoPushToken || r.expoPushTokenAtSend;
-          if (token) targetTokens.push(token);
-        }
+      // 미읽음 수신자 목록 조회
+      const result = await getUnreadRecipients(messageId);
+      if (!result.success || !result.recipients) {
+        Alert.alert("오류", "미읽음 수신자 조회 실패");
+        return;
       }
+
+      // ACTIVE 상태이고 STAFF 역할인 경우만 (OWNER, MANAGER 제외)
+      const targetTokens: string[] = result.recipients
+        .filter((r) => r.pushToken && !["HQ_ADMIN", "HQ_WMS", "STORE_MANAGER"].includes(r.role || ""))
+        .map((r) => r.pushToken!)
+        .filter(Boolean);
 
       if (targetTokens.length === 0) {
         Alert.alert("안내", "재알림 대상이 없습니다.");
@@ -308,7 +225,7 @@ export default function AdminNoticeDetail() {
     } finally {
       setOpLoading(false);
     }
-  }, [messageId, unreads, users, title, body]);
+  }, [messageId, title, body]);
 
   // --- Render Helpers ---
   const Header = useMemo(
@@ -331,7 +248,7 @@ export default function AdminNoticeDetail() {
             <View>
               <Text style={styles.title}>{title}</Text>
 
-              {/* ✅ 대상 표시 */}
+              {/* 대상 표시 */}
               <Text style={styles.targetText}>{targetSummary}</Text>
 
               <Text style={styles.body}>{body}</Text>
@@ -373,7 +290,7 @@ export default function AdminNoticeDetail() {
                     disabled={opLoading}
                     style={[styles.editBtn, styles.halfBtn]}
                   >
-                    <Text style={styles.btnText}>✏️ 수정</Text>
+                    <Text style={styles.btnText}>수정</Text>
                   </TouchableOpacity>
                   <TouchableOpacity
                     onPress={handleDelete}
@@ -416,7 +333,7 @@ export default function AdminNoticeDetail() {
     ]
   );
 
-  if (!myCompanyId || loading) {
+  if (loading) {
     return (
       <View style={styles.loadingWrap}>
         <ActivityIndicator size="large" color="#1E5BFF" />
@@ -434,25 +351,20 @@ export default function AdminNoticeDetail() {
         keyExtractor={(r) => r.id}
         ListHeaderComponent={Header}
         renderItem={({ item }) => {
-          const u = users[item.userId];
-          const when =
-            item.readAt && typeof item.readAt.toDate === "function"
-              ? item.readAt.toDate()
-              : null;
+          const isRead = !!item.readAt;
           return (
-            <View style={[styles.rowItem, item.read ? styles.rowReadBg : styles.rowUnreadBg]}>
+            <View style={[styles.rowItem, isRead ? styles.rowReadBg : styles.rowUnreadBg]}>
               <View style={{ flex: 1 }}>
-                <Text style={styles.rowName}>{u?.name || "알 수 없음"}</Text>
+                <Text style={styles.rowName}>{item.employeeName || "알 수 없음"}</Text>
                 <Text style={styles.rowSub}>
-                  매장: {u?.storeId || "-"}
-                  {u?.department ? ` · 부서: ${u.department}` : ""}
+                  {item.storeName ? `매장: ${item.storeName}` : ""}
+                  {item.departmentName ? `부서: ${item.departmentName}` : ""}
+                  {!item.storeName && !item.departmentName ? "-" : ""}
                 </Text>
               </View>
               <Text style={styles.rowTime}>
-                {item.read
-                  ? when
-                    ? when.toLocaleString("ko-KR", { hour12: false }).slice(0, -3)
-                    : "확인됨"
+                {isRead
+                  ? new Date(item.readAt!).toLocaleString("ko-KR", { hour12: false }).slice(0, -3)
                   : "미확인"}
               </Text>
             </View>

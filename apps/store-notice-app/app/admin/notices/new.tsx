@@ -1,5 +1,5 @@
 // app/admin/notices/new.tsx
-// ✅ PostgreSQL 연동: stores/departments는 core-api에서 가져옴
+// ✅ PostgreSQL 연동: 새 공지 작성 (Firebase → PostgreSQL 마이그레이션 완료)
 
 import React, { useEffect, useMemo, useState, useCallback } from "react";
 import {
@@ -16,25 +16,21 @@ import {
   ActivityIndicator,
 } from "react-native";
 import { useRouter } from "expo-router";
-import { auth } from "../../../firebaseConfig";
 import Card from "../../../components/ui/Card";
-
-// Callable
-import { getFunctions, httpsCallable } from "firebase/functions";
 
 // PostgreSQL API
 import {
   getStores,
   getDepartments,
   getEmployees,
+  createMessage,
   StoreInfo,
   DepartmentInfo,
+  MessageTargetType,
 } from "../../../lib/authApi";
 
 // 안전영역
 import { SafeAreaView } from "react-native-safe-area-context";
-
-type TargetType = "ALL" | "STORE" | "HQ_DEPT";
 
 export default function AdminNew() {
   const router = useRouter();
@@ -42,13 +38,13 @@ export default function AdminNew() {
   const [title, setTitle] = useState("");
   const [body, setBody] = useState("");
 
-  // ✅ pendingCount
+  // pendingCount
   const [pendingCount, setPendingCount] = useState(0);
 
-  // ✅ 타겟 타입
-  const [targetType, setTargetType] = useState<TargetType>("ALL");
+  // 타겟 타입
+  const [targetType, setTargetType] = useState<MessageTargetType>("ALL");
 
-  // ✅ stores from PostgreSQL
+  // stores from PostgreSQL
   const [storesLoading, setStoresLoading] = useState(true);
   const [stores, setStores] = useState<StoreInfo[]>([]);
 
@@ -57,7 +53,7 @@ export default function AdminNew() {
   const [storeModalOpen, setStoreModalOpen] = useState(false);
   const [storeSearch, setStoreSearch] = useState("");
 
-  // ✅ departments from PostgreSQL
+  // departments from PostgreSQL
   const [departmentsLoading, setDepartmentsLoading] = useState(true);
   const [departments, setDepartments] = useState<DepartmentInfo[]>([]);
 
@@ -128,14 +124,14 @@ export default function AdminNew() {
   const activeStores = stores;
   const activeDepartments = departments;
 
-  // 🔹 타겟타입 변경 시 불필요한 선택값 정리
-  const changeTargetType = (t: TargetType) => {
+  // 타겟타입 변경 시 불필요한 선택값 정리
+  const changeTargetType = (t: MessageTargetType) => {
     setTargetType(t);
     if (t !== "STORE") setSelectedStoreIds([]);
     if (t !== "HQ_DEPT") setSelectedDeptIds([]);
   };
 
-  // 🔹 매장 검색 필터
+  // 매장 검색 필터
   const filteredStores = useMemo(() => {
     const key = storeSearch.trim().toLowerCase();
     const base = activeStores;
@@ -156,7 +152,7 @@ export default function AdminNew() {
 
   const clearStores = () => setSelectedStoreIds([]);
 
-  // 🔹 부서 검색 필터
+  // 부서 검색 필터
   const filteredDepartments = useMemo(() => {
     const key = deptSearch.trim().toLowerCase();
     const base = activeDepartments;
@@ -195,17 +191,11 @@ export default function AdminNew() {
   }, [targetType, selectedStoreIds, selectedDeptIds, activeStores, activeDepartments]);
 
   // =========================================================
-  // 저장하기 → dispatchNoticeFast Callable 호출
+  // 저장하기 → PostgreSQL API + Expo Push
   // =========================================================
   const onSave = async () => {
     if (!title.trim() || !body.trim()) {
       Alert.alert("확인", "제목/내용을 입력해 주세요.");
-      return;
-    }
-
-    const adminUid = auth.currentUser?.uid;
-    if (!adminUid) {
-      Alert.alert("오류", "관리자 인증 정보를 확인해 주세요.");
       return;
     }
 
@@ -220,37 +210,73 @@ export default function AdminNew() {
 
     setLoading(true);
     try {
-      const functions = getFunctions();
-      const dispatchNotice = httpsCallable(functions, "dispatchNoticeFast");
-
       // targetDeptCodes: 선택된 부서명을 배열로
       const deptCodes = targetType === "HQ_DEPT"
         ? selectedDeptIds.map((id) => activeDepartments.find((d) => d.id === id)?.name ?? id)
-        : null;
+        : undefined;
 
-      const payload: any = {
+      // 1. PostgreSQL API로 메시지 생성
+      const result = await createMessage({
         title: title.trim(),
         body: body.trim(),
-
         targetType,
-        targetStoreIds: targetType === "STORE" ? selectedStoreIds : null,
+        targetStoreIds: targetType === "STORE" ? selectedStoreIds : undefined,
         targetDeptCodes: deptCodes,
-      };
+      });
 
-      const res = await dispatchNotice(payload);
-      console.log("dispatchNotice result:", res?.data);
+      if (!result.success) {
+        Alert.alert("오류", result.error || "저장 실패");
+        return;
+      }
 
-      Alert.alert("완료", "공지 저장 완료! (서버 자동 발송 중)");
+      // 2. 푸시 알림 발송 (Expo Push API 직접 호출)
+      const pushTokens = result.pushTokens || [];
+      if (pushTokens.length > 0) {
+        await sendPushNotifications(pushTokens, title.trim(), body.trim(), result.message?.id);
+      }
+
+      Alert.alert("완료", `공지 저장 완료! (${result.targetCount || 0}명에게 발송)`);
       setTitle("");
       setBody("");
       changeTargetType("ALL");
       setStoreSearch("");
       setDeptSearch("");
     } catch (e: any) {
-      console.log("[NEW] Callable error:", e);
+      console.log("[NEW] save error:", e);
       Alert.alert("오류", e?.message ?? "저장 실패");
     } finally {
       setLoading(false);
+    }
+  };
+
+  // Expo Push API로 알림 발송
+  const sendPushNotifications = async (
+    tokens: string[],
+    noticeTitle: string,
+    noticeBody: string,
+    messageId?: string
+  ) => {
+    const CHUNK = 90;
+    for (let i = 0; i < tokens.length; i += CHUNK) {
+      const bundle = tokens.slice(i, i + CHUNK);
+      try {
+        await fetch("https://exp.host/--/api/v2/push/send", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(
+            bundle.map((to) => ({
+              to,
+              title: noticeTitle,
+              body: noticeBody,
+              data: { messageId },
+              channelId: "alerts",
+              sound: "default",
+            }))
+          ),
+        });
+      } catch (e) {
+        console.log("[NEW] push error:", e);
+      }
     }
   };
 

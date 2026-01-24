@@ -36,6 +36,9 @@ import { EventsModule } from './modules/events/events.module';
 // ✅ BoardPosts (게시판)
 import { BoardPostsModule } from './modules/board-posts/board-posts.module';
 
+// ✅ Messages (공지 메시지)
+import { MessagesModule } from './modules/messages/messages.module';
+
 @Module({
   imports: [
     ConfigModule.forRoot({ isGlobal: true }),
@@ -70,6 +73,9 @@ import { BoardPostsModule } from './modules/board-posts/board-posts.module';
 
     // ✅ 게시판
     BoardPostsModule,
+
+    // ✅ 공지 메시지
+    MessagesModule,
   ],
   controllers: [],
   providers: [],

@@ -1,7 +1,7 @@
 // app/admin/notices/index.tsx
-// ✅ Multi-tenant: companyId로 messages 필터링
+// ✅ PostgreSQL 연동: 공지 목록 (Firebase → PostgreSQL 마이그레이션 완료)
 
-import React, { useEffect, useState } from "react";
+import React, { useEffect, useState, useCallback } from "react";
 import {
   ActivityIndicator,
   Pressable,
@@ -10,111 +10,65 @@ import {
   View,
   StyleSheet,
 } from "react-native";
-import {
-  collection,
-  getDocs,
-  orderBy,
-  query,
-  where,
-  Timestamp,
-  doc,
-  onSnapshot,
-} from "firebase/firestore";
 import { useRouter } from "expo-router";
-import { auth, db } from "../../../firebaseConfig";
 import Card from "../../../components/ui/Card";
 import EmptyState from "../../../components/ui/EmptyState";
 import { SafeAreaView } from "react-native-safe-area-context";
-
-type Message = {
-  id: string;
-  title: string;
-  createdAt?: Timestamp | null;
-};
+import {
+  getMessages,
+  getEmployees,
+  MessageInfo,
+} from "../../../lib/authApi";
 
 export default function AdminNoticeList() {
   const router = useRouter();
-  const [myCompanyId, setMyCompanyId] = useState<string | null>(null);
-  const [items, setItems] = useState<Message[]>([]);
+  const [items, setItems] = useState<MessageInfo[]>([]);
   const [loading, setLoading] = useState(true);
   const [pendingCount, setPendingCount] = useState(0);
 
-  // 내 companyId 가져오기 + pendingCount
-  useEffect(() => {
-    const uid = auth.currentUser?.uid;
-    if (!uid) return;
-
-    let unsubPending: (() => void) | undefined;
-
-    const unsub = onSnapshot(doc(db, "users", uid), (snap) => {
-      if (snap.exists()) {
-        const companyId = (snap.data() as any)?.companyId;
-        setMyCompanyId(companyId || null);
-
-        if (companyId) {
-          // PENDING 사용자 수 실시간 가져오기
-          const pendingQuery = query(
-            collection(db, "users"),
-            where("companyId", "==", companyId),
-            where("status", "==", "PENDING")
-          );
-          unsubPending = onSnapshot(pendingQuery, (snapshot) => {
-            setPendingCount(snapshot.size);
-          });
-        }
-      }
-    });
-
-    return () => {
-      unsub();
-      unsubPending?.();
-    };
+  // pendingCount 로드
+  const loadPendingCount = useCallback(async () => {
+    try {
+      const employees = await getEmployees("PENDING");
+      setPendingCount(employees.length);
+    } catch (error) {
+      console.error("loadPendingCount error:", error);
+    }
   }, []);
 
-  const load = async () => {
-    if (!myCompanyId) return;
+  useEffect(() => {
+    loadPendingCount();
+  }, [loadPendingCount]);
 
+  // 공지 목록 로드
+  const loadMessages = useCallback(async () => {
     setLoading(true);
     try {
-      // ✅ companyId로 필터링
-      const q = query(
-        collection(db, "messages"),
-        where("companyId", "==", myCompanyId),
-        orderBy("createdAt", "desc")
-      );
-      const snap = await getDocs(q);
-      const list: Message[] = [];
-      snap.forEach((d) => {
-        const m = d.data() as any;
-        list.push({
-          id: d.id,
-          title: m?.title ?? "(제목 없음)",
-          createdAt: m?.createdAt ?? null,
-        });
-      });
-      setItems(list);
+      const result = await getMessages(50, 0);
+      setItems(result.rows);
     } catch (e: any) {
       console.error("[AdminNoticeList] load error:", e);
       setItems([]);
     } finally {
       setLoading(false);
     }
-  };
+  }, []);
 
   useEffect(() => {
-    load();
-  }, [myCompanyId]);
+    loadMessages();
+  }, [loadMessages]);
 
-  if (!myCompanyId) {
-    return (
-      <View style={styles.root}>
-        <View style={styles.center}>
-          <ActivityIndicator color="#1E5BFF" />
-          <Text style={styles.muted}>회사 정보를 불러오는 중...</Text>
-        </View>
-      </View>
-    );
-  }
+  const formatDate = (dateStr: string) => {
+    if (!dateStr) return "-";
+    const date = new Date(dateStr);
+    return date.toLocaleString("ko-KR", {
+      year: "numeric",
+      month: "2-digit",
+      day: "2-digit",
+      hour: "2-digit",
+      minute: "2-digit",
+    });
+  };
 
   return (
     <View style={styles.root}>
@@ -138,24 +92,19 @@ export default function AdminNoticeList() {
         )}
 
         {!loading &&
-          items.map((m) => {
-            const dateText = m.createdAt?.toDate
-              ? m.createdAt.toDate().toLocaleString()
-              : "-";
-            return (
-              <Pressable
-                key={m.id}
-                onPress={() => router.push(`/admin/notices/${m.id}`)}
-                style={styles.item}
-                android_ripple={{ color: "#111827" }}
-              >
-                <Text style={styles.itemTitle} numberOfLines={1}>
-                  {m.title}
-                </Text>
-                <Text style={styles.itemSub}>{dateText}</Text>
-              </Pressable>
-            );
-          })}
+          items.map((m) => (
+            <Pressable
+              key={m.id}
+              onPress={() => router.push(`/admin/notices/${m.id}`)}
+              style={styles.item}
+              android_ripple={{ color: "#111827" }}
+            >
+              <Text style={styles.itemTitle} numberOfLines={1}>
+                {m.title}
+              </Text>
+              <Text style={styles.itemSub}>{formatDate(m.createdAt)}</Text>
+            </Pressable>
+          ))}
         <View style={{ height: 8 }} />
       </ScrollView>
 

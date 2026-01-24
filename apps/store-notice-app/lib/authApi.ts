@@ -632,3 +632,200 @@ export async function deleteBoardPost(id: string): Promise<{ success: boolean; e
     return { success: false, error: error?.message || 'Network error' };
   }
 }
+
+// ==========================================
+// 공지 메시지 API (PostgreSQL)
+// ==========================================
+
+export type MessageTargetType = 'ALL' | 'STORE' | 'HQ_DEPT';
+
+export interface ReceiptInfo {
+  id: string;
+  employeeId: string;
+  employeeName: string;
+  storeId: string | null;
+  storeName: string | null;
+  departmentId: string | null;
+  departmentName: string | null;
+  readAt?: string;
+  pushToken?: string;
+  status?: string;
+  role?: string;
+}
+
+export interface MessageInfo {
+  id: string;
+  title: string;
+  body: string;
+  targetType: MessageTargetType;
+  targetStoreIds: string[] | null;
+  targetDeptCodes: string[] | null;
+  authorId: string;
+  authorName: string;
+  receiptCount?: number;
+  createdAt: string;
+  updatedAt: string;
+  reads?: ReceiptInfo[];
+  unreads?: ReceiptInfo[];
+}
+
+// 메시지 목록 조회 (관리자용)
+export async function getMessages(
+  limit = 50,
+  offset = 0
+): Promise<{ rows: MessageInfo[]; total: number }> {
+  try {
+    const response = await fetch(
+      `${API_BASE_URL}/messages?limit=${limit}&offset=${offset}`
+    );
+    if (!response.ok) return { rows: [], total: 0 };
+
+    return await response.json();
+  } catch (error) {
+    console.error('getMessages error:', error);
+    return { rows: [], total: 0 };
+  }
+}
+
+// 메시지 단건 조회 (상세 - receipts 포함)
+export async function getMessage(id: string): Promise<MessageInfo | null> {
+  try {
+    const response = await fetch(`${API_BASE_URL}/messages/${id}`);
+    if (!response.ok) return null;
+
+    return await response.json();
+  } catch (error) {
+    console.error('getMessage error:', error);
+    return null;
+  }
+}
+
+// 메시지 생성 (+ 푸시 토큰 반환)
+export async function createMessage(data: {
+  title: string;
+  body: string;
+  targetType: MessageTargetType;
+  targetStoreIds?: string[];
+  targetDeptCodes?: string[];
+}): Promise<{
+  success: boolean;
+  message?: MessageInfo;
+  targetCount?: number;
+  pushTokens?: string[];
+  error?: string;
+}> {
+  try {
+    const user = auth.currentUser;
+    if (!user) {
+      return { success: false, error: 'Not logged in' };
+    }
+
+    const response = await fetch(`${API_BASE_URL}/messages`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        firebaseUid: user.uid,
+        title: data.title,
+        body: data.body,
+        targetType: data.targetType,
+        targetStoreIds: data.targetStoreIds,
+        targetDeptCodes: data.targetDeptCodes,
+      }),
+    });
+
+    return await response.json();
+  } catch (error: any) {
+    console.error('createMessage error:', error);
+    return { success: false, error: error?.message || 'Network error' };
+  }
+}
+
+// 메시지 수정
+export async function updateMessage(
+  id: string,
+  data: { title?: string; body?: string }
+): Promise<{ success: boolean; message?: MessageInfo; error?: string }> {
+  try {
+    const user = auth.currentUser;
+    if (!user) {
+      return { success: false, error: 'Not logged in' };
+    }
+
+    const response = await fetch(`${API_BASE_URL}/messages/${id}`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        firebaseUid: user.uid,
+        ...data,
+      }),
+    });
+
+    return await response.json();
+  } catch (error: any) {
+    console.error('updateMessage error:', error);
+    return { success: false, error: error?.message || 'Network error' };
+  }
+}
+
+// 메시지 삭제
+export async function deleteMessage(id: string): Promise<{ success: boolean; error?: string }> {
+  try {
+    const user = auth.currentUser;
+    if (!user) {
+      return { success: false, error: 'Not logged in' };
+    }
+
+    const response = await fetch(`${API_BASE_URL}/messages/${id}`, {
+      method: 'DELETE',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        firebaseUid: user.uid,
+      }),
+    });
+
+    return await response.json();
+  } catch (error: any) {
+    console.error('deleteMessage error:', error);
+    return { success: false, error: error?.message || 'Network error' };
+  }
+}
+
+// 메시지 읽음 처리
+export async function markMessageAsRead(messageId: string): Promise<{ success: boolean; error?: string }> {
+  try {
+    const user = auth.currentUser;
+    if (!user) {
+      return { success: false, error: 'Not logged in' };
+    }
+
+    const response = await fetch(`${API_BASE_URL}/messages/${messageId}/read`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        firebaseUid: user.uid,
+      }),
+    });
+
+    return await response.json();
+  } catch (error: any) {
+    console.error('markMessageAsRead error:', error);
+    return { success: false, error: error?.message || 'Network error' };
+  }
+}
+
+// 미읽음 수신자 목록 조회 (재발송용)
+export async function getUnreadRecipients(
+  messageId: string
+): Promise<{ success: boolean; recipients?: ReceiptInfo[]; error?: string }> {
+  try {
+    const response = await fetch(`${API_BASE_URL}/messages/${messageId}/unread-recipients`);
+    if (!response.ok) {
+      return { success: false, error: 'Failed to fetch' };
+    }
+
+    return await response.json();
+  } catch (error: any) {
+    console.error('getUnreadRecipients error:', error);
+    return { success: false, error: error?.message || 'Network error' };
+  }
+}
