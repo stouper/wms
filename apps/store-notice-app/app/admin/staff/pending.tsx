@@ -20,8 +20,10 @@ import {
   approveEmployee,
   rejectEmployee,
   getStores,
+  getDepartments,
   EmployeeInfo,
   StoreInfo,
+  DepartmentInfo,
 } from "../../../lib/authApi";
 
 type EmployeeRole = "HQ_ADMIN" | "HQ_WMS" | "SALES" | "STORE_MANAGER" | "STORE_STAFF";
@@ -33,37 +35,44 @@ export default function AdminPending() {
   const [refreshing, setRefreshing] = useState(false);
   const [list, setList] = useState<EmployeeInfo[]>([]);
   const [stores, setStores] = useState<StoreInfo[]>([]);
+  const [departments, setDepartments] = useState<DepartmentInfo[]>([]);
 
   // 각 사용자별 승인 입력 상태
   const [roleInputs, setRoleInputs] = useState<Record<string, EmployeeRole>>({});
   const [storeInputs, setStoreInputs] = useState<Record<string, string>>({});
+  const [deptInputs, setDeptInputs] = useState<Record<string, string>>({});
 
   const fetchData = useCallback(async () => {
     try {
-      const [employees, storeList] = await Promise.all([
+      const [employees, storeList, deptList] = await Promise.all([
         getEmployees("PENDING"),
         getStores(),
+        getDepartments(true), // activeOnly
       ]);
 
       setList(employees);
       setStores(storeList.filter(s => !s.isHq)); // 본사 제외
+      setDepartments(deptList);
 
       // 초기값 세팅
       const roleInit: Record<string, EmployeeRole> = {};
       const storeInit: Record<string, string> = {};
+      const deptInit: Record<string, string> = {};
 
       employees.forEach((emp) => {
         // isHq 기반으로 기본 역할 설정
-        if ((emp as any).isHq) {
+        if (emp.isHq) {
           roleInit[emp.id] = "HQ_WMS";
         } else {
           roleInit[emp.id] = "STORE_STAFF";
         }
         storeInit[emp.id] = emp.storeId || "";
+        deptInit[emp.id] = emp.departmentId || "";
       });
 
       setRoleInputs(roleInit);
       setStoreInputs(storeInit);
+      setDeptInputs(deptInit);
     } catch (e: any) {
       Alert.alert("오류", e?.message ?? "대기 목록을 불러오지 못했습니다.");
     } finally {
@@ -85,6 +94,7 @@ export default function AdminPending() {
     try {
       const role = roleInputs[employeeId];
       const storeId = storeInputs[employeeId] || undefined;
+      const departmentId = deptInputs[employeeId] || undefined;
 
       // 매장 직원인데 매장 미선택
       if ((role === "STORE_MANAGER" || role === "STORE_STAFF") && !storeId) {
@@ -92,7 +102,13 @@ export default function AdminPending() {
         return;
       }
 
-      const success = await approveEmployee(employeeId, role, storeId);
+      // 본사 직원인데 부서 미선택
+      if ((role === "HQ_ADMIN" || role === "HQ_WMS" || role === "SALES") && !departmentId) {
+        Alert.alert("입력 오류", "부서를 선택해 주세요.");
+        return;
+      }
+
+      const success = await approveEmployee(employeeId, role, storeId, departmentId);
 
       if (success) {
         Alert.alert("완료", "사용자가 승인되었습니다.");
@@ -183,7 +199,8 @@ export default function AdminPending() {
           list.map((user) => {
             const role = roleInputs[user.id] || "STORE_STAFF";
             const storeId = storeInputs[user.id] || "";
-            const userIsHq = (user as any).isHq;
+            const departmentId = deptInputs[user.id] || "";
+            const userIsHq = user.isHq;
 
             return (
               <Card key={user.id}>
@@ -237,6 +254,37 @@ export default function AdminPending() {
                     )}
                   </View>
                 </View>
+
+                {/* 부서 선택 (본사 직원인 경우만) */}
+                {userIsHq && (
+                  <View style={{ marginBottom: 16 }}>
+                    <Text style={styles.label}>부서 (필수)</Text>
+                    <View style={styles.optionWrap}>
+                      {departments.map((dept) => (
+                        <Pressable
+                          key={dept.id}
+                          onPress={() => setDeptInputs((p) => ({ ...p, [user.id]: dept.id }))}
+                          style={[
+                            styles.optionChip,
+                            departmentId === dept.id && styles.optionChipActive,
+                          ]}
+                        >
+                          <Text
+                            style={[
+                              styles.optionText,
+                              departmentId === dept.id && styles.optionTextActive,
+                            ]}
+                          >
+                            🏢 {dept.name}
+                          </Text>
+                        </Pressable>
+                      ))}
+                      {departments.length === 0 && (
+                        <Text style={styles.muted}>등록된 부서가 없습니다</Text>
+                      )}
+                    </View>
+                  </View>
+                )}
 
                 {/* 매장 선택 (매장 직원인 경우만) */}
                 {!userIsHq && (

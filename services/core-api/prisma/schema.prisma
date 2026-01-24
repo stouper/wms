@@ -41,12 +41,26 @@ model Store {
   employees Employee[]
 }
 
+// 본사 부서
+model Department {
+  id        String   @id @default(cuid())
+  code      String   @unique  // 부서코드 (LOGISTICS, SALES, MARKETING...)
+  name      String             // 부서명
+  isActive  Boolean  @default(true)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  employees Employee[]
+}
+
 // 통합 직원 모델 (Firebase Auth 연동 + 권한 관리)
 model Employee {
-  id          String   @id @default(cuid())
-  firebaseUid String?  @unique  // Firebase Auth UID (가입 전이면 null)
-  storeId     String?            // 소속 매장 (본사 직원은 null)
-  isHq        Boolean  @default(false)  // 본사 여부 (true=본사, false=매장)
+  id           String   @id @default(cuid())
+  firebaseUid  String?  @unique  // Firebase Auth UID (가입 전이면 null)
+  storeId      String?           // 소속 매장 (매장 직원용)
+  departmentId String?           // 소속 부서 (본사 직원용)
+  isHq         Boolean  @default(false)  // 본사 여부 (true=본사, false=매장)
 
   name        String             // 이름 (필수)
   phone       String?            // 연락처
@@ -59,9 +73,11 @@ model Employee {
   createdAt   DateTime @default(now())
   updatedAt   DateTime @updatedAt
 
-  store       Store?   @relation(fields: [storeId], references: [id], onDelete: SetNull)
+  store       Store?      @relation(fields: [storeId], references: [id], onDelete: SetNull)
+  department  Department? @relation(fields: [departmentId], references: [id], onDelete: SetNull)
 
   @@index([storeId], map: "Employee_storeId_idx")
+  @@index([departmentId], map: "Employee_departmentId_idx")
   @@index([firebaseUid], map: "Employee_firebaseUid_idx")
   @@index([status], map: "Employee_status_idx")
   @@index([role], map: "Employee_role_idx")

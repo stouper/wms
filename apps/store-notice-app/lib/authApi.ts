@@ -16,6 +16,9 @@ export interface EmployeeInfo {
   storeId: string | null;
   storeCode: string | null;
   storeName: string | null;
+  departmentId: string | null;
+  departmentCode: string | null;
+  departmentName: string | null;
 }
 
 export interface AuthResult {
@@ -101,7 +104,8 @@ export async function getEmployees(status?: string): Promise<EmployeeInfo[]> {
 export async function approveEmployee(
   employeeId: string,
   role?: string,
-  storeId?: string
+  storeId?: string,
+  departmentId?: string
 ): Promise<boolean> {
   try {
     const response = await fetch(`${API_BASE_URL}/auth/employees/${employeeId}/approve`, {
@@ -109,7 +113,7 @@ export async function approveEmployee(
       headers: {
         'Content-Type': 'application/json',
       },
-      body: JSON.stringify({ role, storeId }),
+      body: JSON.stringify({ role, storeId, departmentId }),
     });
 
     return response.ok;
@@ -151,6 +155,32 @@ export async function getStores(): Promise<StoreInfo[]> {
     return data.rows || [];
   } catch (error) {
     console.error('getStores error:', error);
+    return [];
+  }
+}
+
+// Department 정보 타입
+export interface DepartmentInfo {
+  id: string;
+  code: string;
+  name: string;
+  isActive: boolean;
+  employeeCount?: number;
+}
+
+// 부서 목록 조회
+export async function getDepartments(activeOnly = false): Promise<DepartmentInfo[]> {
+  try {
+    const url = activeOnly
+      ? `${API_BASE_URL}/departments?activeOnly=true`
+      : `${API_BASE_URL}/departments`;
+    const response = await fetch(url);
+    if (!response.ok) return [];
+
+    const data = await response.json();
+    return data.rows || [];
+  } catch (error) {
+    console.error('getDepartments error:', error);
     return [];
   }
 }

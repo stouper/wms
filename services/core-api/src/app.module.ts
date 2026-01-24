@@ -27,6 +27,9 @@ import { LocationsModule } from './modules/locations/locations.module';
 // ✅ Auth (Firebase 인증 + Employee 관리)
 import { AuthModule } from './modules/auth/auth.module';
 
+// ✅ Departments (본사 부서 관리)
+import { DepartmentsModule } from './modules/departments/departments.module';
+
 @Module({
   imports: [
     ConfigModule.forRoot({ isGlobal: true }),
@@ -52,6 +55,9 @@ import { AuthModule } from './modules/auth/auth.module';
 
     // ✅ Firebase 인증 + Employee 관리
     AuthModule,
+
+    // ✅ 본사 부서 관리
+    DepartmentsModule,
   ],
   controllers: [],
   providers: [],

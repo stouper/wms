@@ -43,13 +43,14 @@ export class AuthController {
   @Patch('employees/:id/approve')
   async approveEmployee(
     @Param('id') id: string,
-    @Body() body: { role?: string; storeId?: string },
+    @Body() body: { role?: string; storeId?: string; departmentId?: string },
   ) {
     return this.authService.updateEmployeeStatus(
       id,
       EmployeeStatus.ACTIVE,
       body.role,
       body.storeId,
+      body.departmentId,
     );
   }
 
@@ -76,7 +77,7 @@ export class AuthController {
   @Patch('employees/:id')
   async updateEmployee(
     @Param('id') id: string,
-    @Body() body: { name?: string; phone?: string; role?: string; storeId?: string },
+    @Body() body: { name?: string; phone?: string; role?: string; storeId?: string; departmentId?: string },
   ) {
     return this.authService.updateEmployee(id, body);
   }

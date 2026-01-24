@@ -13,9 +13,13 @@ interface FirebaseAuthResult {
     phone: string | null;
     role: string;
     status: string;
+    isHq: boolean;
     storeId: string | null;
     storeCode: string | null;
     storeName: string | null;
+    departmentId: string | null;
+    departmentCode: string | null;
+    departmentName: string | null;
   };
   error?: string;
 }
@@ -43,7 +47,7 @@ export class AuthService {
     // 2. Employee 조회
     let employee = await this.prisma.employee.findUnique({
       where: { firebaseUid: uid },
-      include: { store: true },
+      include: { store: true, department: true },
     });
 
     // 3. 없으면 PENDING 상태로 생성
@@ -55,7 +59,7 @@ export class AuthService {
           email: email || null,
           status: EmployeeStatus.PENDING,
         },
-        include: { store: true },
+        include: { store: true, department: true },
       });
       this.logger.log(`New employee created: ${employee.id} (PENDING)`);
     }
@@ -71,9 +75,13 @@ export class AuthService {
         phone: employee.phone,
         role: employee.role,
         status: employee.status,
+        isHq: employee.isHq,
         storeId: employee.storeId,
         storeCode: employee.store?.code || null,
         storeName: employee.store?.name || null,
+        departmentId: employee.departmentId,
+        departmentCode: employee.department?.code || null,
+        departmentName: employee.department?.name || null,
       },
     };
   }
@@ -82,7 +90,7 @@ export class AuthService {
   async getEmployees(status?: EmployeeStatus) {
     const employees = await this.prisma.employee.findMany({
       where: status ? { status } : undefined,
-      include: { store: true },
+      include: { store: true, department: true },
       orderBy: { createdAt: 'desc' },
     });
 
@@ -99,6 +107,9 @@ export class AuthService {
       storeId: emp.storeId,
       storeCode: emp.store?.code || null,
       storeName: emp.store?.name || null,
+      departmentId: emp.departmentId,
+      departmentCode: emp.department?.code || null,
+      departmentName: emp.department?.name || null,
     }));
   }
 
@@ -108,6 +119,7 @@ export class AuthService {
     status: EmployeeStatus,
     role?: string,
     storeId?: string,
+    departmentId?: string,
   ) {
     return this.prisma.employee.update({
       where: { id: employeeId },
@@ -115,8 +127,9 @@ export class AuthService {
         status,
         ...(role && { role: role as any }),
         ...(storeId !== undefined && { storeId }),
+        ...(departmentId !== undefined && { departmentId }),
       },
-      include: { store: true },
+      include: { store: true, department: true },
     });
   }
 
@@ -131,7 +144,7 @@ export class AuthService {
   // Employee 정보 수정
   async updateEmployee(
     employeeId: string,
-    data: { name?: string; phone?: string; role?: string; storeId?: string },
+    data: { name?: string; phone?: string; role?: string; storeId?: string; departmentId?: string },
   ) {
     return this.prisma.employee.update({
       where: { id: employeeId },
@@ -140,8 +153,9 @@ export class AuthService {
         ...(data.phone !== undefined && { phone: data.phone || null }),
         ...(data.role && { role: data.role as any }),
         ...(data.storeId !== undefined && { storeId: data.storeId || null }),
+        ...(data.departmentId !== undefined && { departmentId: data.departmentId || null }),
       },
-      include: { store: true },
+      include: { store: true, department: true },
     });
   }
 
@@ -182,7 +196,7 @@ export class AuthService {
           // 기본 역할 설정: 본사면 HQ_WMS, 매장이면 STORE_STAFF
           role: data.isHq ? 'HQ_WMS' : 'STORE_STAFF',
         },
-        include: { store: true },
+        include: { store: true, department: true },
       });
 
       this.logger.log(`New employee registered: ${employee.id} (${employee.name}, isHq=${data.isHq})`);
@@ -197,9 +211,13 @@ export class AuthService {
           phone: employee.phone,
           role: employee.role,
           status: employee.status,
+          isHq: employee.isHq,
           storeId: employee.storeId,
           storeCode: employee.store?.code || null,
           storeName: employee.store?.name || null,
+          departmentId: employee.departmentId,
+          departmentCode: employee.department?.code || null,
+          departmentName: employee.department?.name || null,
         },
       };
     } catch (error: any) {
