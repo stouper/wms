@@ -58,8 +58,8 @@ export class BoardPostsService {
         title: data.title,
         content: data.content,
         authorId: data.authorId,
-        images: (data.images || []) as Prisma.InputJsonValue,
-        files: (data.files || []) as Prisma.InputJsonValue,
+        images: (data.images || []) as unknown as Prisma.InputJsonValue,
+        files: (data.files || []) as unknown as Prisma.InputJsonValue,
       },
       include: {
         author: {
@@ -86,8 +86,8 @@ export class BoardPostsService {
 
     if (data.title !== undefined) updateData.title = data.title;
     if (data.content !== undefined) updateData.content = data.content;
-    if (data.images !== undefined) updateData.images = data.images as Prisma.InputJsonValue;
-    if (data.files !== undefined) updateData.files = data.files as Prisma.InputJsonValue;
+    if (data.images !== undefined) updateData.images = data.images as unknown as Prisma.InputJsonValue;
+    if (data.files !== undefined) updateData.files = data.files as unknown as Prisma.InputJsonValue;
 
     return this.prisma.boardPost.update({
       where: { id },
