@@ -18,9 +18,22 @@ export class StoresService {
         code: true,
         name: true,
         isHq: true,
+        _count: {
+          select: { employees: true },
+        },
       },
     });
-    return { ok: true, rows };
+
+    // employeeCount 필드로 변환
+    const result = rows.map((row) => ({
+      id: row.id,
+      code: row.code,
+      name: row.name,
+      isHq: row.isHq,
+      employeeCount: row._count.employees,
+    }));
+
+    return { ok: true, rows: result };
   }
 
   // 단일 조회 (id)

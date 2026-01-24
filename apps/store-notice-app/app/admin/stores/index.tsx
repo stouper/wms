@@ -205,6 +205,9 @@ export default function AdminStores() {
                     <View style={styles.storeNameContainer}>
                       <Text style={styles.storeCode}>[{store.code}]</Text>
                       <Text style={styles.storeName}>{store.name || "(이름 없음)"}</Text>
+                      {store.employeeCount !== undefined && (
+                        <Text style={styles.employeeCount}>({store.employeeCount}명)</Text>
+                      )}
                     </View>
                     <View style={styles.inlineActions}>
                       <Pressable
@@ -374,7 +377,11 @@ const styles = StyleSheet.create({
     color: "#E6E7EB",
     fontSize: 15,
     fontWeight: "700",
-    flex: 1,
+    flexShrink: 1,
+  },
+  employeeCount: {
+    color: "#A9AFBC",
+    fontSize: 12,
   },
 
   inlineActions: {

@@ -143,6 +143,7 @@ export interface StoreInfo {
   code: string;
   name: string | null;
   isHq: boolean;
+  employeeCount?: number;
 }
 
 // 매장 목록 조회 (승인 시 선택용)
