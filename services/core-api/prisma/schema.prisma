@@ -38,29 +38,7 @@ model Store {
   isHq      Boolean    @default(false)  // 본사 창고 여부
   locations Location[]
   jobs      Job[]
-  users     StoreUser[]
   employees Employee[]
-}
-
-// 매장-앱사용자 매핑 (Firebase 연동용)
-model StoreUser {
-  id          String   @id @default(cuid())
-  storeId     String
-  firebaseUid String   @unique  // Firebase Auth UID
-  pushToken   String?            // FCM 푸시 토큰
-  name        String?            // 사용자 이름
-  phone       String?            // 연락처
-  role        String   @default("staff")  // "manager" | "staff"
-  isActive    Boolean  @default(true)
-
-  createdAt   DateTime @default(now())
-  updatedAt   DateTime @updatedAt
-
-  store Store @relation(fields: [storeId], references: [id], onDelete: Cascade)
-
-  @@index([storeId], map: "StoreUser_storeId_idx")
-  @@index([firebaseUid], map: "StoreUser_firebaseUid_idx")
-  @@index([pushToken], map: "StoreUser_pushToken_idx")
 }
 
 // 통합 직원 모델 (Firebase Auth 연동 + 권한 관리)
