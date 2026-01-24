@@ -1,5 +1,5 @@
 // app/message/[id].tsx
-// ✅ Multi-tenant: companyId로 message/receipt 검증 + stores 필터링
+// ✅ PostgreSQL 연동: 매장 목록은 core-api에서 가져옴
 
 import { useLocalSearchParams, useRouter } from "expo-router";
 import {
@@ -7,15 +7,12 @@ import {
   getDoc,
   serverTimestamp,
   updateDoc,
-  collection,
-  getDocs,
-  query,
-  where,
   onSnapshot,
 } from "firebase/firestore";
-import React, { useEffect, useMemo, useState } from "react";
+import React, { useEffect, useMemo, useState, useCallback } from "react";
 import { Alert, Button, ScrollView, StyleSheet, Text, View, ActivityIndicator } from "react-native";
 import { auth, db } from "../../firebaseConfig";
+import { getStores } from "../../lib/authApi";
 
 type TargetType = "ALL" | "STORE" | "HQ_DEPT";
 
@@ -52,28 +49,23 @@ export default function StaffMessageDetail() {
     return () => unsub();
   }, []);
 
-  // 1) stores 로드 (라벨용, 같은 회사만)
-  useEffect(() => {
-    if (!myCompanyId) return;
+  // 1) PostgreSQL에서 매장 목록 가져오기 (라벨용)
+  const loadStores = useCallback(async () => {
+    try {
+      const stores = await getStores();
+      const map: Record<string, string> = {};
+      stores.forEach((s) => {
+        map[s.id] = s.name || s.code;
+      });
+      setStoreNameMap(map);
+    } catch (e) {
+      console.log("[Detail] stores load error:", e);
+    }
+  }, []);
 
-    (async () => {
-      try {
-        const q = query(
-          collection(db, "stores"),
-          where("companyId", "==", myCompanyId)
-        );
-        const snap = await getDocs(q);
-        const map: Record<string, string> = {};
-        snap.forEach((d) => {
-          const data = d.data() as any;
-          map[d.id] = (data?.name ?? d.id) as string;
-        });
-        setStoreNameMap(map);
-      } catch (e) {
-        console.log("[Detail] stores load error:", e);
-      }
-    })();
-  }, [myCompanyId]);
+  useEffect(() => {
+    loadStores();
+  }, [loadStores]);
 
   // 2) 공지 로드 + companyId 검증
   useEffect(() => {
