@@ -190,6 +190,101 @@ App 로그인 → Firebase Auth → core-api로 idToken 전송 → PostgreSQL Em
 | 운송장 번호 생성 | `/ReqInvcNo` | 단건 운송장 번호 채번 |
 | 예약 접수 | `/RegBook` | 배송 예약 등록 |
 
+### 5.3 테스트 환경 및 방법
+
+#### 환경변수 설정 (.env)
+
+```bash
+# CJ API 개발환경
+CJ_API_BASE_URL=https://dxapi-dev.cjlogistics.com:5054
+CJ_CUST_ID=30501859
+CJ_BIZ_REG_NUM=1158700619
+
+# 보내는 사람 기본 정보
+CJ_SENDER_NAME=에스카테스트
+CJ_SENDER_TEL1=02
+CJ_SENDER_TEL2=1234
+CJ_SENDER_TEL3=5678
+CJ_SENDER_ZIP=12345
+CJ_SENDER_ADDR=서울시 강남구 테스트로 123
+CJ_SENDER_DETAIL_ADDR=테스트빌딩 1층
+```
+
+#### 테스트 엔드포인트
+
+| Method | Endpoint | 설명 | 예시 |
+|--------|----------|------|------|
+| GET | `/exports/cj/test/address?addr=주소` | 주소 정제 테스트 | `?addr=서울시 강남구 테헤란로 123` |
+| GET | `/exports/cj/test/waybill-numbers?count=개수` | 운송장 번호 발급 테스트 | `?count=3` |
+
+#### 테스트 실행 방법
+
+**1. 서버에서 직접 테스트**
+
+```bash
+# 주소 정제
+curl "http://localhost:3000/exports/cj/test/address?addr=서울시%20강남구%20테헤란로%20123"
+
+# 운송장 번호 3개 발급
+curl "http://localhost:3000/exports/cj/test/waybill-numbers?count=3"
+```
+
+**2. Node.js 스크립트로 테스트**
+
+```javascript
+// test-cj-api.js
+const API_BASE = 'http://localhost:3000';
+
+async function testCjApi() {
+  // 주소 정제
+  const res1 = await fetch(API_BASE + '/exports/cj/test/address?addr=' +
+    encodeURIComponent('서울시 강남구 테헤란로 123'));
+  console.log('주소 정제:', await res1.json());
+
+  // 운송장 번호 발급
+  const res2 = await fetch(API_BASE + '/exports/cj/test/waybill-numbers?count=3');
+  console.log('운송장 번호:', await res2.json());
+}
+
+testCjApi();
+```
+
+**3. Lightsail 서버에서 3회 반복 테스트**
+
+```bash
+ssh -i ~/.ssh/LightsailDefaultKey-ap-northeast-2.pem ubuntu@13.125.126.15 \
+  'for i in 1 2 3; do
+    echo "=== 테스트 $i/3 ===";
+    curl -s "http://localhost:3000/exports/cj/test/address?addr=서울시%20강남구%20테헤란로%20123" | head -3;
+    curl -s "http://localhost:3000/exports/cj/test/waybill-numbers?count=1";
+    echo "";
+    sleep 2;
+  done'
+```
+
+#### 테스트 결과 예시
+
+**주소 정제 성공:**
+```json
+{
+  "CLSFCD": "2T01",
+  "CLSFADDR": "역삼1 648-23 여삼빌딩",
+  "CLLDLVBRANNM": "신역삼"
+}
+```
+
+**운송장 번호 발급 성공:**
+```json
+["660026600291", "660026600302", "660026600313"]
+```
+
+#### 주의사항
+
+- 토큰은 24시간 유효, DB(CjToken)에 자동 저장 및 갱신
+- 운송장 번호는 당일 사용 원칙 (미사용 다수 발생 시 API 제약)
+- 1초에 1회 이상 요청 시 차단될 수 있음
+- 개발환경은 개발 DB와 연동되어 실제 배송은 되지 않음
+
 ---
 
 ## 6. Claude Code 작업 규칙
