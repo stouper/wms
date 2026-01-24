@@ -159,6 +159,67 @@ export async function getStores(): Promise<StoreInfo[]> {
   }
 }
 
+// 매장 생성
+export async function createStore(
+  code: string,
+  name?: string,
+  isHq?: boolean
+): Promise<{ success: boolean; id?: string; error?: string }> {
+  try {
+    const response = await fetch(`${API_BASE_URL}/stores`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ code, name, isHq }),
+    });
+    const data = await response.json();
+    if (response.ok) {
+      return { success: true, id: data.id };
+    }
+    return { success: false, error: data.error || 'Failed to create store' };
+  } catch (error: any) {
+    console.error('createStore error:', error);
+    return { success: false, error: error?.message || 'Network error' };
+  }
+}
+
+// 매장 수정
+export async function updateStore(
+  id: string,
+  data: { code?: string; name?: string; isHq?: boolean }
+): Promise<{ success: boolean; error?: string }> {
+  try {
+    const response = await fetch(`${API_BASE_URL}/stores/${id}`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(data),
+    });
+    if (response.ok) {
+      return { success: true };
+    }
+    const respData = await response.json();
+    return { success: false, error: respData.error || 'Failed to update store' };
+  } catch (error: any) {
+    console.error('updateStore error:', error);
+    return { success: false, error: error?.message || 'Network error' };
+  }
+}
+
+// 매장 삭제
+export async function deleteStore(id: string): Promise<{ success: boolean; error?: string }> {
+  try {
+    const response = await fetch(`${API_BASE_URL}/stores/${id}`, {
+      method: 'DELETE',
+    });
+    if (response.ok) {
+      return { success: true };
+    }
+    return { success: false, error: 'Failed to delete store' };
+  } catch (error: any) {
+    console.error('deleteStore error:', error);
+    return { success: false, error: error?.message || 'Network error' };
+  }
+}
+
 // Department 정보 타입
 export interface DepartmentInfo {
   id: string;
@@ -182,6 +243,52 @@ export async function getDepartments(activeOnly = false): Promise<DepartmentInfo
   } catch (error) {
     console.error('getDepartments error:', error);
     return [];
+  }
+}
+
+// 부서 생성
+export async function createDepartment(code: string, name: string): Promise<{ success: boolean; error?: string }> {
+  try {
+    const response = await fetch(`${API_BASE_URL}/departments`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ code, name }),
+    });
+    return await response.json();
+  } catch (error: any) {
+    console.error('createDepartment error:', error);
+    return { success: false, error: error?.message || 'Network error' };
+  }
+}
+
+// 부서 수정
+export async function updateDepartment(
+  id: string,
+  data: { code?: string; name?: string; isActive?: boolean }
+): Promise<{ success: boolean; error?: string }> {
+  try {
+    const response = await fetch(`${API_BASE_URL}/departments/${id}`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(data),
+    });
+    return await response.json();
+  } catch (error: any) {
+    console.error('updateDepartment error:', error);
+    return { success: false, error: error?.message || 'Network error' };
+  }
+}
+
+// 부서 삭제
+export async function deleteDepartment(id: string): Promise<{ success: boolean; error?: string }> {
+  try {
+    const response = await fetch(`${API_BASE_URL}/departments/${id}`, {
+      method: 'DELETE',
+    });
+    return await response.json();
+  } catch (error: any) {
+    console.error('deleteDepartment error:', error);
+    return { success: false, error: error?.message || 'Network error' };
   }
 }
 
@@ -217,6 +324,28 @@ export async function deleteEmployee(employeeId: string): Promise<boolean> {
   } catch (error) {
     console.error('deleteEmployee error:', error);
     return false;
+  }
+}
+
+// 부서별 직원 목록 조회
+export async function getEmployeesByDepartmentId(departmentId: string): Promise<EmployeeInfo[]> {
+  try {
+    const employees = await getEmployees('ACTIVE');
+    return employees.filter((e) => e.departmentId === departmentId);
+  } catch (error) {
+    console.error('getEmployeesByDepartmentId error:', error);
+    return [];
+  }
+}
+
+// 매장별 직원 목록 조회
+export async function getEmployeesByStoreId(storeId: string): Promise<EmployeeInfo[]> {
+  try {
+    const employees = await getEmployees('ACTIVE');
+    return employees.filter((e) => e.storeId === storeId);
+  } catch (error) {
+    console.error('getEmployeesByStoreId error:', error);
+    return [];
   }
 }
 
