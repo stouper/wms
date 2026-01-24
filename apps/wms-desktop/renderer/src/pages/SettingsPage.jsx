@@ -40,6 +40,11 @@ export default function SettingsPage() {
   const [deptError, setDeptError] = useState("");
   const [editingDept, setEditingDept] = useState(null);
 
+  // 직원 관리
+  const [employees, setEmployees] = useState([]);
+  const [employeesLoading, setEmployeesLoading] = useState(false);
+  const [employeesVisible, setEmployeesVisible] = useState(false);
+
   // 재고 초기화 (전체 교체)
   const [resetStoreCode, setResetStoreCode] = useState("");
   const [resetFile, setResetFile] = useState(null);
@@ -349,6 +354,20 @@ export default function SettingsPage() {
       await loadDepartments();
     } catch (e) {
       alert(e?.message || "부서 삭제 실패");
+    }
+  }
+
+  // 직원 목록 로드
+  async function loadEmployees() {
+    setEmployeesLoading(true);
+    try {
+      const res = await http.get("/auth/employees");
+      setEmployees(res || []);
+      setEmployeesVisible(true);
+    } catch (e) {
+      console.error("직원 목록 로드 실패:", e);
+    } finally {
+      setEmployeesLoading(false);
     }
   }
 
@@ -1390,6 +1409,103 @@ export default function SettingsPage() {
               </div>
             )}
           </div>
+        )}
+      </div>
+
+      {/* 직원 관리 */}
+      <div style={cardStyle}>
+        <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 10 }}>
+          <span style={{ fontSize: 13, fontWeight: 700 }}>직원 관리</span>
+          <button
+            type="button"
+            onClick={loadEmployees}
+            disabled={employeesLoading}
+            style={{ ...smallBtnStyle, background: "#3b82f6", color: "#fff", border: "none" }}
+          >
+            {employeesLoading ? "..." : "조회"}
+          </button>
+        </div>
+
+        {/* 직원 목록 */}
+        {employeesVisible && (
+          <>
+            {employeesLoading ? (
+              <div style={{ fontSize: 12, color: "#64748b", marginTop: 8 }}>로딩 중...</div>
+            ) : employees.length === 0 ? (
+              <div style={{ fontSize: 12, color: "#64748b", marginTop: 8 }}>등록된 직원이 없습니다.</div>
+            ) : (
+              <>
+                <div style={{ fontSize: 12, color: "#64748b", marginTop: 8, marginBottom: 4 }}>
+                  총 <b style={{ color: "#0ea5e9" }}>{employees.length}</b>명 |
+                  활성: {employees.filter(e => e.status === "ACTIVE").length}명 |
+                  승인대기: {employees.filter(e => e.status === "PENDING").length}명 |
+                  비활성: {employees.filter(e => e.status === "DISABLED").length}명
+                </div>
+                <table style={{ width: "100%", borderCollapse: "collapse" }}>
+                  <thead>
+                    <tr style={{ background: "#f8fafc" }}>
+                      <th style={{ ...thStyle, width: 40 }}>#</th>
+                      <th style={thStyle}>이름</th>
+                      <th style={thStyle}>이메일</th>
+                      <th style={thStyle}>전화번호</th>
+                      <th style={thStyle}>역할</th>
+                      <th style={thStyle}>소속</th>
+                      <th style={thStyle}>상태</th>
+                      <th style={thStyle}>가입일</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {employees.map((emp, idx) => (
+                      <tr key={emp.id}>
+                        <td style={{ ...tdStyle, color: "#94a3b8", fontSize: 11 }}>{idx + 1}</td>
+                        <td style={tdStyle}>
+                          <b>{emp.name}</b>
+                        </td>
+                        <td style={{ ...tdStyle, fontSize: 11, color: "#64748b" }}>{emp.email}</td>
+                        <td style={{ ...tdStyle, fontSize: 11 }}>{emp.phone || "-"}</td>
+                        <td style={tdStyle}>
+                          <span style={{
+                            fontSize: 11,
+                            fontWeight: 600,
+                            color: emp.isHq ? "#0ea5e9" : "#64748b"
+                          }}>
+                            {emp.role === "HQ_ADMIN" ? "본사관리자" :
+                             emp.role === "HQ_WMS" ? "본사WMS" :
+                             emp.role === "SALES" ? "영업" :
+                             emp.role === "STORE_MANAGER" ? "매장관리자" :
+                             emp.role === "STORE_STAFF" ? "매장직원" : emp.role}
+                          </span>
+                        </td>
+                        <td style={tdStyle}>
+                          {emp.isHq ? (
+                            <span style={{ fontSize: 11, color: "#0ea5e9" }}>
+                              {emp.departmentName || "본사"}
+                            </span>
+                          ) : (
+                            <span style={{ fontSize: 11 }}>
+                              {emp.storeName || "-"}
+                            </span>
+                          )}
+                        </td>
+                        <td style={tdStyle}>
+                          {emp.status === "ACTIVE" ? (
+                            <span style={{ color: "#16a34a", fontWeight: 600, fontSize: 11 }}>활성</span>
+                          ) : emp.status === "PENDING" ? (
+                            <span style={{ color: "#f59e0b", fontWeight: 600, fontSize: 11 }}>승인대기</span>
+                          ) : (
+                            <span style={{ color: "#94a3b8", fontSize: 11 }}>비활성</span>
+                          )}
+                        </td>
+                        <td style={{ ...tdStyle, fontSize: 11, color: "#64748b" }}>
+                          {emp.createdAt ? new Date(emp.createdAt).toLocaleDateString("ko-KR") : "-"}
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </>
+            )}
+          </>
         )}
       </div>
 
