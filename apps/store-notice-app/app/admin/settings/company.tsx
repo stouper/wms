@@ -1,79 +1,20 @@
 // app/admin/settings/company.tsx
-// 회사 정보 화면
+// 회사 정보 화면 - 정적 정보 표시
 
-import React, { useEffect, useState } from "react";
+import React from "react";
 import {
   View,
   ScrollView,
   Text,
   StyleSheet,
   Pressable,
-  Alert,
-  ActivityIndicator,
-  Clipboard,
 } from "react-native";
 import { useRouter } from "expo-router";
 import { SafeAreaView } from "react-native-safe-area-context";
-import { doc, onSnapshot } from "firebase/firestore";
-import { auth, db } from "../../../firebaseConfig";
 import Card from "../../../components/ui/Card";
 
 export default function CompanyInfo() {
   const router = useRouter();
-  const [companyData, setCompanyData] = useState<any>(null);
-  const [loading, setLoading] = useState(true);
-
-  useEffect(() => {
-    const uid = auth.currentUser?.uid;
-    if (!uid) return;
-
-    let unsubCompany: (() => void) | undefined;
-
-    // 내 user 정보 가져와서 companyId 확인
-    const unsubUser = onSnapshot(doc(db, "users", uid), async (userSnap) => {
-      if (userSnap.exists()) {
-        const companyId = (userSnap.data() as any)?.companyId;
-        if (!companyId) {
-          setLoading(false);
-          return;
-        }
-
-        // Company 정보 가져오기
-        unsubCompany = onSnapshot(doc(db, "companies", companyId), (companySnap) => {
-          if (companySnap.exists()) {
-            setCompanyData({
-              id: companySnap.id,
-              ...companySnap.data(),
-            });
-          }
-          setLoading(false);
-        });
-      } else {
-        setLoading(false);
-      }
-    });
-
-    return () => {
-      unsubUser();
-      unsubCompany?.();
-    };
-  }, []);
-
-  const copyInviteCode = () => {
-    if (companyData?.inviteCode) {
-      Clipboard.setString(companyData.inviteCode);
-      Alert.alert("복사 완료", `초대 코드 "${companyData.inviteCode}"가 클립보드에 복사되었습니다.`);
-    }
-  };
-
-  if (loading) {
-    return (
-      <View style={styles.loadingContainer}>
-        <ActivityIndicator color="#1E5BFF" />
-        <Text style={styles.muted}>회사 정보 불러오는 중...</Text>
-      </View>
-    );
-  }
 
   return (
     <SafeAreaView style={styles.safe} edges={["top"]}>
@@ -84,38 +25,22 @@ export default function CompanyInfo() {
 
         <Text style={styles.title}>회사 정보</Text>
 
-        {companyData && (
-          <>
-            <Card style={styles.card}>
-              <Text style={styles.label}>회사명</Text>
-              <Text style={styles.value}>{companyData.name}</Text>
-            </Card>
+        <Card style={styles.card}>
+          <Text style={styles.label}>회사명</Text>
+          <Text style={styles.value}>ESKA</Text>
+        </Card>
 
-            <Card style={styles.card}>
-              <Text style={styles.label}>초대 코드</Text>
-              <View style={styles.codeRow}>
-                <Text style={styles.inviteCode}>{companyData.inviteCode}</Text>
-                <Pressable onPress={copyInviteCode} style={styles.copyBtn}>
-                  <Text style={styles.copyText}>복사</Text>
-                </Pressable>
-              </View>
-              <Text style={styles.hint}>
-                직원을 초대할 때 이 코드를 공유하세요
-              </Text>
-            </Card>
+        <Card style={styles.card}>
+          <Text style={styles.label}>시스템</Text>
+          <Text style={styles.value}>매장 공지 및 업무 관리</Text>
+        </Card>
 
-            <Card style={styles.card}>
-              <Text style={styles.label}>회사 ID</Text>
-              <Text style={styles.valueSmall}>{companyData.id}</Text>
-            </Card>
-          </>
-        )}
-
-        {!companyData && (
-          <Card>
-            <Text style={styles.emptyText}>회사 정보를 찾을 수 없습니다.</Text>
-          </Card>
-        )}
+        <Card style={styles.card}>
+          <Text style={styles.label}>직원 등록 방법</Text>
+          <Text style={styles.hint}>
+            관리자가 설정 › 회원 관리에서 가입 신청을 승인합니다
+          </Text>
+        </Card>
       </ScrollView>
 
       {/* 하단 네비게이션 바 */}
@@ -153,14 +78,6 @@ export default function CompanyInfo() {
 const styles = StyleSheet.create({
   safe: { flex: 1, backgroundColor: "#0B0C10" },
   container: { padding: 16, gap: 12, paddingBottom: 100 },
-  loadingContainer: {
-    flex: 1,
-    justifyContent: "center",
-    alignItems: "center",
-    backgroundColor: "#0B0C10",
-    gap: 8,
-  },
-  muted: { color: "#A9AFBC", fontSize: 14 },
 
   backButton: { marginBottom: 12 },
   backButtonText: { color: "#1E5BFF", fontSize: 16, fontWeight: "600" },
