@@ -34,8 +34,8 @@ export default function AdminSalesPage() {
   const loadSales = useCallback(async () => {
     setLoading(true);
     try {
-      // 전체 매출 조회 (클라이언트에서 필터링)
-      const data = await getSalesList();
+      // 관리자가 업로드한 매출만 조회 (매장별 매출전표)
+      const data = await getSalesList(undefined, undefined, undefined, "매장별 매출전표");
       setSalesRecords(data);
     } catch (error) {
       console.error("매출 목록 로드 실패:", error);

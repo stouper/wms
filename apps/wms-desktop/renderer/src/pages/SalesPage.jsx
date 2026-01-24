@@ -146,6 +146,7 @@ export default function SalesPage({ pageTitle = "매출 관리" }) {
       const res = await runSalesByStore({
         from: from?.trim(),
         to: to?.trim(),
+        sourceKey: "매장별 매출전표",
         onProgress: () => {},
       });
       setSummary(res);

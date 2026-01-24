@@ -74,8 +74,8 @@ export default function StaffSalesPage() {
 
     setLoading(true);
     try {
-      // 내 매장 매출만 조회
-      const data = await getSalesList(myEmployee.storeCode);
+      // 내 매장 + 직원등록 매출만 조회
+      const data = await getSalesList(myEmployee.storeCode, undefined, undefined, "직원등록");
       setSalesRecords(data);
     } catch (error) {
       console.error("매출 목록 로드 실패:", error);
@@ -151,6 +151,7 @@ export default function StaffSalesPage() {
           productType: category !== "일반" ? category : undefined,
           codeName: description || undefined,
           qty: 1,
+          sourceKey: "직원등록",
         });
         Alert.alert("완료", "매출이 수정되었습니다.");
       } else {
@@ -163,6 +164,7 @@ export default function StaffSalesPage() {
           productType: category !== "일반" ? category : undefined,
           codeName: description || undefined,
           qty: 1,
+          sourceKey: "직원등록",
         });
         Alert.alert("완료", "매출이 등록되었습니다.");
       }

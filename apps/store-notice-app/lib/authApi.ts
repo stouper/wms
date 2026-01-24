@@ -994,13 +994,15 @@ export interface SalesRecordInfo {
 export async function getSalesList(
   storeCode?: string,
   from?: string, // YYYY-MM-DD
-  to?: string    // YYYY-MM-DD
+  to?: string,   // YYYY-MM-DD
+  sourceKey?: string
 ): Promise<SalesRecordInfo[]> {
   try {
     const params = new URLSearchParams();
     if (storeCode) params.append('storeCode', storeCode);
     if (from) params.append('from', from);
     if (to) params.append('to', to);
+    if (sourceKey) params.append('sourceKey', sourceKey);
 
     const url = `${API_BASE_URL}/sales${params.toString() ? `?${params.toString()}` : ''}`;
     const response = await fetch(url);

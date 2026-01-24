@@ -50,12 +50,13 @@ export async function uploadSalesExcel({ file, sourceKey }) {
  * - 서버 라우트가 다르면 여기 path만 수정하면 됨.
  * - 예상: GET /sales/by-store?from=YYYY-MM-DD&to=YYYY-MM-DD
  */
-export async function fetchSalesByStore({ from, to }) {
+export async function fetchSalesByStore({ from, to, sourceKey }) {
   if (!from || !to) throw new Error("from/to 날짜를 입력해줘 (YYYY-MM-DD)");
 
   const qs = new URLSearchParams();
   qs.set("from", from);
   qs.set("to", to);
+  if (sourceKey) qs.set("sourceKey", sourceKey);
 
   return request(`/sales/by-store?${qs.toString()}`, {
     method: "GET",

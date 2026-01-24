@@ -304,21 +304,27 @@ export class SalesService {
   /**
    * ✅ 매장별 매출 조회
    */
-  async getSalesByStore(from: string, to: string) {
+  async getSalesByStore(from: string, to: string, sourceKey?: string) {
     const fromDate = parseYYYYMMDD(from);
     const toDate = parseYYYYMMDD(to);
     if (fromDate.getTime() > toDate.getTime()) {
       throw new BadRequestException('from must be <= to');
     }
 
+    const where: any = {
+      saleDate: {
+        gte: fromDate,
+        lte: endOfDay(toDate),
+      },
+    };
+
+    if (sourceKey) {
+      where.sourceKey = sourceKey;
+    }
+
     const rows = await this.prisma.salesRaw.groupBy({
       by: ['storeCode', 'storeName'],
-      where: {
-        saleDate: {
-          gte: fromDate,
-          lte: endOfDay(toDate),
-        },
-      },
+      where,
       _sum: { amount: true, qty: true },
       orderBy: { _sum: { amount: 'desc' } },
     });
@@ -338,7 +344,7 @@ export class SalesService {
   /**
    * ✅ 매출 목록 조회 (일자/매장별 필터)
    */
-  async getSalesList(storeCode?: string, from?: string, to?: string) {
+  async getSalesList(storeCode?: string, from?: string, to?: string, sourceKey?: string) {
     const where: any = {};
 
     if (storeCode) {
@@ -352,6 +358,10 @@ export class SalesService {
         gte: fromDate,
         lte: endOfDay(toDate),
       };
+    }
+
+    if (sourceKey) {
+      where.sourceKey = sourceKey;
     }
 
     const rows = await this.prisma.salesRaw.findMany({

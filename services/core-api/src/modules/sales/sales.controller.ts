@@ -35,11 +35,15 @@ export class SalesController {
    * GET /sales/by-store?from=2026-01-01&to=2026-01-31
    */
   @Get('by-store')
-  async byStore(@Query('from') from?: string, @Query('to') to?: string) {
+  async byStore(
+    @Query('from') from?: string,
+    @Query('to') to?: string,
+    @Query('sourceKey') sourceKey?: string,
+  ) {
     if (!from || !to) {
       throw new BadRequestException('from,to (YYYY-MM-DD) is required');
     }
-    return this.sales.getSalesByStore(from, to);
+    return this.sales.getSalesByStore(from, to, sourceKey);
   }
 
   /**
@@ -60,8 +64,9 @@ export class SalesController {
     @Query('storeCode') storeCode?: string,
     @Query('from') from?: string,
     @Query('to') to?: string,
+    @Query('sourceKey') sourceKey?: string,
   ) {
-    return this.sales.getSalesList(storeCode, from, to);
+    return this.sales.getSalesList(storeCode, from, to, sourceKey);
   }
 
   /**

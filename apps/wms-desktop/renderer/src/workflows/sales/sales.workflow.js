@@ -12,9 +12,9 @@ export async function runSalesImport({ file, sourceKey, onProgress }) {
   return result;
 }
 
-export async function runSalesByStore({ from, to, onProgress }) {
+export async function runSalesByStore({ from, to, sourceKey, onProgress }) {
   onProgress?.({ stage: "loading-summary" });
-  const result = await fetchSalesByStore({ from, to });
+  const result = await fetchSalesByStore({ from, to, sourceKey });
   onProgress?.({ stage: "done-summary", result });
   return result;
 }
