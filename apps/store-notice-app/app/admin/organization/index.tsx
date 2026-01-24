@@ -1,7 +1,7 @@
 // app/admin/organization/index.tsx
-// 조직도 화면 - 부서별 직원 목록 표시
+// ✅ PostgreSQL 연동: 조직도 화면 - 부서별 직원 목록 표시
 
-import React, { useEffect, useState } from "react";
+import React, { useEffect, useState, useCallback } from "react";
 import {
   View,
   ScrollView,
@@ -12,118 +12,50 @@ import {
 } from "react-native";
 import { useRouter } from "expo-router";
 import { SafeAreaView } from "react-native-safe-area-context";
-import {
-  collection,
-  doc,
-  getDocs,
-  onSnapshot,
-  query,
-  where,
-} from "firebase/firestore";
-import { auth, db } from "../../../firebaseConfig";
 import Card from "../../../components/ui/Card";
-
-type Department = {
-  id: string;
-  name: string;
-  description?: string;
-  active: boolean;
-  order?: number;
-};
-
-type Employee = {
-  id: string;
-  name: string;
-  email: string;
-  phone?: string;
-  role?: string;
-  department?: string;
-  storeId?: string;
-};
+import {
+  getDepartments,
+  getEmployeesByDepartmentId,
+  getEmployees,
+  DepartmentInfo,
+  EmployeeInfo,
+} from "../../../lib/authApi";
 
 export default function AdminOrganization() {
   const router = useRouter();
 
   const [loading, setLoading] = useState(true);
-  const [myCompanyId, setMyCompanyId] = useState<string | null>(null);
-  const [departments, setDepartments] = useState<Department[]>([]);
-  const [deptEmployees, setDeptEmployees] = useState<Record<string, Employee[]>>({});
+  const [departments, setDepartments] = useState<DepartmentInfo[]>([]);
+  const [deptEmployees, setDeptEmployees] = useState<Record<string, EmployeeInfo[]>>({});
   const [expandedDeptId, setExpandedDeptId] = useState<string | null>(null);
+  const [loadingEmployees, setLoadingEmployees] = useState<Record<string, boolean>>({});
   const [pendingCount, setPendingCount] = useState(0);
 
-  // 내 companyId 가져오기 + pending count
-  useEffect(() => {
-    const uid = auth.currentUser?.uid;
-    if (!uid) return;
+  // 부서 목록 + pending count 가져오기
+  const loadData = useCallback(async () => {
+    try {
+      setLoading(true);
 
-    let unsubPending: (() => void) | undefined;
+      // 부서 목록 (활성화된 것만)
+      const deptData = await getDepartments(true);
+      setDepartments(deptData);
 
-    const unsub = onSnapshot(doc(db, "users", uid), (snap) => {
-      if (snap.exists()) {
-        const companyId = (snap.data() as any)?.companyId;
-        setMyCompanyId(companyId || null);
-
-        if (companyId) {
-          // PENDING 사용자 수 실시간 가져오기
-          const pendingQuery = query(
-            collection(db, "users"),
-            where("companyId", "==", companyId),
-            where("status", "==", "PENDING")
-          );
-          unsubPending = onSnapshot(pendingQuery, (snapshot) => {
-            setPendingCount(snapshot.size);
-          });
-        }
-      }
-    });
-
-    return () => {
-      unsub();
-      unsubPending?.();
-    };
+      // PENDING 직원 수
+      const allEmployees = await getEmployees('PENDING');
+      setPendingCount(allEmployees.length);
+    } catch (e: any) {
+      console.error("조직도 로드 실패:", e);
+    } finally {
+      setLoading(false);
+    }
   }, []);
 
-  // 부서 목록 가져오기
   useEffect(() => {
-    if (!myCompanyId) return;
-
-    const loadDepartments = async () => {
-      try {
-        setLoading(true);
-        const q = query(
-          collection(db, "departments"),
-          where("companyId", "==", myCompanyId),
-          where("active", "==", true)
-        );
-        const snap = await getDocs(q);
-
-        const rows: Department[] = [];
-        snap.forEach((d) => {
-          const data = d.data() as any;
-          rows.push({
-            id: d.id,
-            name: data?.name ?? "",
-            description: data?.description ?? "",
-            active: data?.active !== false,
-            order: data?.order ?? 999,
-          });
-        });
-
-        // order 필드로 정렬
-        rows.sort((a, b) => (a.order ?? 999) - (b.order ?? 999));
-        setDepartments(rows);
-      } catch (e: any) {
-        console.error("조직도 로드 실패:", e);
-      } finally {
-        setLoading(false);
-      }
-    };
-
-    loadDepartments();
-  }, [myCompanyId]);
+    loadData();
+  }, [loadData]);
 
   // 부서 클릭 시 직원 목록 로드
-  const toggleDeptExpand = async (dept: Department) => {
+  const toggleDeptExpand = async (dept: DepartmentInfo) => {
     if (expandedDeptId === dept.id) {
       setExpandedDeptId(null);
       return;
@@ -135,44 +67,15 @@ export default function AdminOrganization() {
     if (deptEmployees[dept.id]) return;
 
     try {
-      const q = query(
-        collection(db, "users"),
-        where("companyId", "==", myCompanyId),
-        where("department", "==", dept.name),
-        where("status", "==", "ACTIVE")
-      );
-      const snap = await getDocs(q);
-
-      const employees: Employee[] = [];
-      snap.forEach((d) => {
-        const data = d.data() as any;
-        employees.push({
-          id: d.id,
-          name: data?.name ?? "",
-          email: data?.email ?? "",
-          phone: data?.phone ?? "",
-          role: data?.role ?? "",
-          department: data?.department ?? "",
-          storeId: data?.storeId ?? "",
-        });
-      });
-
+      setLoadingEmployees((prev) => ({ ...prev, [dept.id]: true }));
+      const employees = await getEmployeesByDepartmentId(dept.id);
       setDeptEmployees((prev) => ({ ...prev, [dept.id]: employees }));
     } catch (e: any) {
       console.error("직원 목록 로드 실패:", e);
+    } finally {
+      setLoadingEmployees((prev) => ({ ...prev, [dept.id]: false }));
     }
   };
-
-  if (!myCompanyId) {
-    return (
-      <View style={styles.safe}>
-        <View style={styles.center}>
-          <ActivityIndicator color="#1E5BFF" />
-          <Text style={styles.muted}>회사 정보를 불러오는 중...</Text>
-        </View>
-      </View>
-    );
-  }
 
   return (
     <SafeAreaView style={styles.safe} edges={["top"]}>
@@ -197,53 +100,63 @@ export default function AdminOrganization() {
         )}
 
         {!loading &&
-          departments.map((dept) => (
-            <Card key={dept.id}>
-              <Pressable onPress={() => toggleDeptExpand(dept)}>
-                <View style={styles.deptRow}>
-                  <Text style={styles.deptName}>{dept.name}</Text>
-                </View>
-                {dept.description && (
-                  <Text style={styles.deptInfo}>{dept.description}</Text>
-                )}
-              </Pressable>
+          departments.map((dept) => {
+            const isExpanded = expandedDeptId === dept.id;
+            const employees = deptEmployees[dept.id];
+            const isLoadingEmps = loadingEmployees[dept.id];
 
-              {/* 직원 목록 */}
-              {expandedDeptId === dept.id && (
-                <View style={styles.employeeList}>
-                  {!deptEmployees[dept.id] && (
-                    <View style={styles.employeeLoading}>
-                      <ActivityIndicator size="small" color="#1E5BFF" />
-                      <Text style={styles.employeeLoadingText}>직원 목록 불러오는 중...</Text>
-                    </View>
-                  )}
-                  {deptEmployees[dept.id] && deptEmployees[dept.id].length === 0 && (
-                    <Text style={styles.noEmployees}>이 부서에 소속된 직원이 없습니다</Text>
-                  )}
-                  {deptEmployees[dept.id] && deptEmployees[dept.id].length > 0 && (
-                    <>
-                      <Text style={styles.employeeHeader}>소속 직원 ({deptEmployees[dept.id].length}명)</Text>
-                      {deptEmployees[dept.id].map((emp) => (
-                        <View key={emp.id} style={styles.employeeItem}>
-                          <View style={styles.employeeRow}>
-                            <Text style={styles.employeeName}>{emp.name}</Text>
-                            <Text style={styles.employeeSeparator}>|</Text>
-                            <Text style={styles.employeeEmail}>{emp.email}</Text>
-                            {emp.phone && (
-                              <>
-                                <Text style={styles.employeeSeparator}>|</Text>
-                                <Text style={styles.employeePhone}>{emp.phone}</Text>
-                              </>
-                            )}
+            return (
+              <Card key={dept.id}>
+                <Pressable onPress={() => toggleDeptExpand(dept)}>
+                  <View style={styles.deptRow}>
+                    <Text style={styles.deptName}>{dept.name}</Text>
+                    {dept.employeeCount !== undefined && (
+                      <Text style={styles.employeeCount}>({dept.employeeCount}명)</Text>
+                    )}
+                  </View>
+                </Pressable>
+
+                {/* 직원 목록 */}
+                {isExpanded && (
+                  <View style={styles.employeeList}>
+                    {isLoadingEmps && (
+                      <View style={styles.employeeLoading}>
+                        <ActivityIndicator size="small" color="#1E5BFF" />
+                        <Text style={styles.employeeLoadingText}>직원 목록 불러오는 중...</Text>
+                      </View>
+                    )}
+                    {!isLoadingEmps && employees && employees.length === 0 && (
+                      <Text style={styles.noEmployees}>이 부서에 소속된 직원이 없습니다</Text>
+                    )}
+                    {!isLoadingEmps && employees && employees.length > 0 && (
+                      <>
+                        <Text style={styles.employeeHeader}>소속 직원 ({employees.length}명)</Text>
+                        {employees.map((emp) => (
+                          <View key={emp.id} style={styles.employeeItem}>
+                            <View style={styles.employeeRow}>
+                              <Text style={styles.employeeName}>{emp.name}</Text>
+                              {emp.email && (
+                                <>
+                                  <Text style={styles.employeeSeparator}>|</Text>
+                                  <Text style={styles.employeeEmail}>{emp.email}</Text>
+                                </>
+                              )}
+                              {emp.phone && (
+                                <>
+                                  <Text style={styles.employeeSeparator}>|</Text>
+                                  <Text style={styles.employeePhone}>{emp.phone}</Text>
+                                </>
+                              )}
+                            </View>
                           </View>
-                        </View>
-                      ))}
-                    </>
-                  )}
-                </View>
-              )}
-            </Card>
-          ))}
+                        ))}
+                      </>
+                    )}
+                  </View>
+                )}
+              </Card>
+            );
+          })}
       </ScrollView>
 
       {/* 하단 네비게이션 바 */}
@@ -330,10 +243,9 @@ const styles = StyleSheet.create({
     fontWeight: "700",
     flex: 1,
   },
-  deptInfo: {
+  employeeCount: {
     color: "#A9AFBC",
-    fontSize: 11,
-    marginTop: 2,
+    fontSize: 12,
   },
 
   employeeList: {

@@ -1,7 +1,8 @@
 // app/staff/sales/index.tsx
+// ✅ PostgreSQL 연동: 매장 목록은 core-api에서 가져옴
 // 직원용 매출등록 페이지
 
-import React, { useEffect, useState } from "react";
+import React, { useEffect, useState, useCallback } from "react";
 import {
   View,
   ScrollView,
@@ -17,6 +18,7 @@ import { doc, onSnapshot, collection, query, where, addDoc, updateDoc, deleteDoc
 import { auth, db } from "../../../firebaseConfig";
 import Card from "../../../components/ui/Card";
 import { SafeAreaView } from "react-native-safe-area-context";
+import { getStores, StoreInfo } from "../../../lib/authApi";
 
 interface SalesRecord {
   id: string;
@@ -54,7 +56,26 @@ export default function StaffSalesPage() {
   const [amount, setAmount] = useState("");
   const [category, setCategory] = useState("일반");
   const [description, setDescription] = useState("");
-  const [stores, setStores] = useState<any[]>([]);
+  const [stores, setStores] = useState<StoreInfo[]>([]);
+
+  // PostgreSQL에서 매장 목록 가져오기
+  const loadStores = useCallback(async () => {
+    try {
+      const data = await getStores();
+      // 본사(isHq=true) 제외
+      const regularStores = data.filter((s) => !s.isHq);
+      setStores(regularStores);
+      if (regularStores.length > 0 && !selectedStore) {
+        setSelectedStore(regularStores[0].id);
+      }
+    } catch (e: any) {
+      console.error("매장 목록 로드 실패:", e);
+    }
+  }, [selectedStore]);
+
+  useEffect(() => {
+    loadStores();
+  }, []);
 
   useEffect(() => {
     const uid = auth.currentUser?.uid;
@@ -62,7 +83,6 @@ export default function StaffSalesPage() {
 
     let unsubCompany: (() => void) | undefined;
     let unsubSales: (() => void) | undefined;
-    let unsubStores: (() => void) | undefined;
 
     const unsubUser = onSnapshot(doc(db, "users", uid), async (userSnap) => {
       if (userSnap.exists()) {
@@ -74,21 +94,6 @@ export default function StaffSalesPage() {
         unsubCompany = onSnapshot(doc(db, "companies", companyId), (companySnap) => {
           if (companySnap.exists()) {
             setCompanyName((companySnap.data() as any)?.name || "");
-          }
-        });
-
-        const storesQuery = query(
-          collection(db, "stores"),
-          where("companyId", "==", companyId)
-        );
-        unsubStores = onSnapshot(storesQuery, (snapshot) => {
-          const storeList: any[] = [];
-          snapshot.forEach((doc) => {
-            storeList.push({ id: doc.id, ...doc.data() });
-          });
-          setStores(storeList);
-          if (!selectedStore && storeList.length > 0) {
-            setSelectedStore(storeList[0].id);
           }
         });
 
@@ -111,7 +116,6 @@ export default function StaffSalesPage() {
       unsubUser();
       unsubCompany?.();
       unsubSales?.();
-      unsubStores?.();
     };
   }, []);
 
@@ -139,8 +143,8 @@ export default function StaffSalesPage() {
       return;
     }
 
-    const storeName =
-      stores.find((s) => s.id === selectedStore)?.name || "";
+    const store = stores.find((s) => s.id === selectedStore);
+    const storeName = store?.name || store?.code || "";
     const uid = auth.currentUser?.uid;
 
     try {
@@ -414,7 +418,7 @@ export default function StaffSalesPage() {
                           styles.storeOptionTextSelected,
                       ]}
                     >
-                      {store.name}
+                      {store.name || store.code}
                     </Text>
                   </Pressable>
                 ))}

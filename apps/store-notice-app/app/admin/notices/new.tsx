@@ -1,7 +1,7 @@
 // app/admin/notices/new.tsx
-// ✅ Multi-tenant: companyId로 stores 필터링 + 부서는 자유 입력
+// ✅ PostgreSQL 연동: stores/departments는 core-api에서 가져옴
 
-import React, { useEffect, useMemo, useState } from "react";
+import React, { useEffect, useMemo, useState, useCallback } from "react";
 import {
   Alert,
   Button,
@@ -16,39 +16,25 @@ import {
   ActivityIndicator,
 } from "react-native";
 import { useRouter } from "expo-router";
-import { auth, db } from "../../../firebaseConfig";
+import { auth } from "../../../firebaseConfig";
 import Card from "../../../components/ui/Card";
 
 // Callable
 import { getFunctions, httpsCallable } from "firebase/functions";
 
-// Firestore
+// PostgreSQL API
 import {
-  collection,
-  getDocs,
-  orderBy,
-  query,
-  where,
-  doc,
-  onSnapshot,
-} from "firebase/firestore";
+  getStores,
+  getDepartments,
+  getEmployees,
+  StoreInfo,
+  DepartmentInfo,
+} from "../../../lib/authApi";
 
 // 안전영역
 import { SafeAreaView } from "react-native-safe-area-context";
 
 type TargetType = "ALL" | "STORE" | "HQ_DEPT";
-
-type StoreRow = {
-  id: string;
-  name: string;
-  active: boolean;
-};
-
-type DepartmentRow = {
-  id: string;
-  name: string;
-  active: boolean;
-};
 
 export default function AdminNew() {
   const router = useRouter();
@@ -56,25 +42,24 @@ export default function AdminNew() {
   const [title, setTitle] = useState("");
   const [body, setBody] = useState("");
 
-  // ✅ 내 companyId
-  const [myCompanyId, setMyCompanyId] = useState<string | null>(null);
+  // ✅ pendingCount
   const [pendingCount, setPendingCount] = useState(0);
 
   // ✅ 타겟 타입
   const [targetType, setTargetType] = useState<TargetType>("ALL");
 
-  // ✅ stores from DB
+  // ✅ stores from PostgreSQL
   const [storesLoading, setStoresLoading] = useState(true);
-  const [stores, setStores] = useState<StoreRow[]>([]);
+  const [stores, setStores] = useState<StoreInfo[]>([]);
 
   // 매장 선택 관련
   const [selectedStoreIds, setSelectedStoreIds] = useState<string[]>([]);
   const [storeModalOpen, setStoreModalOpen] = useState(false);
   const [storeSearch, setStoreSearch] = useState("");
 
-  // ✅ departments from DB
+  // ✅ departments from PostgreSQL
   const [departmentsLoading, setDepartmentsLoading] = useState(true);
-  const [departments, setDepartments] = useState<DepartmentRow[]>([]);
+  const [departments, setDepartments] = useState<DepartmentInfo[]>([]);
 
   // 부서 선택 관련
   const [selectedDeptIds, setSelectedDeptIds] = useState<string[]>([]);
@@ -82,133 +67,66 @@ export default function AdminNew() {
   const [deptSearch, setDeptSearch] = useState("");
 
   const [loading, setLoading] = useState(false);
+  const [dataLoaded, setDataLoaded] = useState(false);
 
   // -------------------------
-  // 내 companyId 가져오기 + pendingCount
+  // 초기 데이터 로드 (PostgreSQL)
   // -------------------------
-  useEffect(() => {
-    const uid = auth.currentUser?.uid;
-    if (!uid) return;
+  const loadInitialData = useCallback(async () => {
+    try {
+      // PENDING 직원 수
+      const pendingEmployees = await getEmployees('PENDING');
+      setPendingCount(pendingEmployees.length);
 
-    let unsubPending: (() => void) | undefined;
-
-    const unsub = onSnapshot(doc(db, "users", uid), (snap) => {
-      if (snap.exists()) {
-        const companyId = (snap.data() as any)?.companyId;
-        setMyCompanyId(companyId || null);
-
-        if (companyId) {
-          // PENDING 사용자 수 실시간 가져오기
-          const pendingQuery = query(
-            collection(db, "users"),
-            where("companyId", "==", companyId),
-            where("status", "==", "PENDING")
-          );
-          unsubPending = onSnapshot(pendingQuery, (snapshot) => {
-            setPendingCount(snapshot.size);
-          });
-        }
-      }
-    });
-
-    return () => {
-      unsub();
-      unsubPending?.();
-    };
+      // 매장/부서 로드
+      await Promise.all([fetchStores(), fetchDepartments()]);
+      setDataLoaded(true);
+    } catch (e: any) {
+      console.error("초기 데이터 로드 실패:", e);
+    }
   }, []);
 
+  useEffect(() => {
+    loadInitialData();
+  }, [loadInitialData]);
+
   // -------------------------
-  // stores fetch (같은 회사만)
+  // stores fetch (PostgreSQL)
   // -------------------------
   const fetchStores = async () => {
-    if (!myCompanyId) return;
-
     try {
       setStoresLoading(true);
-
-      // ✅ companyId로 필터링
-      const q = query(
-        collection(db, "stores"),
-        where("companyId", "==", myCompanyId),
-        orderBy("name", "asc")
-      );
-      const snap = await getDocs(q);
-
-      const rows: StoreRow[] = [];
-      snap.forEach((d) => {
-        const data = d.data() as any;
-        rows.push({
-          id: d.id,
-          name: (data?.name ?? d.id) as string,
-          active: data?.active !== false,
-        });
-      });
-
-      setStores(rows);
+      const data = await getStores();
+      // 본사(isHq=true) 제외
+      const regularStores = data.filter((s) => !s.isHq);
+      setStores(regularStores);
     } catch (e: any) {
       console.log("[NEW] fetchStores error:", e);
-      Alert.alert(
-        "매장 목록 오류",
-        e?.message ??
-          "stores 컬렉션을 불러오지 못했습니다.\n(권한/룰 또는 인덱스 확인)"
-      );
+      Alert.alert("매장 목록 오류", e?.message ?? "매장 목록을 불러오지 못했습니다.");
     } finally {
       setStoresLoading(false);
     }
   };
 
-  useEffect(() => {
-    fetchStores();
-    fetchDepartments();
-  }, [myCompanyId]);
-
   // -------------------------
-  // departments fetch (같은 회사만)
+  // departments fetch (PostgreSQL)
   // -------------------------
   const fetchDepartments = async () => {
-    if (!myCompanyId) return;
-
     try {
       setDepartmentsLoading(true);
-
-      const q = query(
-        collection(db, "departments"),
-        where("companyId", "==", myCompanyId),
-        orderBy("name", "asc")
-      );
-      const snap = await getDocs(q);
-
-      const rows: DepartmentRow[] = [];
-      snap.forEach((d) => {
-        const data = d.data() as any;
-        rows.push({
-          id: d.id,
-          name: (data?.name ?? d.id) as string,
-          active: data?.active !== false,
-        });
-      });
-
-      setDepartments(rows);
+      const data = await getDepartments(true); // 활성화된 부서만
+      setDepartments(data);
     } catch (e: any) {
       console.log("[NEW] fetchDepartments error:", e);
-      Alert.alert(
-        "부서 목록 오류",
-        e?.message ?? "departments 컬렉션을 불러오지 못했습니다."
-      );
+      Alert.alert("부서 목록 오류", e?.message ?? "부서 목록을 불러오지 못했습니다.");
     } finally {
       setDepartmentsLoading(false);
     }
   };
 
-  const activeStores = useMemo(
-    () => stores.filter((s) => s.active !== false),
-    [stores]
-  );
-
-  const activeDepartments = useMemo(
-    () => departments.filter((d) => d.active !== false),
-    [departments]
-  );
+  // 매장/부서는 이미 활성화된 것만 가져옴
+  const activeStores = stores;
+  const activeDepartments = departments;
 
   // 🔹 타겟타입 변경 시 불필요한 선택값 정리
   const changeTargetType = (t: TargetType) => {
@@ -225,7 +143,7 @@ export default function AdminNew() {
     if (!key) return base;
 
     return base.filter((s) => {
-      const hay = `${s.id} ${s.name}`.toLowerCase();
+      const hay = `${s.id} ${s.code} ${s.name || ""}`.toLowerCase();
       return hay.includes(key);
     });
   }, [storeSearch, activeStores]);
@@ -264,7 +182,7 @@ export default function AdminNew() {
     if (targetType === "STORE") {
       if (selectedStoreIds.length === 0) return "매장 선택 필요";
       const names = selectedStoreIds
-        .map((id) => activeStores.find((s) => s.id === id)?.name ?? id)
+        .map((id) => activeStores.find((s) => s.id === id)?.name || activeStores.find((s) => s.id === id)?.code || id)
         .join(", ");
       return `매장: ${names}`;
     }
@@ -288,11 +206,6 @@ export default function AdminNew() {
     const adminUid = auth.currentUser?.uid;
     if (!adminUid) {
       Alert.alert("오류", "관리자 인증 정보를 확인해 주세요.");
-      return;
-    }
-
-    if (!myCompanyId) {
-      Alert.alert("오류", "회사 정보를 불러오는 중입니다.");
       return;
     }
 
@@ -345,12 +258,12 @@ export default function AdminNew() {
   // UI
   // =========================================================
 
-  if (!myCompanyId) {
+  if (!dataLoaded) {
     return (
       <View style={styles.root}>
         <View style={styles.center}>
           <ActivityIndicator color="#1E5BFF" />
-          <Text style={styles.muted}>회사 정보를 불러오는 중...</Text>
+          <Text style={styles.muted}>데이터를 불러오는 중...</Text>
         </View>
       </View>
     );
@@ -456,7 +369,7 @@ export default function AdminNew() {
                   {selectedStoreIds.length > 0 && (
                     <Text style={{ color: "#A9AFBC", marginTop: 6 }} numberOfLines={2}>
                       {selectedStoreIds
-                        .map((id) => activeStores.find((s) => s.id === id)?.name ?? id)
+                        .map((id) => activeStores.find((s) => s.id === id)?.name || activeStores.find((s) => s.id === id)?.code || id)
                         .join(", ")}
                     </Text>
                   )}
@@ -554,7 +467,7 @@ export default function AdminNew() {
                     ]}
                   />
                   <Text style={{ color: "#E6E7EB" }}>
-                    {item.name}
+                    {item.name || item.code}
                   </Text>
                 </Pressable>
               );
