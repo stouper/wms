@@ -1,5 +1,5 @@
 // app/admin/approvals/new.tsx
-// 새 결재 문서 작성 (서류 타입별 입력 폼)
+// 새 결재 문서 작성 (서류 타입별 입력 폼) - PostgreSQL 버전
 
 import React, { useEffect, useState } from "react";
 import {
@@ -13,32 +13,27 @@ import {
   ActivityIndicator,
   Modal,
   FlatList,
-  Platform,
 } from "react-native";
 import { useRouter } from "expo-router";
 import { SafeAreaView } from "react-native-safe-area-context";
-import {
-  collection,
-  addDoc,
-  serverTimestamp,
-  doc,
-  onSnapshot,
-  query,
-  where,
-  getDocs,
-  getDoc,
-} from "firebase/firestore";
-import { auth, db } from "../../../firebaseConfig";
+import { auth } from "../../../firebaseConfig";
 import Card from "../../../components/ui/Card";
 import {
   ApprovalType,
   APPROVAL_TYPE_LABELS,
-  Approver,
   VacationDetails,
   ExpenseDetails,
   ReportDetails,
   ApprovalAttachment,
 } from "../../../lib/approvalTypes";
+import {
+  getEmployees,
+  authenticateWithCoreApi,
+  createApproval,
+  ApproverInput,
+  ApprovalAttachmentInput,
+  EmployeeInfo,
+} from "../../../lib/authApi";
 import * as ImagePicker from "expo-image-picker";
 import * as DocumentPicker from "expo-document-picker";
 import { uploadFile } from "../../../lib/uploadFile";
@@ -50,14 +45,19 @@ interface UserOption {
   role: string;
 }
 
+interface LocalApprover {
+  order: number;
+  employeeId: string;
+  name: string;
+  department?: string;
+}
+
 export default function NewApproval() {
   const router = useRouter();
 
   // 사용자 정보
-  const [myCompanyId, setMyCompanyId] = useState<string | null>(null);
-  const [myName, setMyName] = useState("");
-  const [myDepartment, setMyDepartment] = useState("");
-  const [pendingCount, setPendingCount] = useState(0);
+  const [myEmployee, setMyEmployee] = useState<EmployeeInfo | null>(null);
+  const [loading, setLoading] = useState(true);
 
   // 서류 정보
   const [type, setType] = useState<ApprovalType>("GENERAL");
@@ -83,7 +83,7 @@ export default function NewApproval() {
   const [uploading, setUploading] = useState(false);
 
   // 승인자 목록
-  const [approvers, setApprovers] = useState<Approver[]>([]);
+  const [approvers, setApprovers] = useState<LocalApprover[]>([]);
   const [users, setUsers] = useState<UserOption[]>([]);
   const [usersLoading, setUsersLoading] = useState(false);
   const [userModalOpen, setUserModalOpen] = useState(false);
@@ -91,67 +91,40 @@ export default function NewApproval() {
 
   const [submitting, setSubmitting] = useState(false);
 
-  // 내 정보 가져오기 + pendingCount
+  // 내 정보 가져오기
   useEffect(() => {
-    const uid = auth.currentUser?.uid;
-    if (!uid) return;
-
-    let unsubPending: (() => void) | undefined;
-
-    const unsub = onSnapshot(doc(db, "users", uid), (snap) => {
-      if (snap.exists()) {
-        const data = snap.data();
-        setMyCompanyId(data?.companyId || null);
-        setMyName(data?.name || "");
-        setMyDepartment(data?.department || "");
-
-        const companyId = data?.companyId;
-        if (companyId) {
-          const pendingQuery = query(
-            collection(db, "users"),
-            where("companyId", "==", companyId),
-            where("status", "==", "PENDING")
-          );
-          unsubPending = onSnapshot(pendingQuery, (snapshot) => {
-            setPendingCount(snapshot.size);
-          });
+    const loadMyInfo = async () => {
+      try {
+        const result = await authenticateWithCoreApi();
+        if (result.success && result.employee) {
+          setMyEmployee(result.employee);
         }
+      } catch (error) {
+        console.error("Error loading my info:", error);
+      } finally {
+        setLoading(false);
       }
-    });
-
-    return () => {
-      unsub();
-      unsubPending?.();
     };
+
+    loadMyInfo();
   }, []);
 
   // 회사 사용자 목록 가져오기
   useEffect(() => {
-    if (!myCompanyId) return;
-
     const fetchUsers = async () => {
       setUsersLoading(true);
       try {
-        const q = query(
-          collection(db, "users"),
-          where("companyId", "==", myCompanyId),
-          where("status", "==", "ACTIVE")
-        );
-        const snapshot = await getDocs(q);
+        const employees = await getEmployees("ACTIVE");
+        const uid = auth.currentUser?.uid;
 
-        const userList: UserOption[] = [];
-        snapshot.forEach((doc) => {
-          const data = doc.data();
-          // 본인 제외
-          if (doc.id !== auth.currentUser?.uid) {
-            userList.push({
-              id: doc.id,
-              name: data.name || doc.id,
-              department: data.department || "",
-              role: data.role || "",
-            });
-          }
-        });
+        const userList: UserOption[] = employees
+          .filter((e) => e.firebaseUid !== uid) // 본인 제외
+          .map((e) => ({
+            id: e.id,
+            name: e.name,
+            department: e.departmentName || "",
+            role: e.role,
+          }));
 
         setUsers(userList);
       } catch (error) {
@@ -162,7 +135,7 @@ export default function NewApproval() {
     };
 
     fetchUsers();
-  }, [myCompanyId]);
+  }, []);
 
   // 서류 타입 변경 시 필드 초기화
   useEffect(() => {
@@ -181,19 +154,16 @@ export default function NewApproval() {
 
   // 승인자 추가
   const addApprover = (user: UserOption) => {
-    if (approvers.find((a) => a.userId === user.id)) {
+    if (approvers.find((a) => a.employeeId === user.id)) {
       Alert.alert("알림", "이미 추가된 승인자입니다.");
       return;
     }
 
-    const newApprover: Approver = {
+    const newApprover: LocalApprover = {
       order: approvers.length + 1,
-      userId: user.id,
+      employeeId: user.id,
       name: user.name,
       department: user.department,
-      status: "PENDING",
-      comment: null,
-      approvedAt: null,
     };
 
     setApprovers([...approvers, newApprover]);
@@ -202,9 +172,9 @@ export default function NewApproval() {
   };
 
   // 승인자 삭제
-  const removeApprover = (userId: string) => {
+  const removeApprover = (employeeId: string) => {
     const newApprovers = approvers
-      .filter((a) => a.userId !== userId)
+      .filter((a) => a.employeeId !== employeeId)
       .map((a, index) => ({ ...a, order: index + 1 }));
     setApprovers(newApprovers);
   };
@@ -266,12 +236,10 @@ export default function NewApproval() {
 
   // 파일 업로드
   const uploadAttachment = async (uri: string, typeHint: "image" | "file") => {
-    if (!myCompanyId) return;
-
     setUploading(true);
     try {
       const fileName = uri.split("/").pop() || `file_${Date.now()}`;
-      const folder = `approvals/${myCompanyId}/${typeHint}`;
+      const folder = `approvals/${typeHint}`;
 
       const result = await uploadFile(uri, folder, fileName);
 
@@ -358,11 +326,6 @@ export default function NewApproval() {
         return;
       }
 
-      if (!myCompanyId) {
-        Alert.alert("오류", "회사 정보를 불러오는 중입니다.");
-        return;
-      }
-
       const uid = auth.currentUser?.uid;
       if (!uid) {
         Alert.alert("오류", "로그인 정보를 확인해주세요.");
@@ -374,29 +337,44 @@ export default function NewApproval() {
 
       setSubmitting(true);
 
-      await addDoc(collection(db, "approvals"), {
-        companyId: myCompanyId,
-        authorId: uid,
-        authorName: myName,
-        department: myDepartment,
+      // API 호출용 승인자 데이터 변환
+      const approverInputs: ApproverInput[] = approvers.map((a) => ({
+        order: a.order,
+        employeeId: a.employeeId,
+        name: a.name,
+        department: a.department,
+      }));
+
+      // 첨부파일 데이터 변환
+      const attachmentInputs: ApprovalAttachmentInput[] | undefined =
+        type === "REPORT" && attachments.length > 0
+          ? attachments.map((a) => ({
+              name: a.name,
+              url: a.url,
+              type: a.type,
+              size: a.size,
+            }))
+          : undefined;
+
+      const result = await createApproval({
         type,
         title: title.trim(),
         content: content.trim(),
         details,
-        attachments: type === "REPORT" ? attachments : [],
-        approvers,
-        status: "PENDING",
-        currentStep: 1,
-        createdAt: serverTimestamp(),
-        updatedAt: serverTimestamp(),
+        approvers: approverInputs,
+        attachments: attachmentInputs,
       });
 
-      Alert.alert("완료", "결재 문서가 제출되었습니다.", [
-        {
-          text: "확인",
-          onPress: () => router.push("/admin/approvals"),
-        },
-      ]);
+      if (result.success) {
+        Alert.alert("완료", "결재 문서가 제출되었습니다.", [
+          {
+            text: "확인",
+            onPress: () => router.push("/admin/approvals"),
+          },
+        ]);
+      } else {
+        Alert.alert("오류", result.error || "문서 제출에 실패했습니다.");
+      }
     } catch (error: any) {
       console.error("Submit error:", error);
       Alert.alert("오류", error.message || "문서 제출에 실패했습니다.");
@@ -405,7 +383,7 @@ export default function NewApproval() {
     }
   };
 
-  if (!myCompanyId) {
+  if (loading) {
     return (
       <View style={styles.root}>
         <View style={styles.center}>
@@ -632,7 +610,7 @@ export default function NewApproval() {
           )}
 
           {approvers.map((approver, index) => (
-            <View key={approver.userId} style={styles.approverItem}>
+            <View key={approver.employeeId} style={styles.approverItem}>
               <View style={styles.approverInfo}>
                 <Text style={styles.approverOrder}>{approver.order}단계</Text>
                 <View style={styles.approverDetails}>
@@ -662,7 +640,7 @@ export default function NewApproval() {
                   </Pressable>
                 )}
                 <Pressable
-                  onPress={() => removeApprover(approver.userId)}
+                  onPress={() => removeApprover(approver.employeeId)}
                   style={styles.removeButton}
                 >
                   <Text style={styles.removeButtonText}>✕</Text>
@@ -764,14 +742,7 @@ export default function NewApproval() {
             onPress={() => router.push("/admin/settings")}
             style={styles.navButton}
           >
-            <View style={styles.navIconContainer}>
-              <Text style={styles.navIcon}>⚙️</Text>
-              {pendingCount > 0 && (
-                <View style={styles.navBadge}>
-                  <Text style={styles.navBadgeText}>{pendingCount}</Text>
-                </View>
-              )}
-            </View>
+            <Text style={styles.navIcon}>⚙️</Text>
             <Text style={styles.navText}>설정</Text>
           </Pressable>
         </View>
@@ -1095,30 +1066,10 @@ const styles = StyleSheet.create({
     alignItems: "center",
     paddingVertical: 4,
   },
-  navIconContainer: {
-    position: "relative",
-  },
   navIcon: {
     fontSize: 16,
     marginBottom: 2,
     opacity: 0.5,
-  },
-  navBadge: {
-    position: "absolute",
-    top: -3,
-    right: -6,
-    backgroundColor: "#EF4444",
-    minWidth: 12,
-    height: 12,
-    borderRadius: 6,
-    alignItems: "center",
-    justifyContent: "center",
-    paddingHorizontal: 3,
-  },
-  navBadgeText: {
-    color: "#fff",
-    fontSize: 8,
-    fontWeight: "900",
   },
   navText: {
     color: "#A9AFBC",

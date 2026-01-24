@@ -1,5 +1,5 @@
 // app/admin/approvals/[id].tsx
-// 결재 문서 상세 및 승인/반려 페이지
+// 결재 문서 상세 및 승인/반려 페이지 - PostgreSQL 버전
 
 import React, { useState, useEffect } from "react";
 import {
@@ -14,27 +14,27 @@ import {
   Modal,
 } from "react-native";
 import { useRouter, useLocalSearchParams } from "expo-router";
-import {
-  doc,
-  getDoc,
-  updateDoc,
-  arrayUnion,
-  serverTimestamp,
-} from "firebase/firestore";
-import { db, auth } from "../../../firebaseConfig";
+import { auth } from "../../../firebaseConfig";
 import { Card } from "../../../components/ui/Card";
 import {
-  Approval,
-  Approver,
   APPROVAL_TYPE_LABELS,
   APPROVAL_STATUS_LABELS,
   APPROVAL_STATUS_COLORS,
 } from "../../../lib/approvalTypes";
+import {
+  getApproval,
+  processApproval,
+  authenticateWithCoreApi,
+  ApprovalInfo,
+  ApproverInfo,
+  EmployeeInfo,
+} from "../../../lib/authApi";
 
 export default function ApprovalDetailPage() {
   const router = useRouter();
   const { id } = useLocalSearchParams<{ id: string }>();
-  const [approval, setApproval] = useState<Approval | null>(null);
+  const [approval, setApproval] = useState<ApprovalInfo | null>(null);
+  const [myEmployee, setMyEmployee] = useState<EmployeeInfo | null>(null);
   const [loading, setLoading] = useState(true);
   const [processing, setProcessing] = useState(false);
 
@@ -45,22 +45,25 @@ export default function ApprovalDetailPage() {
   );
   const [comment, setComment] = useState("");
 
-  const uid = auth.currentUser?.uid;
-
   useEffect(() => {
-    loadApproval();
+    loadData();
   }, [id]);
 
-  const loadApproval = async () => {
+  const loadData = async () => {
     if (!id) return;
 
     setLoading(true);
     try {
-      const docRef = doc(db, "approvals", id);
-      const docSnap = await getDoc(docRef);
+      // 내 정보 가져오기
+      const authResult = await authenticateWithCoreApi();
+      if (authResult.success && authResult.employee) {
+        setMyEmployee(authResult.employee);
+      }
 
-      if (docSnap.exists()) {
-        setApproval({ id: docSnap.id, ...docSnap.data() } as Approval);
+      // 결재 문서 가져오기
+      const result = await getApproval(id);
+      if (result.success && result.approval) {
+        setApproval(result.approval);
       } else {
         Alert.alert("오류", "결재 문서를 찾을 수 없습니다.");
         router.back();
@@ -84,9 +87,11 @@ export default function ApprovalDetailPage() {
   };
 
   const submitApproval = async () => {
-    if (!approval || !uid) return;
+    if (!approval || !myEmployee) return;
 
-    const myApprover = approval.approvers.find((a) => a.userId === uid);
+    const myApprover = approval.approvers?.find(
+      (a) => a.employeeId === myEmployee.id
+    );
     if (!myApprover) {
       Alert.alert("오류", "승인 권한이 없습니다.");
       return;
@@ -99,61 +104,25 @@ export default function ApprovalDetailPage() {
 
     setProcessing(true);
     try {
-      const docRef = doc(db, "approvals", approval.id);
+      const result = await processApproval(approval.id, approvalAction, comment.trim() || undefined);
 
-      // 승인자 목록 업데이트
-      const updatedApprovers = approval.approvers.map((approver) => {
-        if (approver.userId === uid) {
-          return {
-            ...approver,
-            status: approvalAction,
-            comment: comment.trim() || null,
-            approvedAt: new Date(),
-          };
-        }
-        return approver;
-      });
+      if (result.success) {
+        setShowApprovalModal(false);
+        setComment("");
 
-      // 전체 문서 상태 결정
-      let newStatus = approval.status;
-      let newCurrentStep = approval.currentStep;
-
-      if (approvalAction === "REJECTED") {
-        // 반려 시 전체 문서 반려
-        newStatus = "REJECTED";
-      } else if (approvalAction === "APPROVED") {
-        // 승인 시
-        if (approval.currentStep >= approval.approvers.length) {
-          // 마지막 승인자가 승인 -> 문서 승인 완료
-          newStatus = "APPROVED";
-        } else {
-          // 다음 승인자로 이동
-          newCurrentStep = approval.currentStep + 1;
-        }
-      }
-
-      await updateDoc(docRef, {
-        approvers: updatedApprovers,
-        status: newStatus,
-        currentStep: newCurrentStep,
-        updatedAt: serverTimestamp(),
-      });
-
-      setShowApprovalModal(false);
-      setComment("");
-
-      Alert.alert(
-        "완료",
-        approvalAction === "APPROVED" ? "승인되었습니다." : "반려되었습니다.",
-        [
-          {
-            text: "확인",
-            onPress: () => {
-              router.back();
+        Alert.alert(
+          "완료",
+          approvalAction === "APPROVED" ? "승인되었습니다." : "반려되었습니다.",
+          [
+            {
+              text: "확인",
+              onPress: () => router.back(),
             },
-          },
-        ]
-      );
+          ]
+        );
+      } else {
+        Alert.alert("오류", result.error || "결재 처리에 실패했습니다.");
+      }
     } catch (error) {
       console.error("결재 처리 실패:", error);
       Alert.alert("오류", "결재 처리 중 오류가 발생했습니다.");
@@ -178,7 +147,9 @@ export default function ApprovalDetailPage() {
     );
   }
 
-  const myApprover = approval.approvers.find((a) => a.userId === uid);
+  const myApprover = approval.approvers?.find(
+    (a) => a.employeeId === myEmployee?.id
+  );
   const isMyTurn =
     myApprover &&
     myApprover.order === approval.currentStep &&
@@ -193,17 +164,17 @@ export default function ApprovalDetailPage() {
           <View style={styles.headerRow}>
             <View style={styles.typeContainer}>
               <Text style={styles.typeText}>
-                {APPROVAL_TYPE_LABELS[approval.type]}
+                {APPROVAL_TYPE_LABELS[approval.type] || approval.type}
               </Text>
             </View>
             <View
               style={[
                 styles.statusBadge,
-                { backgroundColor: APPROVAL_STATUS_COLORS[approval.status] },
+                { backgroundColor: APPROVAL_STATUS_COLORS[approval.status] || "#6B7280" },
               ]}
             >
               <Text style={styles.statusText}>
-                {APPROVAL_STATUS_LABELS[approval.status]}
+                {APPROVAL_STATUS_LABELS[approval.status] || approval.status}
               </Text>
             </View>
           </View>
@@ -215,14 +186,14 @@ export default function ApprovalDetailPage() {
           <View style={styles.infoRow}>
             <Text style={styles.infoLabel}>기안자</Text>
             <Text style={styles.infoValue}>
-              {approval.authorName} ({approval.department})
+              {approval.authorName} {approval.department ? `(${approval.department})` : ""}
             </Text>
           </View>
 
           <View style={styles.infoRow}>
             <Text style={styles.infoLabel}>작성일</Text>
             <Text style={styles.infoValue}>
-              {approval.createdAt?.toDate?.()?.toLocaleString?.() || "-"}
+              {approval.createdAt ? new Date(approval.createdAt).toLocaleString() : "-"}
             </Text>
           </View>
 
@@ -236,8 +207,8 @@ export default function ApprovalDetailPage() {
         <Card style={styles.section}>
           <Text style={styles.sectionTitle}>결재선</Text>
 
-          {approval.approvers.map((approver, index) => (
-            <View key={index} style={styles.approverRow}>
+          {approval.approvers?.map((approver, index) => (
+            <View key={approver.id || index} style={styles.approverRow}>
               <View style={styles.approverOrder}>
                 <Text style={styles.approverOrderText}>{approver.order}</Text>
               </View>
@@ -271,9 +242,9 @@ export default function ApprovalDetailPage() {
                 </Text>
               </View>
 
-              {approver.approvedAt && (
+              {approver.processedAt && (
                 <Text style={styles.approverDate}>
-                  {approver.approvedAt.toDate?.()?.toLocaleDateString?.() || ""}
+                  {new Date(approver.processedAt).toLocaleDateString()}
                 </Text>
               )}
 
@@ -287,12 +258,12 @@ export default function ApprovalDetailPage() {
           ))}
         </Card>
 
-        {/* 첨부파일 (현재는 없음) */}
+        {/* 첨부파일 */}
         {approval.attachments && approval.attachments.length > 0 && (
           <Card style={styles.section}>
             <Text style={styles.sectionTitle}>첨부파일</Text>
             {approval.attachments.map((file, index) => (
-              <View key={index} style={styles.fileRow}>
+              <View key={file.id || index} style={styles.fileRow}>
                 <Text style={styles.fileName}>{file.name}</Text>
                 <Text style={styles.fileSize}>
                   {(file.size / 1024).toFixed(1)} KB

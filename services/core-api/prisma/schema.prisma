@@ -79,6 +79,8 @@ model Employee {
   boardPosts  BoardPost[]
   messages    Message[]   @relation("MessageAuthor")
   receipts    Receipt[]   @relation("ReceiptEmployee")
+  approvals   Approval[]  @relation("ApprovalAuthor")
+  approverFor ApprovalApprover[] @relation("ApprovalApprover")
 
   @@index([storeId], map: "Employee_storeId_idx")
   @@index([departmentId], map: "Employee_departmentId_idx")
@@ -461,4 +463,108 @@ model Receipt {
   @@index([messageId], map: "Receipt_messageId_idx")
   @@index([employeeId], map: "Receipt_employeeId_idx")
   @@index([read], map: "Receipt_read_idx")
+}
+
+// ==========================================
+// 결재 시스템 (Firebase → PostgreSQL 마이그레이션)
+// ==========================================
+
+// 결재 문서 종류
+enum ApprovalType {
+  VACATION   // 휴가 신청서
+  EXPENSE    // 지출 결의서
+  REPORT     // 업무 보고서
+  GENERAL    // 범용 서류
+}
+
+// 결재 문서 상태
+enum ApprovalStatus {
+  DRAFT      // 임시저장
+  PENDING    // 진행 중
+  APPROVED   // 승인 완료
+  REJECTED   // 반려됨
+}
+
+// 승인자 상태
+enum ApproverStatus {
+  PENDING    // 대기 중
+  APPROVED   // 승인함
+  REJECTED   // 반려함
+}
+
+model Approval {
+  id          String   @id @default(cuid())
+
+  // 기안자 정보
+  authorId    String
+  author      Employee @relation("ApprovalAuthor", fields: [authorId], references: [id], onDelete: Cascade)
+  department  String?  // 기안자 부서 (스냅샷)
+
+  // 문서 정보
+  type        ApprovalType    @default(GENERAL)
+  title       String
+  content     String   @db.Text
+
+  // 서류별 상세 정보 (JSON)
+  details     Json?    // VacationDetails | ExpenseDetails | ReportDetails
+
+  // 결재선 정보
+  approvers   ApprovalApprover[]
+
+  // 첨부 파일
+  attachments ApprovalAttachment[]
+
+  // 상태
+  status      ApprovalStatus @default(PENDING)
+  currentStep Int      @default(1)  // 현재 승인 단계 (1부터 시작)
+
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  @@index([authorId], map: "Approval_authorId_idx")
+  @@index([status], map: "Approval_status_idx")
+  @@index([createdAt], map: "Approval_createdAt_idx")
+  @@index([type], map: "Approval_type_idx")
+}
+
+// 결재 승인자
+model ApprovalApprover {
+  id          String   @id @default(cuid())
+  approvalId  String
+  approval    Approval @relation(fields: [approvalId], references: [id], onDelete: Cascade)
+
+  order       Int      // 승인 순서 (1부터)
+  employeeId  String
+  employee    Employee @relation("ApprovalApprover", fields: [employeeId], references: [id], onDelete: Cascade)
+
+  name        String   // 승인자 이름 (스냅샷)
+  department  String?  // 승인자 부서 (스냅샷)
+
+  status      ApproverStatus @default(PENDING)
+  comment     String?        // 승인/반려 의견
+  processedAt DateTime?      // 처리 시간
+
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  @@unique([approvalId, order], map: "ApprovalApprover_approvalId_order_key")
+  @@index([approvalId], map: "ApprovalApprover_approvalId_idx")
+  @@index([employeeId], map: "ApprovalApprover_employeeId_idx")
+  @@index([status], map: "ApprovalApprover_status_idx")
+}
+
+// 결재 첨부파일
+model ApprovalAttachment {
+  id          String   @id @default(cuid())
+  approvalId  String
+  approval    Approval @relation(fields: [approvalId], references: [id], onDelete: Cascade)
+
+  name        String
+  url         String
+  type        String   // 파일 종류 (image, file)
+  size        Int      // 파일 크기 (bytes)
+
+  createdAt   DateTime @default(now())
+
+  @@index([approvalId], map: "ApprovalAttachment_approvalId_idx")
 }

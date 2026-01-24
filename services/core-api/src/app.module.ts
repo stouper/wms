@@ -39,6 +39,9 @@ import { BoardPostsModule } from './modules/board-posts/board-posts.module';
 // ✅ Messages (공지 메시지)
 import { MessagesModule } from './modules/messages/messages.module';
 
+// ✅ Approvals (결재 시스템)
+import { ApprovalsModule } from './modules/approvals/approvals.module';
+
 @Module({
   imports: [
     ConfigModule.forRoot({ isGlobal: true }),
@@ -76,6 +79,9 @@ import { MessagesModule } from './modules/messages/messages.module';
 
     // ✅ 공지 메시지
     MessagesModule,
+
+    // ✅ 결재 시스템
+    ApprovalsModule,
   ],
   controllers: [],
   providers: [],

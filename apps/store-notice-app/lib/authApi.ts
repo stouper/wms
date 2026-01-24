@@ -829,3 +829,234 @@ export async function getUnreadRecipients(
     return { success: false, error: error?.message || 'Network error' };
   }
 }
+
+// ==========================================
+// 결재 시스템 API (PostgreSQL)
+// ==========================================
+
+export type ApprovalType = 'VACATION' | 'EXPENSE' | 'REPORT' | 'GENERAL';
+export type ApprovalStatus = 'DRAFT' | 'PENDING' | 'APPROVED' | 'REJECTED';
+export type ApproverStatus = 'PENDING' | 'APPROVED' | 'REJECTED';
+
+export interface ApproverInput {
+  order: number;
+  employeeId: string;
+  name: string;
+  department?: string;
+}
+
+export interface ApprovalAttachmentInput {
+  name: string;
+  url: string;
+  type: string;
+  size: number;
+}
+
+export interface ApproverInfo {
+  id: string;
+  order: number;
+  employeeId: string;
+  name: string;
+  department?: string;
+  status: ApproverStatus;
+  comment?: string;
+  processedAt?: string;
+}
+
+export interface ApprovalAttachmentInfo {
+  id: string;
+  name: string;
+  url: string;
+  type: string;
+  size: number;
+}
+
+export interface ApprovalInfo {
+  id: string;
+  authorId: string;
+  authorName: string;
+  department?: string;
+  type: ApprovalType;
+  title: string;
+  content?: string;
+  details?: any;
+  status: ApprovalStatus;
+  currentStep: number;
+  totalSteps?: number;
+  currentApproverName?: string;
+  myStatus?: ApproverStatus;
+  approvers?: ApproverInfo[];
+  attachments?: ApprovalAttachmentInfo[];
+  createdAt: string;
+  updatedAt?: string;
+}
+
+// 내가 올린 결재 문서 목록
+export async function getMyDrafts(
+  limit = 50,
+  offset = 0
+): Promise<{ success: boolean; rows: ApprovalInfo[]; total: number; error?: string }> {
+  try {
+    const user = auth.currentUser;
+    if (!user) {
+      return { success: false, rows: [], total: 0, error: 'Not logged in' };
+    }
+
+    const response = await fetch(
+      `${API_BASE_URL}/approvals/my-drafts?firebaseUid=${user.uid}&limit=${limit}&offset=${offset}`
+    );
+    if (!response.ok) return { success: false, rows: [], total: 0, error: 'Failed to fetch' };
+
+    return await response.json();
+  } catch (error: any) {
+    console.error('getMyDrafts error:', error);
+    return { success: false, rows: [], total: 0, error: error?.message || 'Network error' };
+  }
+}
+
+// 내가 승인할 결재 문서 목록
+export async function getPendingApprovals(
+  limit = 50,
+  offset = 0
+): Promise<{ success: boolean; rows: ApprovalInfo[]; total: number; error?: string }> {
+  try {
+    const user = auth.currentUser;
+    if (!user) {
+      return { success: false, rows: [], total: 0, error: 'Not logged in' };
+    }
+
+    const response = await fetch(
+      `${API_BASE_URL}/approvals/pending?firebaseUid=${user.uid}&limit=${limit}&offset=${offset}`
+    );
+    if (!response.ok) return { success: false, rows: [], total: 0, error: 'Failed to fetch' };
+
+    return await response.json();
+  } catch (error: any) {
+    console.error('getPendingApprovals error:', error);
+    return { success: false, rows: [], total: 0, error: error?.message || 'Network error' };
+  }
+}
+
+// 내가 처리한 결재 문서 목록
+export async function getProcessedApprovals(
+  limit = 50,
+  offset = 0
+): Promise<{ success: boolean; rows: ApprovalInfo[]; total: number; error?: string }> {
+  try {
+    const user = auth.currentUser;
+    if (!user) {
+      return { success: false, rows: [], total: 0, error: 'Not logged in' };
+    }
+
+    const response = await fetch(
+      `${API_BASE_URL}/approvals/processed?firebaseUid=${user.uid}&limit=${limit}&offset=${offset}`
+    );
+    if (!response.ok) return { success: false, rows: [], total: 0, error: 'Failed to fetch' };
+
+    return await response.json();
+  } catch (error: any) {
+    console.error('getProcessedApprovals error:', error);
+    return { success: false, rows: [], total: 0, error: error?.message || 'Network error' };
+  }
+}
+
+// 결재 문서 상세 조회
+export async function getApproval(id: string): Promise<{ success: boolean; approval?: ApprovalInfo; error?: string }> {
+  try {
+    const response = await fetch(`${API_BASE_URL}/approvals/${id}`);
+    if (!response.ok) return { success: false, error: 'Failed to fetch' };
+
+    return await response.json();
+  } catch (error: any) {
+    console.error('getApproval error:', error);
+    return { success: false, error: error?.message || 'Network error' };
+  }
+}
+
+// 결재 문서 생성
+export async function createApproval(data: {
+  type: ApprovalType;
+  title: string;
+  content: string;
+  details?: any;
+  approvers: ApproverInput[];
+  attachments?: ApprovalAttachmentInput[];
+}): Promise<{ success: boolean; approval?: ApprovalInfo; error?: string }> {
+  try {
+    const user = auth.currentUser;
+    if (!user) {
+      return { success: false, error: 'Not logged in' };
+    }
+
+    const response = await fetch(`${API_BASE_URL}/approvals`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        firebaseUid: user.uid,
+        type: data.type,
+        title: data.title,
+        content: data.content,
+        details: data.details,
+        approvers: data.approvers,
+        attachments: data.attachments,
+      }),
+    });
+
+    return await response.json();
+  } catch (error: any) {
+    console.error('createApproval error:', error);
+    return { success: false, error: error?.message || 'Network error' };
+  }
+}
+
+// 결재 처리 (승인/반려)
+export async function processApproval(
+  id: string,
+  action: 'APPROVED' | 'REJECTED',
+  comment?: string
+): Promise<{ success: boolean; approval?: ApprovalInfo; error?: string }> {
+  try {
+    const user = auth.currentUser;
+    if (!user) {
+      return { success: false, error: 'Not logged in' };
+    }
+
+    const response = await fetch(`${API_BASE_URL}/approvals/${id}/process`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        firebaseUid: user.uid,
+        action,
+        comment,
+      }),
+    });
+
+    return await response.json();
+  } catch (error: any) {
+    console.error('processApproval error:', error);
+    return { success: false, error: error?.message || 'Network error' };
+  }
+}
+
+// 결재 문서 삭제
+export async function deleteApproval(id: string): Promise<{ success: boolean; error?: string }> {
+  try {
+    const user = auth.currentUser;
+    if (!user) {
+      return { success: false, error: 'Not logged in' };
+    }
+
+    const response = await fetch(`${API_BASE_URL}/approvals/${id}`, {
+      method: 'DELETE',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        firebaseUid: user.uid,
+      }),
+    });
+
+    return await response.json();
+  } catch (error: any) {
+    console.error('deleteApproval error:', error);
+    return { success: false, error: error?.message || 'Network error' };
+  }
+}
