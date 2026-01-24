@@ -316,4 +316,191 @@ export class SalesService {
       })),
     };
   }
+
+  /**
+   * ✅ 매출 목록 조회 (일자/매장별 필터)
+   */
+  async getSalesList(storeCode?: string, from?: string, to?: string) {
+    const where: any = {};
+
+    if (storeCode) {
+      where.storeCode = storeCode;
+    }
+
+    if (from && to) {
+      const fromDate = parseYYYYMMDD(from);
+      const toDate = parseYYYYMMDD(to);
+      where.saleDate = {
+        gte: fromDate,
+        lte: endOfDay(toDate),
+      };
+    }
+
+    const rows = await this.prisma.salesRaw.findMany({
+      where,
+      orderBy: { saleDate: 'desc' },
+    });
+
+    return rows.map((r) => ({
+      id: r.id,
+      storeCode: r.storeCode,
+      storeName: r.storeName ?? null,
+      saleDate: r.saleDate,
+      amount: r.amount,
+      qty: r.qty,
+      productType: r.productType ?? null,
+      itemCode: r.itemCode ?? null,
+      codeName: r.codeName ?? null,
+      sourceKey: r.sourceKey ?? null,
+      uploadedAt: r.uploadedAt,
+    }));
+  }
+
+  /**
+   * ✅ 매출 단건 조회
+   */
+  async getSalesById(id: string) {
+    const sale = await this.prisma.salesRaw.findUnique({
+      where: { id },
+    });
+
+    if (!sale) {
+      throw new BadRequestException('Sale not found');
+    }
+
+    return {
+      id: sale.id,
+      storeCode: sale.storeCode,
+      storeName: sale.storeName ?? null,
+      saleDate: sale.saleDate,
+      amount: sale.amount,
+      qty: sale.qty,
+      productType: sale.productType ?? null,
+      itemCode: sale.itemCode ?? null,
+      codeName: sale.codeName ?? null,
+      sourceKey: sale.sourceKey ?? null,
+      uploadedAt: sale.uploadedAt,
+    };
+  }
+
+  /**
+   * ✅ 매출 생성
+   */
+  async createSale(data: {
+    storeCode: string;
+    storeName?: string;
+    saleDate: string; // YYYY-MM-DD
+    amount: number;
+    qty?: number;
+    productType?: string;
+    itemCode?: string;
+    codeName?: string;
+    sourceKey?: string;
+  }) {
+    const saleDate = parseYYYYMMDD(data.saleDate);
+
+    const sale = await this.prisma.salesRaw.create({
+      data: {
+        storeCode: data.storeCode,
+        storeName: data.storeName ?? null,
+        saleDate,
+        amount: data.amount,
+        qty: data.qty ?? 1,
+        productType: data.productType ?? null,
+        itemCode: data.itemCode ?? null,
+        codeName: data.codeName ?? null,
+        sourceKey: data.sourceKey ?? null,
+      },
+    });
+
+    return {
+      id: sale.id,
+      storeCode: sale.storeCode,
+      storeName: sale.storeName ?? null,
+      saleDate: sale.saleDate,
+      amount: sale.amount,
+      qty: sale.qty,
+      productType: sale.productType ?? null,
+      itemCode: sale.itemCode ?? null,
+      codeName: sale.codeName ?? null,
+      sourceKey: sale.sourceKey ?? null,
+      uploadedAt: sale.uploadedAt,
+    };
+  }
+
+  /**
+   * ✅ 매출 수정
+   */
+  async updateSale(
+    id: string,
+    data: {
+      storeCode?: string;
+      storeName?: string;
+      saleDate?: string; // YYYY-MM-DD
+      amount?: number;
+      qty?: number;
+      productType?: string;
+      itemCode?: string;
+      codeName?: string;
+      sourceKey?: string;
+    },
+  ) {
+    const existing = await this.prisma.salesRaw.findUnique({
+      where: { id },
+    });
+
+    if (!existing) {
+      throw new BadRequestException('Sale not found');
+    }
+
+    const updateData: any = {};
+
+    if (data.storeCode !== undefined) updateData.storeCode = data.storeCode;
+    if (data.storeName !== undefined) updateData.storeName = data.storeName;
+    if (data.saleDate !== undefined) updateData.saleDate = parseYYYYMMDD(data.saleDate);
+    if (data.amount !== undefined) updateData.amount = data.amount;
+    if (data.qty !== undefined) updateData.qty = data.qty;
+    if (data.productType !== undefined) updateData.productType = data.productType;
+    if (data.itemCode !== undefined) updateData.itemCode = data.itemCode;
+    if (data.codeName !== undefined) updateData.codeName = data.codeName;
+    if (data.sourceKey !== undefined) updateData.sourceKey = data.sourceKey;
+
+    const sale = await this.prisma.salesRaw.update({
+      where: { id },
+      data: updateData,
+    });
+
+    return {
+      id: sale.id,
+      storeCode: sale.storeCode,
+      storeName: sale.storeName ?? null,
+      saleDate: sale.saleDate,
+      amount: sale.amount,
+      qty: sale.qty,
+      productType: sale.productType ?? null,
+      itemCode: sale.itemCode ?? null,
+      codeName: sale.codeName ?? null,
+      sourceKey: sale.sourceKey ?? null,
+      uploadedAt: sale.uploadedAt,
+    };
+  }
+
+  /**
+   * ✅ 매출 삭제
+   */
+  async deleteSale(id: string) {
+    const existing = await this.prisma.salesRaw.findUnique({
+      where: { id },
+    });
+
+    if (!existing) {
+      throw new BadRequestException('Sale not found');
+    }
+
+    await this.prisma.salesRaw.delete({
+      where: { id },
+    });
+
+    return { success: true, id };
+  }
 }

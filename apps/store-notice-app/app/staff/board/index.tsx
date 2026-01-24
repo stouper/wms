@@ -1,5 +1,5 @@
 // app/staff/board/index.tsx
-// 직원용 게시판 목록 페이지
+// 직원용 게시판 목록 페이지 - PostgreSQL 기반
 
 import React, { useEffect, useState } from "react";
 import {
@@ -13,95 +13,50 @@ import {
 } from "react-native";
 import { useRouter } from "expo-router";
 import { SafeAreaView } from "react-native-safe-area-context";
-import {
-  collection,
-  query,
-  where,
-  orderBy,
-  onSnapshot,
-  doc,
-  deleteDoc,
-} from "firebase/firestore";
-import { auth, db } from "../../../firebaseConfig";
+import { auth } from "../../../firebaseConfig";
+import { getBoardPosts, deleteBoardPost, BoardPostInfo, authenticateWithCoreApi } from "../../../lib/authApi";
 import Card from "../../../components/ui/Card";
-
-interface BoardPost {
-  id: string;
-  title: string;
-  content: string;
-  authorId: string;
-  authorName: string;
-  companyId: string;
-  createdAt: any;
-  images?: string[];
-  files?: Array<{
-    name: string;
-    url: string;
-    type: string;
-    size: number;
-  }>;
-}
 
 export default function StaffBoardList() {
   const router = useRouter();
-  const [posts, setPosts] = useState<BoardPost[]>([]);
+  const [posts, setPosts] = useState<BoardPostInfo[]>([]);
   const [loading, setLoading] = useState(true);
-  const [myCompanyId, setMyCompanyId] = useState<string | null>(null);
-  const [myUserId, setMyUserId] = useState<string | null>(null);
+  const [myEmployeeId, setMyEmployeeId] = useState<string | null>(null);
 
   useEffect(() => {
-    const uid = auth.currentUser?.uid;
-    if (!uid) return;
+    if (!auth.currentUser) return;
 
-    setMyUserId(uid);
-
-    const unsub = onSnapshot(doc(db, "users", uid), (snap) => {
-      if (snap.exists()) {
-        const companyId = (snap.data() as any)?.companyId;
-        setMyCompanyId(companyId || null);
-      }
-    });
-
-    return () => {
-      unsub();
-    };
+    loadPosts();
+    loadMyInfo();
   }, []);
 
-  useEffect(() => {
-    if (!myCompanyId) return;
-
-    const q = query(
-      collection(db, "boardPosts"),
-      where("companyId", "==", myCompanyId),
-      orderBy("createdAt", "desc")
-    );
-
-    const unsub = onSnapshot(
-      q,
-      (snapshot) => {
-        const postList: BoardPost[] = [];
-        snapshot.forEach((doc) => {
-          postList.push({
-            id: doc.id,
-            ...doc.data(),
-          } as BoardPost);
-        });
-        setPosts(postList);
-        setLoading(false);
-      },
-      (error) => {
-        console.error("Error fetching posts:", error);
-        Alert.alert("오류", "게시글 목록을 불러오는데 실패했습니다.");
-        setLoading(false);
+  const loadMyInfo = async () => {
+    try {
+      const result = await authenticateWithCoreApi();
+      if (result.success && result.employee) {
+        setMyEmployeeId(result.employee.id);
       }
-    );
+    } catch (error) {
+      console.error("Failed to load employee info:", error);
+    }
+  };
 
-    return () => unsub();
-  }, [myCompanyId]);
+  const loadPosts = async () => {
+    setLoading(true);
+    try {
+      const data = await getBoardPosts(100, 0);
+      setPosts(data.rows);
+    } catch (error) {
+      console.error("Error fetching posts:", error);
+      Alert.alert("오류", "게시글 목록을 불러오는데 실패했습니다.");
+    } finally {
+      setLoading(false);
+    }
+  };
 
   // 본인 글만 삭제 가능
-  const handleDelete = async (post: BoardPost) => {
-    if (post.authorId !== myUserId) {
+  const handleDelete = async (post: BoardPostInfo) => {
+    if (post.authorId !== myEmployeeId) {
       Alert.alert("권한 없음", "본인이 작성한 글만 삭제할 수 있습니다.");
       return;
     }
@@ -113,8 +68,13 @@ export default function StaffBoardList() {
         style: "destructive",
         onPress: async () => {
           try {
-            await deleteDoc(doc(db, "boardPosts", post.id));
-            Alert.alert("완료", "게시글이 삭제되었습니다.");
+            const result = await deleteBoardPost(post.id);
+            if (result.success) {
+              Alert.alert("완료", "게시글이 삭제되었습니다.");
+              loadPosts(); // 목록 새로고침
+            } else {
+              Alert.alert("오류", result.error ?? "게시글 삭제에 실패했습니다.");
+            }
           } catch (error) {
             console.error("Delete error:", error);
             Alert.alert("오류", "게시글 삭제에 실패했습니다.");
@@ -124,9 +84,8 @@ export default function StaffBoardList() {
     ]);
   };
 
-  const formatDate = (timestamp: any) => {
-    if (!timestamp) return "";
-    const date = timestamp.toDate ? timestamp.toDate() : new Date(timestamp);
+  const formatDate = (isoString: string) => {
+    const date = new Date(isoString);
     return date.toLocaleDateString("ko-KR", {
       year: "numeric",
       month: "long",
@@ -211,7 +170,7 @@ export default function StaffBoardList() {
                   <Text style={styles.viewButtonText}>상세보기</Text>
                 </Pressable>
                 {/* 본인 글만 삭제 버튼 표시 */}
-                {post.authorId === myUserId && (
+                {post.authorId === myEmployeeId && (
                   <Pressable
                     onPress={() => handleDelete(post)}
                     style={styles.deleteButton}

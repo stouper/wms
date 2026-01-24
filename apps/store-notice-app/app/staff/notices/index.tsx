@@ -1,20 +1,10 @@
 // app/staff/notices/index.tsx
-// 직원용 받은 공지 목록
+// 직원용 받은 공지 목록 - PostgreSQL 기반
 
 import { useRouter } from "expo-router";
-import {
-  collection,
-  doc,
-  getDoc,
-  onSnapshot,
-  orderBy,
-  query,
-  where,
-} from "firebase/firestore";
-import React, { useEffect, useMemo, useRef, useState } from "react";
+import React, { useEffect, useState } from "react";
 import {
   ActivityIndicator,
-  Alert,
   FlatList,
   Pressable,
   StyleSheet,
@@ -22,223 +12,44 @@ import {
   View,
 } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
-import { auth, db } from "../../../firebaseConfig";
+import { auth } from "../../../firebaseConfig";
+import { getMyMessages } from "../../../lib/authApi";
 
-type Receipt = {
+type MessageReceipt = {
   id: string;
   messageId: string;
-  companyId?: string;
+  title: string;
+  body: string;
   read: boolean;
-  createdAt?: any;
+  readAt?: string;
+  createdAt: string;
 };
-
-type Message = {
-  id: string;
-  title?: string;
-  body?: string;
-  companyId?: string;
-  createdAt?: any;
-  targetType?: "ALL" | "STORE" | "HQ_DEPT";
-  targetStoreIds?: string[] | null;
-  targetDeptCodes?: string[] | null;
-};
-
-type Me = {
-  companyId?: string;
-  role?: "OWNER" | "MANAGER" | "SALES";
-  status?: "PENDING" | "ACTIVE" | "REJECTED" | "DISABLED";
-  storeId?: string | null;
-  department?: string | null;
-};
-
-function normalizeTarget(m: Message): {
-  type: "ALL" | "STORE" | "HQ_DEPT";
-  stores: string[];
-  depts: string[];
-} {
-  const type = (m.targetType ?? "ALL") as any;
-  const stores = Array.isArray(m.targetStoreIds) ? m.targetStoreIds : [];
-  const depts = Array.isArray(m.targetDeptCodes) ? m.targetDeptCodes : [];
-
-  if (type === "STORE") return { type: "STORE", stores, depts: [] };
-  if (type === "HQ_DEPT") return { type: "HQ_DEPT", stores: [], depts };
-  return { type: "ALL", stores: [], depts: [] };
-}
-
-function isVisibleForMe(m: Message, me: Me | null): boolean {
-  if (m.companyId && me?.companyId && m.companyId !== me.companyId) {
-    return false;
-  }
-
-  const t = normalizeTarget(m);
-  if (t.type === "ALL") return true;
-
-  if (!me) return false;
-
-  if (t.type === "STORE") {
-    const myStore = me.storeId ?? null;
-    if (!myStore) return false;
-    return t.stores.includes(myStore);
-  }
-
-  const myDept = me.department ?? null;
-  if (!myDept) return false;
-  return t.depts.includes(myDept);
-}
 
 export default function StaffNoticesList() {
   const router = useRouter();
 
   const [loading, setLoading] = useState(true);
-  const [me, setMe] = useState<Me | null>(null);
-  const [meReady, setMeReady] = useState(false);
-  const [receipts, setReceipts] = useState<Receipt[]>([]);
-  const [messages, setMessages] = useState<Record<string, Message>>({});
-
-  const unsubReceiptsRef = useRef<(() => void) | undefined>(undefined);
-  const unsubMeRef = useRef<(() => void) | undefined>(undefined);
+  const [messages, setMessages] = useState<MessageReceipt[]>([]);
 
   useEffect(() => {
-    const u = auth.currentUser;
-    if (!u) return;
+    if (!auth.currentUser) return;
 
-    if (unsubMeRef.current) {
-      unsubMeRef.current();
-      unsubMeRef.current = undefined;
-    }
-
-    setMe(null);
-    setMeReady(false);
-
-    unsubMeRef.current = onSnapshot(
-      doc(db, "users", u.uid),
-      (snap) => {
-        setMe(snap.exists() ? (snap.data() as any) : null);
-        setMeReady(true);
-      },
-      (err) => {
-        console.log("[Me] onSnapshot error:", err);
-        setMe(null);
-        setMeReady(true);
-      }
-    );
-
-    return () => {
-      if (unsubMeRef.current) unsubMeRef.current();
-    };
+    loadMessages();
   }, []);
 
-  useEffect(() => {
-    const u = auth.currentUser;
-    if (!u || !me?.companyId) return;
-
-    if (unsubReceiptsRef.current) {
-      unsubReceiptsRef.current();
-      unsubReceiptsRef.current = undefined;
-    }
-
+  const loadMessages = async () => {
     setLoading(true);
-    setReceipts([]);
-    setMessages({});
+    try {
+      const data = await getMyMessages(100, 0);
+      setMessages(data);
+    } catch (error) {
+      console.error("Failed to load messages:", error);
+    } finally {
+      setLoading(false);
+    }
+  };
 
-    const q = query(
-      collection(db, "receipts"),
-      where("userId", "==", u.uid),
-      where("companyId", "==", me.companyId),
-      orderBy("createdAt", "desc")
-    );
-
-    unsubReceiptsRef.current = onSnapshot(
-      q,
-      async (snap) => {
-        try {
-          const rows: Receipt[] = [];
-          const messageIds = new Set<string>();
-
-          snap.forEach((d) => {
-            const data = d.data() as any;
-            rows.push({
-              id: d.id,
-              messageId: data.messageId,
-              companyId: data.companyId,
-              read: !!data.read,
-              createdAt: data.createdAt,
-            });
-            if (data.messageId) messageIds.add(data.messageId);
-          });
-
-          rows.sort((a, b) => {
-            if (!a.createdAt && !b.createdAt) return 0;
-            if (!a.createdAt) return 1;
-            if (!b.createdAt) return -1;
-            const aTime = a.createdAt?.toMillis?.() ?? 0;
-            const bTime = b.createdAt?.toMillis?.() ?? 0;
-            return bTime - aTime;
-          });
-
-          setReceipts(rows);
-
-          setMessages((prev) => {
-            const toFetch: string[] = [];
-            messageIds.forEach((mid) => {
-              if (!prev[mid]) toFetch.push(mid);
-            });
-
-            if (toFetch.length > 0) {
-              (async () => {
-                for (const mid of toFetch) {
-                  try {
-                    const msnap = await getDoc(doc(db, "messages", mid));
-                    if (msnap.exists()) {
-                      const m: Message = { id: msnap.id, ...(msnap.data() as any) };
-                      if (m.companyId !== me.companyId) continue;
-                      if (!isVisibleForMe(m, me)) continue;
-
-                      setMessages((current) => ({
-                        ...current,
-                        [mid]: m,
-                      }));
-                    }
-                  } catch (e) {
-                    console.log("[StaffList] message fetch error:", e);
-                  }
-                }
-              })();
-            }
-
-            return prev;
-          });
-
-          setLoading(false);
-        } catch (e: any) {
-          console.error("[StaffList] onSnapshot callback error:", e);
-          setLoading(false);
-        }
-      },
-      (err) => {
-        console.error("[StaffList] onSnapshot error:", err);
-        Alert.alert(
-          "오류",
-          err?.code === "failed-precondition"
-            ? "인덱스가 생성 중입니다. 잠시 후 다시 시도해 주세요."
-            : err?.message ?? "데이터를 불러오는 중 오류가 발생했습니다."
-        );
-        setLoading(false);
-      }
-    );
-
-    return () => {
-      if (unsubReceiptsRef.current) unsubReceiptsRef.current();
-    };
-  }, [me?.companyId, me?.storeId, me?.department, meReady]);
-
-  const data = useMemo(() => {
-    return receipts.filter((r) => !!messages[r.messageId]);
-  }, [receipts, messages]);
-
-  const stillLoading = loading || !meReady;
-
-  if (stillLoading) {
+  if (loading) {
     return (
       <SafeAreaView style={styles.safe} edges={["top"]}>
         <View style={styles.header}>
@@ -266,21 +77,17 @@ export default function StaffNoticesList() {
         <View style={{ width: 24 }} />
       </View>
 
-      {data.length === 0 ? (
+      {messages.length === 0 ? (
         <View style={styles.emptyWrap}>
           <Text style={styles.emptyText}>받은 공지가 없습니다.</Text>
         </View>
       ) : (
         <FlatList
           contentContainerStyle={styles.listContainer}
-          data={data}
+          data={messages}
           keyExtractor={(item) => item.id}
           ItemSeparatorComponent={() => <View style={{ height: 10 }} />}
           renderItem={({ item }) => {
-            const m = messages[item.messageId];
-            const title = m?.title ?? "(삭제된 공지)";
-            const desc = m?.body ?? "";
-
             return (
               <Pressable
                 onPress={() => router.push(`/staff/notices/${item.messageId}`)}
@@ -289,7 +96,7 @@ export default function StaffNoticesList() {
               >
                 <View style={styles.rowHead}>
                   <Text style={[styles.title, !item.read && styles.titleBold]} numberOfLines={1}>
-                    {title}
+                    {item.title}
                   </Text>
                   {!item.read && (
                     <View style={styles.badge}>
@@ -298,9 +105,9 @@ export default function StaffNoticesList() {
                   )}
                 </View>
 
-                {!!desc && (
+                {!!item.body && (
                   <Text numberOfLines={2} style={styles.desc}>
-                    {desc}
+                    {item.body}
                   </Text>
                 )}
               </Pressable>

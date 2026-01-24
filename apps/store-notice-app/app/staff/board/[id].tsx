@@ -1,5 +1,5 @@
 // app/staff/board/[id].tsx
-// 직원용 게시판 상세 페이지
+// 직원용 게시판 상세 페이지 - PostgreSQL 기반
 
 import React, { useEffect, useState } from "react";
 import {
@@ -15,76 +15,67 @@ import {
 } from "react-native";
 import { useRouter, useLocalSearchParams } from "expo-router";
 import { SafeAreaView } from "react-native-safe-area-context";
-import { doc, onSnapshot, deleteDoc } from "firebase/firestore";
-import { auth, db } from "../../../firebaseConfig";
+import { auth } from "../../../firebaseConfig";
 import Card from "../../../components/ui/Card";
-
-interface BoardPost {
-  id: string;
-  title: string;
-  content: string;
-  authorId: string;
-  authorName: string;
-  companyId: string;
-  createdAt: any;
-  images?: string[];
-  files?: Array<{
-    name: string;
-    url: string;
-    type: string;
-    size: number;
-  }>;
-}
+import { getBoardPost, deleteBoardPost, BoardPostDetailInfo, authenticateWithCoreApi } from "../../../lib/authApi";
 
 export default function StaffBoardDetail() {
   const router = useRouter();
   const { id } = useLocalSearchParams();
-  const [post, setPost] = useState<BoardPost | null>(null);
+  const [post, setPost] = useState<BoardPostDetailInfo | null>(null);
   const [loading, setLoading] = useState(true);
-  const [myUserId, setMyUserId] = useState<string | null>(null);
+  const [myEmployeeId, setMyEmployeeId] = useState<string | null>(null);
 
   useEffect(() => {
-    const uid = auth.currentUser?.uid;
-    if (uid) {
-      setMyUserId(uid);
-    }
+    if (!auth.currentUser) return;
+
+    loadMyInfo();
   }, []);
 
   useEffect(() => {
     if (!id || typeof id !== "string") return;
 
-    const unsub = onSnapshot(
-      doc(db, "boardPosts", id),
-      (snapshot) => {
-        if (snapshot.exists()) {
-          setPost({
-            id: snapshot.id,
-            ...snapshot.data(),
-          } as BoardPost);
-        } else {
-          Alert.alert("오류", "게시글을 찾을 수 없습니다.", [
-            {
-              text: "확인",
-              onPress: () => router.push("/staff/board"),
-            },
-          ]);
-        }
-        setLoading(false);
-      },
-      (error) => {
-        console.error("Error fetching post:", error);
-        Alert.alert("오류", "게시글을 불러오는데 실패했습니다.");
-        setLoading(false);
-      }
-    );
-
-    return () => unsub();
+    loadPost(id);
   }, [id]);
+
+  const loadMyInfo = async () => {
+    try {
+      const result = await authenticateWithCoreApi();
+      if (result.success && result.employee) {
+        setMyEmployeeId(result.employee.id);
+      }
+    } catch (error) {
+      console.error("Failed to load employee info:", error);
+    }
+  };
+
+  const loadPost = async (postId: string) => {
+    setLoading(true);
+    try {
+      const result = await getBoardPost(postId);
+      if (!result) {
+        Alert.alert("오류", "게시글을 찾을 수 없습니다.", [
+          {
+            text: "확인",
+            onPress: () => router.push("/staff/board"),
+          },
+        ]);
+        return;
+      }
+
+      setPost(result);
+    } catch (error) {
+      console.error("Error fetching post:", error);
+      Alert.alert("오류", "게시글을 불러오는데 실패했습니다.");
+    } finally {
+      setLoading(false);
+    }
+  };
 
   const handleDelete = async () => {
     if (!id || typeof id !== "string") return;
 
-    if (post?.authorId !== myUserId) {
+    if (post?.authorId !== myEmployeeId) {
       Alert.alert("권한 없음", "본인이 작성한 글만 삭제할 수 있습니다.");
       return;
     }
@@ -96,13 +87,17 @@ export default function StaffBoardDetail() {
         style: "destructive",
         onPress: async () => {
           try {
-            await deleteDoc(doc(db, "boardPosts", id));
-            Alert.alert("완료", "게시글이 삭제되었습니다.", [
-              {
-                text: "확인",
-                onPress: () => router.push("/staff/board"),
-              },
-            ]);
+            const result = await deleteBoardPost(id);
+            if (result.success) {
+              Alert.alert("완료", "게시글이 삭제되었습니다.", [
+                {
+                  text: "확인",
+                  onPress: () => router.push("/staff/board"),
+                },
+              ]);
+            } else {
+              Alert.alert("오류", result.error ?? "게시글 삭제에 실패했습니다.");
+            }
           } catch (error) {
             console.error("Delete error:", error);
             Alert.alert("오류", "게시글 삭제에 실패했습니다.");
@@ -126,9 +121,8 @@ export default function StaffBoardDetail() {
     }
   };
 
-  const formatDate = (timestamp: any) => {
-    if (!timestamp) return "";
-    const date = timestamp.toDate ? timestamp.toDate() : new Date(timestamp);
+  const formatDate = (isoString: string) => {
+    const date = new Date(isoString);
     return date.toLocaleDateString("ko-KR", {
       year: "numeric",
       month: "long",
@@ -179,7 +173,7 @@ export default function StaffBoardDetail() {
     );
   }
 
-  const isMyPost = post.authorId === myUserId;
+  const isMyPost = post.authorId === myEmployeeId;
 
   return (
     <SafeAreaView style={styles.safe} edges={["top"]}>

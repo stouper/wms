@@ -830,6 +830,289 @@ export async function getUnreadRecipients(
   }
 }
 
+// 내 미읽음 메시지 수 조회
+export async function getMyUnreadCount(): Promise<number> {
+  try {
+    const user = auth.currentUser;
+    if (!user) return 0;
+
+    const response = await fetch(
+      `${API_BASE_URL}/messages/my/unread-count?firebaseUid=${user.uid}`
+    );
+    if (!response.ok) return 0;
+
+    const data = await response.json();
+    return data.success ? data.count : 0;
+  } catch (error) {
+    console.error('getMyUnreadCount error:', error);
+    return 0;
+  }
+}
+
+// 내 메시지 목록 조회
+export async function getMyMessages(
+  limit = 50,
+  offset = 0
+): Promise<{ id: string; messageId: string; title: string; body: string; read: boolean; readAt?: string; createdAt: string }[]> {
+  try {
+    const user = auth.currentUser;
+    if (!user) return [];
+
+    const response = await fetch(
+      `${API_BASE_URL}/messages/my/list?firebaseUid=${user.uid}&limit=${limit}&offset=${offset}`
+    );
+    if (!response.ok) return [];
+
+    const data = await response.json();
+    return data.success ? data.rows : [];
+  } catch (error) {
+    console.error('getMyMessages error:', error);
+    return [];
+  }
+}
+
+// ============================================================
+// Sales API
+// ============================================================
+
+export interface SalesRecordInfo {
+  storeCode: string;
+  storeName: string | null;
+  totalAmount: number;
+  totalQty: number;
+}
+
+export interface SalesImportResult {
+  sheetName?: string;
+  totalRows: number;
+  inserted: number;
+  skipped: number;
+  errorsSample: string[];
+}
+
+// 매장별 매출 조회
+export async function getSalesByStore(
+  from: string,
+  to: string
+): Promise<{ from: string; to: string; items: SalesRecordInfo[] }> {
+  try {
+    const response = await fetch(
+      `${API_BASE_URL}/sales/by-store?from=${from}&to=${to}`
+    );
+    if (!response.ok) {
+      throw new Error('Failed to fetch sales data');
+    }
+
+    const data = await response.json();
+    return data;
+  } catch (error) {
+    console.error('getSalesByStore error:', error);
+    throw error;
+  }
+}
+
+// Excel 매출 데이터 업로드
+export async function importSalesExcel(
+  fileUri: string,
+  fileName: string,
+  sourceKey?: string
+): Promise<SalesImportResult> {
+  try {
+    const formData = new FormData();
+
+    // React Native에서 파일 업로드
+    const file = {
+      uri: fileUri,
+      type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+      name: fileName,
+    } as any;
+
+    formData.append('file', file);
+    if (sourceKey) {
+      formData.append('sourceKey', sourceKey);
+    }
+
+    const response = await fetch(`${API_BASE_URL}/sales/import-excel`, {
+      method: 'POST',
+      body: formData,
+    });
+
+    if (!response.ok) {
+      const error = await response.json();
+      throw new Error(error.message || 'Failed to import sales data');
+    }
+
+    return await response.json();
+  } catch (error) {
+    console.error('importSalesExcel error:', error);
+    throw error;
+  }
+}
+
+// 최근 매출 데이터 확인 (디버그용)
+export async function getRecentSales(): Promise<{
+  totalCount: number;
+  dateRange: { min: string | null; max: string | null };
+  recentItems: Array<{
+    id: string;
+    saleDate: string;
+    storeCode: string;
+    storeName: string | null;
+    qty: number;
+    amount: number;
+    codeName: string | null;
+  }>;
+}> {
+  try {
+    const response = await fetch(`${API_BASE_URL}/sales/debug-recent`);
+    if (!response.ok) {
+      throw new Error('Failed to fetch recent sales');
+    }
+
+    return await response.json();
+  } catch (error) {
+    console.error('getRecentSales error:', error);
+    throw error;
+  }
+}
+
+export interface SalesRecordInfo {
+  id: string;
+  storeCode: string;
+  storeName: string | null;
+  saleDate: string; // ISO 8601 datetime string
+  amount: number;
+  qty: number;
+  productType: string | null;
+  itemCode: string | null;
+  codeName: string | null;
+  sourceKey: string | null;
+  uploadedAt: string; // ISO 8601 datetime string
+}
+
+// 매출 목록 조회 (필터링)
+export async function getSalesList(
+  storeCode?: string,
+  from?: string, // YYYY-MM-DD
+  to?: string    // YYYY-MM-DD
+): Promise<SalesRecordInfo[]> {
+  try {
+    const params = new URLSearchParams();
+    if (storeCode) params.append('storeCode', storeCode);
+    if (from) params.append('from', from);
+    if (to) params.append('to', to);
+
+    const url = `${API_BASE_URL}/sales${params.toString() ? `?${params.toString()}` : ''}`;
+    const response = await fetch(url);
+
+    if (!response.ok) {
+      throw new Error('Failed to fetch sales list');
+    }
+
+    return await response.json();
+  } catch (error) {
+    console.error('getSalesList error:', error);
+    throw error;
+  }
+}
+
+// 매출 단건 조회
+export async function getSale(id: string): Promise<SalesRecordInfo> {
+  try {
+    const response = await fetch(`${API_BASE_URL}/sales/${id}`);
+
+    if (!response.ok) {
+      throw new Error('Failed to fetch sale');
+    }
+
+    return await response.json();
+  } catch (error) {
+    console.error('getSale error:', error);
+    throw error;
+  }
+}
+
+// 매출 생성
+export async function createSale(data: {
+  storeCode: string;
+  storeName?: string;
+  saleDate: string; // YYYY-MM-DD
+  amount: number;
+  qty?: number;
+  productType?: string; // category로 사용
+  itemCode?: string;
+  codeName?: string; // description으로 사용
+  sourceKey?: string;
+}): Promise<SalesRecordInfo> {
+  try {
+    const response = await fetch(`${API_BASE_URL}/sales`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(data),
+    });
+
+    if (!response.ok) {
+      throw new Error('Failed to create sale');
+    }
+
+    return await response.json();
+  } catch (error) {
+    console.error('createSale error:', error);
+    throw error;
+  }
+}
+
+// 매출 수정
+export async function updateSale(
+  id: string,
+  data: {
+    storeCode?: string;
+    storeName?: string;
+    saleDate?: string; // YYYY-MM-DD
+    amount?: number;
+    qty?: number;
+    productType?: string; // category로 사용
+    itemCode?: string;
+    codeName?: string; // description으로 사용
+    sourceKey?: string;
+  }
+): Promise<SalesRecordInfo> {
+  try {
+    const response = await fetch(`${API_BASE_URL}/sales/${id}`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(data),
+    });
+
+    if (!response.ok) {
+      throw new Error('Failed to update sale');
+    }
+
+    return await response.json();
+  } catch (error) {
+    console.error('updateSale error:', error);
+    throw error;
+  }
+}
+
+// 매출 삭제
+export async function deleteSale(id: string): Promise<{ success: boolean; id: string }> {
+  try {
+    const response = await fetch(`${API_BASE_URL}/sales/${id}`, {
+      method: 'DELETE',
+    });
+
+    if (!response.ok) {
+      throw new Error('Failed to delete sale');
+    }
+
+    return await response.json();
+  } catch (error) {
+    console.error('deleteSale error:', error);
+    throw error;
+  }
+}
+
 // ==========================================
 // 결재 시스템 API (PostgreSQL)
 // ==========================================
@@ -851,6 +1134,52 @@ export interface ApprovalAttachmentInput {
   type: string;
   size: number;
 }
+
+// Approval type alias for backwards compatibility
+export type ApprovalAttachment = ApprovalAttachmentInput;
+
+// Approval details types
+export interface VacationDetails {
+  startDate: string;
+  endDate: string;
+  days: number;
+}
+
+export interface ExpenseDetails {
+  amount: number;
+  category: string;
+  purpose: string;
+}
+
+export interface ReportDetails {
+  project: string;
+  period: string;
+}
+
+// ============================================================
+// Approval Constants
+// ============================================================
+
+export const APPROVAL_TYPE_LABELS: Record<string, string> = {
+  GENERAL: '일반',
+  EXPENSE: '지출',
+  VACATION: '휴가',
+  PURCHASE: '구매',
+};
+
+export const APPROVAL_STATUS_LABELS: Record<string, string> = {
+  DRAFT: '임시저장',
+  PENDING: '대기',
+  APPROVED: '승인',
+  REJECTED: '반려',
+};
+
+export const APPROVAL_STATUS_COLORS: Record<string, string> = {
+  DRAFT: '#64748b',
+  PENDING: '#f59e0b',
+  APPROVED: '#10b981',
+  REJECTED: '#ef4444',
+};
 
 export interface ApproverInfo {
   id: string;

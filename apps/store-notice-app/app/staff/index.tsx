@@ -1,5 +1,5 @@
 // app/staff/index.tsx
-// 직원 대시보드 - 관리자 스타일 UI
+// 직원 대시보드 - PostgreSQL 기반
 
 import React, { useEffect, useState } from "react";
 import {
@@ -10,84 +10,53 @@ import {
   Pressable,
 } from "react-native";
 import { useRouter } from "expo-router";
-import { doc, onSnapshot, collection, query, where } from "firebase/firestore";
-import { auth, db } from "../../firebaseConfig";
+import { auth } from "../../firebaseConfig";
+import { getEvents, getMyUnreadCount, EventInfo, authenticateWithCoreApi } from "../../lib/authApi";
 import Card from "../../components/ui/Card";
 import { SafeAreaView } from "react-native-safe-area-context";
-import { Event } from "../../lib/eventTypes";
 
 export default function StaffDashboard() {
   const router = useRouter();
-  const [todayEvents, setTodayEvents] = useState<Event[]>([]);
-  const [myCompanyId, setMyCompanyId] = useState<string | null>(null);
-  const [companyName, setCompanyName] = useState("");
+  const [todayEvents, setTodayEvents] = useState<EventInfo[]>([]);
+  const [employeeName, setEmployeeName] = useState("");
+  const [storeName, setStoreName] = useState("");
   const [unreadCount, setUnreadCount] = useState(0);
 
   useEffect(() => {
-    const uid = auth.currentUser?.uid;
-    if (!uid) return;
+    if (!auth.currentUser) return;
 
-    let unsubCompany: (() => void) | undefined;
-    let unsubReceipts: (() => void) | undefined;
-    let unsubEvents: (() => void) | undefined;
-
-    // 내 user 정보 가져와서 companyId 확인
-    const unsubUser = onSnapshot(doc(db, "users", uid), async (userSnap) => {
-      if (userSnap.exists()) {
-        const companyId = (userSnap.data() as any)?.companyId;
-        if (!companyId) return;
-
-        setMyCompanyId(companyId);
-
-        // 회사 정보 가져오기
-        unsubCompany = onSnapshot(doc(db, "companies", companyId), (companySnap) => {
-          if (companySnap.exists()) {
-            setCompanyName((companySnap.data() as any)?.name || "");
-          }
-        });
-
-        // 미확인 공지 수 실시간 가져오기
-        const receiptsQuery = query(
-          collection(db, "receipts"),
-          where("userId", "==", uid),
-          where("companyId", "==", companyId),
-          where("read", "==", false)
-        );
-        unsubReceipts = onSnapshot(receiptsQuery, (snapshot) => {
-          setUnreadCount(snapshot.size);
-        });
-
-        // 오늘 일정 실시간 가져오기
-        const today = new Date();
-        const year = today.getFullYear();
-        const month = String(today.getMonth() + 1).padStart(2, "0");
-        const day = String(today.getDate()).padStart(2, "0");
-        const todayStr = `${year}-${month}-${day}`;
-
-        const eventsQuery = query(
-          collection(db, "events"),
-          where("companyId", "==", companyId)
-        );
-        unsubEvents = onSnapshot(eventsQuery, (snapshot) => {
-          const events: Event[] = [];
-          snapshot.forEach((doc) => {
-            const data = doc.data();
-            // 클라이언트에서 오늘 날짜만 필터링
-            if (data.date === todayStr) {
-              events.push({ id: doc.id, ...data } as Event);
-            }
-          });
-          setTodayEvents(events);
-        });
+    // 직원 정보 가져오기
+    authenticateWithCoreApi().then((result) => {
+      if (result.success && result.employee) {
+        setEmployeeName(result.employee.name);
+        setStoreName(result.employee.storeName || result.employee.departmentName || "");
       }
     });
 
-    return () => {
-      unsubUser();
-      unsubCompany?.();
-      unsubReceipts?.();
-      unsubEvents?.();
-    };
+    // 오늘 일정 가져오기
+    const today = new Date();
+    const year = today.getFullYear();
+    const month = String(today.getMonth() + 1).padStart(2, "0");
+    const day = String(today.getDate()).padStart(2, "0");
+    const todayStr = `${year}-${month}-${day}`;
+
+    getEvents(todayStr, todayStr).then((events) => {
+      setTodayEvents(events);
+    });
+
+    // 미읽음 공지 수 가져오기
+    getMyUnreadCount().then((count) => {
+      setUnreadCount(count);
+    });
+
+    // 주기적으로 미읽음 수 갱신
+    const interval = setInterval(() => {
+      getMyUnreadCount().then((count) => {
+        setUnreadCount(count);
+      });
+    }, 30000); // 30초마다
+
+    return () => clearInterval(interval);
   }, []);
 
 
@@ -95,7 +64,7 @@ export default function StaffDashboard() {
     <SafeAreaView style={styles.safe} edges={["top"]}>
       <ScrollView contentContainerStyle={styles.container}>
         <View style={styles.titleRow}>
-          <Text style={styles.title}>{companyName || "직원 대시보드"}</Text>
+          <Text style={styles.title}>{storeName || employeeName || "직원 대시보드"}</Text>
         </View>
 
         {/* 캘린더 */}

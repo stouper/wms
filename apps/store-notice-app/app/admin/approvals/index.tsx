@@ -16,15 +16,13 @@ import { auth } from "../../../firebaseConfig";
 import { Card } from "../../../components/ui/Card";
 import { SafeAreaView } from "react-native-safe-area-context";
 import {
-  APPROVAL_TYPE_LABELS,
-  APPROVAL_STATUS_LABELS,
-  APPROVAL_STATUS_COLORS,
-} from "../../../lib/approvalTypes";
-import {
   getMyDrafts,
   getPendingApprovals,
   getProcessedApprovals,
   ApprovalInfo,
+  APPROVAL_TYPE_LABELS,
+  APPROVAL_STATUS_LABELS,
+  APPROVAL_STATUS_COLORS,
 } from "../../../lib/authApi";
 
 type TabType = "MY_DRAFTS" | "PENDING_APPROVAL" | "PROCESSED";

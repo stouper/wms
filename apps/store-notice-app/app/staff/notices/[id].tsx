@@ -1,20 +1,12 @@
 // app/staff/notices/[id].tsx
-// ✅ PostgreSQL 연동: 매장 목록은 core-api에서 가져옴
-// 직원용 공지 상세 보기
+// 직원용 공지 상세 보기 - PostgreSQL 기반
 
 import { useLocalSearchParams, useRouter } from "expo-router";
-import {
-  doc,
-  getDoc,
-  serverTimestamp,
-  updateDoc,
-  onSnapshot,
-} from "firebase/firestore";
 import React, { useEffect, useMemo, useState, useCallback } from "react";
-import { Alert, Button, ScrollView, StyleSheet, Text, View, ActivityIndicator, Pressable } from "react-native";
+import { Alert, ScrollView, StyleSheet, Text, View, ActivityIndicator, Pressable } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
-import { auth, db } from "../../../firebaseConfig";
-import { getStores } from "../../../lib/authApi";
+import { auth } from "../../../firebaseConfig";
+import { getMessage, markMessageAsRead, getStores, MessageInfo } from "../../../lib/authApi";
 
 type TargetType = "ALL" | "STORE" | "HQ_DEPT";
 
@@ -26,26 +18,9 @@ export default function StaffNoticeDetail() {
   const router = useRouter();
   const { id } = useLocalSearchParams() as { id: string };
 
-  const [myCompanyId, setMyCompanyId] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
-  const [title, setTitle] = useState<string>("");
-  const [body, setBody] = useState<string>("");
-  const [message, setMessage] = useState<any>(null);
+  const [message, setMessage] = useState<MessageInfo | null>(null);
   const [storeNameMap, setStoreNameMap] = useState<Record<string, string>>({});
-
-  useEffect(() => {
-    const uid = auth.currentUser?.uid;
-    if (!uid) return;
-
-    const unsub = onSnapshot(doc(db, "users", uid), (snap) => {
-      if (snap.exists()) {
-        const companyId = (snap.data() as any)?.companyId;
-        setMyCompanyId(companyId || null);
-      }
-    });
-
-    return () => unsub();
-  }, []);
 
   // PostgreSQL에서 매장 목록 가져오기 (라벨용)
   const loadStores = useCallback(async () => {
@@ -66,44 +41,37 @@ export default function StaffNoticeDetail() {
   }, [loadStores]);
 
   useEffect(() => {
-    if (!myCompanyId || !id) return;
+    if (!id) return;
 
-    (async () => {
-      try {
-        const msnap = await getDoc(doc(db, "messages", id));
+    loadMessage();
+  }, [id]);
 
-        if (!msnap.exists()) {
-          Alert.alert("안내", "해당 공지는 삭제되었습니다.", [
-            { text: "확인", onPress: () => router.replace("/staff/notices") },
-          ]);
-          return;
-        }
-
-        const m = msnap.data() as any;
-
-        if (m?.companyId !== myCompanyId) {
-          Alert.alert("권한 없음", "다른 회사의 공지입니다.", [
-            { text: "확인", onPress: () => router.replace("/staff/notices") },
-          ]);
-          return;
-        }
-
-        setMessage(m);
-        setTitle(m?.title ?? "");
-        setBody(m?.body ?? "");
-      } catch (e) {
-        console.log("[Detail] load error:", e);
-      } finally {
-        setLoading(false);
+  const loadMessage = async () => {
+    setLoading(true);
+    try {
+      const result = await getMessage(id);
+      if (!result) {
+        Alert.alert("안내", "해당 공지는 삭제되었습니다.", [
+          { text: "확인", onPress: () => router.replace("/staff/notices") },
+        ]);
+        return;
       }
-    })();
-  }, [id, myCompanyId, router]);
+
+      setMessage(result);
+    } catch (e) {
+      console.log("[Detail] load error:", e);
+      Alert.alert("오류", "공지를 불러올 수 없습니다.");
+    } finally {
+      setLoading(false);
+    }
+  };
 
   const targetText = useMemo(() => {
-    const m = message ?? {};
-    const t: TargetType = (m?.targetType ?? "ALL") as TargetType;
-    const storeIds = safeArray(m?.targetStoreIds);
-    const deptCodes = safeArray(m?.targetDeptCodes);
+    if (!message) return "대상: 전체";
+
+    const t: TargetType = message.targetType as TargetType;
+    const storeIds = safeArray(message.targetStoreIds);
+    const deptCodes = safeArray(message.targetDeptCodes);
 
     if (t === "STORE") {
       if (storeIds.length === 0) return "대상: 매장(미지정)";
@@ -121,47 +89,23 @@ export default function StaffNoticeDetail() {
   }, [message, storeNameMap]);
 
   const markRead = async () => {
-    const u = auth.currentUser;
-    if (!u || !myCompanyId) return;
+    if (!auth.currentUser || !id) return;
 
     try {
-      const receiptId = `${id}_${u.uid}`;
-      const receiptRef = doc(db, "receipts", receiptId);
-
-      const receiptSnap = await getDoc(receiptRef);
-      if (!receiptSnap.exists()) {
-        Alert.alert("안내", "이미 삭제되었거나 확인 대상이 아닙니다.", [
-          { text: "확인", onPress: () => router.replace("/staff/notices") },
-        ]);
-        return;
-      }
-
-      const receiptData = receiptSnap.data() as any;
-
-      if (receiptData?.companyId !== myCompanyId) {
-        Alert.alert("권한 없음", "다른 회사의 공지입니다.", [
-          { text: "확인", onPress: () => router.replace("/staff/notices") },
-        ]);
-        return;
-      }
-
-      if (receiptData?.read) {
-        Alert.alert("안내", "이미 확인 처리된 공지입니다.");
+      const result = await markMessageAsRead(id);
+      if (result.success) {
+        Alert.alert("완료", "확인 처리되었습니다.");
         router.back();
-        return;
+      } else {
+        Alert.alert("오류", result.error ?? "확인 처리에 실패했습니다.");
       }
-
-      await updateDoc(receiptRef, { read: true, readAt: serverTimestamp() });
-
-      Alert.alert("완료", "확인 처리되었습니다.");
-      router.back();
     } catch (e: any) {
       console.log("[Detail] markRead error:", e);
-      Alert.alert("오류", e?.message ?? "확인 처리에 실패했습니다.");
+      Alert.alert("오류", "확인 처리에 실패했습니다.");
     }
   };
 
-  if (!myCompanyId || loading) {
+  if (loading) {
     return (
       <SafeAreaView style={styles.safe} edges={["top"]}>
         <View style={styles.header}>
@@ -190,9 +134,9 @@ export default function StaffNoticeDetail() {
       </View>
 
       <ScrollView contentContainerStyle={styles.container}>
-        <Text style={styles.title}>{title}</Text>
+        <Text style={styles.title}>{message?.title ?? ""}</Text>
         <Text style={styles.target}>{targetText}</Text>
-        <Text style={styles.body}>{body}</Text>
+        <Text style={styles.body}>{message?.body ?? ""}</Text>
 
         <View style={{ height: 20 }} />
 

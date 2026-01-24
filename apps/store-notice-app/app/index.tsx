@@ -1,24 +1,11 @@
-// app/index.tsx (통파일 교체본) - 로그인 상태에 따라 /auth/login 또는 /admin 또는 /message로 이동
+// app/index.tsx - PostgreSQL Employee 기반 인증 및 라우팅
 import { useEffect, useRef, useState } from "react";
 import { ActivityIndicator, Text, View } from "react-native";
 import { usePathname, useRouter } from "expo-router";
 import { onAuthStateChanged } from "firebase/auth";
-import { doc, onSnapshot } from "firebase/firestore";
 
-// ✅ 대부분 프로젝트에서 firebaseConfig는 루트에 있음
-import { auth, db } from "../firebaseConfig";
+import { auth } from "../firebaseConfig";
 import { authenticateWithCoreApi, EmployeeInfo } from "../lib/authApi";
-
-type Me = {
-  companyId?: string;
-  role?: "OWNER" | "MANAGER" | "SALES";
-  status?: "PENDING" | "ACTIVE" | "REJECTED" | "DISABLED";
-  storeId?: string | null;
-  department?: string | null;
-
-  // ⚠️ DEPRECATED (backwards compatibility)
-  active?: boolean;
-} | null;
 
 // Employee role → admin 여부 판단
 const isAdminRole = (role: string): boolean => {
@@ -30,29 +17,19 @@ export default function Index() {
   const pathname = usePathname();
 
   const [authReady, setAuthReady] = useState(false);
-  const [meReady, setMeReady] = useState(false);
-  const [me, setMe] = useState<Me>(null);
   const [employee, setEmployee] = useState<EmployeeInfo | null>(null);
+  const [employeeReady, setEmployeeReady] = useState(false);
 
   const redirected = useRef(false);
-  const unsubMeRef = useRef<(() => void) | null>(null);
 
   useEffect(() => {
     const unsubAuth = onAuthStateChanged(auth, async (u) => {
       setAuthReady(true);
-
-      // 기존 me 구독 해제
-      if (unsubMeRef.current) {
-        unsubMeRef.current();
-        unsubMeRef.current = null;
-      }
-
-      setMe(null);
       setEmployee(null);
-      setMeReady(false);
+      setEmployeeReady(false);
 
       if (!u) {
-        setMeReady(true);
+        setEmployeeReady(true);
         return;
       }
 
@@ -64,31 +41,19 @@ export default function Index() {
         }
       } catch (error) {
         console.warn("core-api auth failed:", error);
+      } finally {
+        setEmployeeReady(true);
       }
-
-      // 내 users 문서 구독 (Firestore - 과도기 유지)
-      unsubMeRef.current = onSnapshot(
-        doc(db, "users", u.uid),
-        (snap) => {
-          setMe(snap.exists() ? (snap.data() as any) : null);
-          setMeReady(true);
-        },
-        () => {
-          setMe(null);
-          setMeReady(true);
-        }
-      );
     });
 
     return () => {
       unsubAuth();
-      if (unsubMeRef.current) unsubMeRef.current();
     };
   }, []);
 
   useEffect(() => {
     if (redirected.current) return;
-    if (!authReady || !meReady) return;
+    if (!authReady || !employeeReady) return;
 
     const u = auth.currentUser;
     if (!u) {
@@ -99,45 +64,29 @@ export default function Index() {
       return;
     }
 
-    // ✅ Employee 기반 분기 (core-api 우선)
-    if (employee) {
-      // Employee status 확인
-      if (employee.status !== "ACTIVE") {
-        // PENDING/DISABLED → 대기 화면에서 처리
-        return;
-      }
-
-      // Employee role로 분기
-      const isAdmin = isAdminRole(employee.role);
-      const target = isAdmin ? "/admin" : "/staff";
-
-      if (pathname !== target) {
-        redirected.current = true;
-        router.replace(target);
-      }
+    // ✅ Employee 기반 분기
+    if (!employee) {
+      // Employee 정보 없음 → 회원가입 화면으로
       return;
     }
 
-    // ✅ Firestore 기반 분기 (과도기 - Employee 없을 때)
-    if (!me?.role || !me?.companyId) return;
-
-    // Multi-tenant: Check status instead of active
-    if (me.status !== "ACTIVE") {
-      // PENDING/REJECTED/DISABLED users stay here
+    // Employee status 확인
+    if (employee.status !== "ACTIVE") {
+      // PENDING/DISABLED → 대기 화면 표시
       return;
     }
 
-    // Multi-tenant: Admin roles are OWNER/MANAGER
-    const isAdmin = ["OWNER", "MANAGER"].includes(me.role);
+    // Employee role로 분기
+    const isAdmin = isAdminRole(employee.role);
     const target = isAdmin ? "/admin" : "/staff";
 
     if (pathname !== target) {
       redirected.current = true;
       router.replace(target);
     }
-  }, [authReady, meReady, me?.role, me?.status, me?.companyId, employee, pathname, router]);
+  }, [authReady, employeeReady, employee, pathname, router]);
 
-  if (!authReady || !meReady) {
+  if (!authReady || !employeeReady) {
     return (
       <View style={{ flex: 1, justifyContent: "center", alignItems: "center" }}>
         <ActivityIndicator />
@@ -145,9 +94,8 @@ export default function Index() {
     );
   }
 
-  // ✅ Employee 또는 Firestore 기반 승인대기 화면
-  const currentStatus = employee?.status || me?.status;
-  if (auth.currentUser && currentStatus && currentStatus !== "ACTIVE") {
+  // ✅ Employee 기반 승인대기 화면
+  if (auth.currentUser && employee && employee.status !== "ACTIVE") {
     const statusMessages: Record<string, string> = {
       PENDING: "관리자 승인 대기 중입니다.\n승인 후 앱을 사용할 수 있습니다.",
       REJECTED: "가입이 거부되었습니다.\n관리자에게 문의하세요.",
@@ -157,18 +105,15 @@ export default function Index() {
     return (
       <View style={{ flex: 1, justifyContent: "center", alignItems: "center", padding: 16, backgroundColor: "#0B0C10" }}>
         <Text style={{ textAlign: "center", fontSize: 16, color: "#E6E7EB" }}>
-          {statusMessages[currentStatus] || "계정 상태를 확인 중입니다."}
+          {statusMessages[employee.status] || "계정 상태를 확인 중입니다."}
         </Text>
-        {employee && (
-          <Text style={{ textAlign: "center", fontSize: 12, color: "#A9AFBC", marginTop: 8 }}>
-            {employee.name} ({employee.role})
-          </Text>
-        )}
+        <Text style={{ textAlign: "center", fontSize: 12, color: "#A9AFBC", marginTop: 8 }}>
+          {employee.name} ({employee.role})
+        </Text>
       </View>
     );
   }
 
-  // 곧 replace 됨
   return (
     <View style={{ flex: 1, justifyContent: "center", alignItems: "center" }}>
       <ActivityIndicator />

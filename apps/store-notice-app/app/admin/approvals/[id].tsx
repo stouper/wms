@@ -17,17 +17,15 @@ import { useRouter, useLocalSearchParams } from "expo-router";
 import { auth } from "../../../firebaseConfig";
 import { Card } from "../../../components/ui/Card";
 import {
-  APPROVAL_TYPE_LABELS,
-  APPROVAL_STATUS_LABELS,
-  APPROVAL_STATUS_COLORS,
-} from "../../../lib/approvalTypes";
-import {
   getApproval,
   processApproval,
   authenticateWithCoreApi,
   ApprovalInfo,
   ApproverInfo,
   EmployeeInfo,
+  APPROVAL_TYPE_LABELS,
+  APPROVAL_STATUS_LABELS,
+  APPROVAL_STATUS_COLORS,
 } from "../../../lib/authApi";
 
 export default function ApprovalDetailPage() {

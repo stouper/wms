@@ -1,7 +1,7 @@
 // app/staff/board/new.tsx
-// 직원용 게시판 글 작성 페이지
+// 직원용 게시판 글 작성 페이지 - PostgreSQL 기반
 
-import React, { useEffect, useState } from "react";
+import React, { useState } from "react";
 import {
   View,
   ScrollView,
@@ -17,10 +17,10 @@ import { useRouter } from "expo-router";
 import { SafeAreaView } from "react-native-safe-area-context";
 import * as ImagePicker from "expo-image-picker";
 import * as DocumentPicker from "expo-document-picker";
-import { collection, addDoc, serverTimestamp, doc, onSnapshot } from "firebase/firestore";
-import { auth, db } from "../../../firebaseConfig";
+import { auth } from "../../../firebaseConfig";
 import Card from "../../../components/ui/Card";
 import { uploadFile } from "../../../lib/uploadFile";
+import { createBoardPost, FileAttachment } from "../../../lib/authApi";
 
 interface AttachedFile {
   name: string;
@@ -37,25 +37,6 @@ export default function StaffBoardNew() {
   const [files, setFiles] = useState<AttachedFile[]>([]);
   const [uploading, setUploading] = useState(false);
   const [uploadProgress, setUploadProgress] = useState(0);
-  const [myCompanyId, setMyCompanyId] = useState<string | null>(null);
-  const [myName, setMyName] = useState<string>("");
-
-  useEffect(() => {
-    const uid = auth.currentUser?.uid;
-    if (!uid) return;
-
-    const unsub = onSnapshot(doc(db, "users", uid), (snap) => {
-      if (snap.exists()) {
-        const data = snap.data();
-        setMyCompanyId(data?.companyId || null);
-        setMyName(data?.name || "익명");
-      }
-    });
-
-    return () => {
-      unsub();
-    };
-  }, []);
 
   const pickImages = async () => {
     const { status } = await ImagePicker.requestMediaLibraryPermissionsAsync();
@@ -118,13 +99,7 @@ export default function StaffBoardNew() {
       return;
     }
 
-    if (!myCompanyId) {
-      Alert.alert("오류", "회사 정보를 불러오는 중입니다.");
-      return;
-    }
-
-    const uid = auth.currentUser?.uid;
-    if (!uid) {
+    if (!auth.currentUser) {
       Alert.alert("오류", "로그인 정보를 확인해주세요.");
       return;
     }
@@ -134,15 +109,16 @@ export default function StaffBoardNew() {
 
     try {
       const uploadedImageUrls: string[] = [];
-      const uploadedFiles: Array<{ name: string; url: string; type: string; size: number }> = [];
+      const uploadedFiles: FileAttachment[] = [];
 
+      // 이미지 업로드 (Firebase Storage)
       if (images.length > 0) {
         for (let i = 0; i < images.length; i++) {
           const imageUri = images[i];
           const fileName = `${Date.now()}_${i}.jpg`;
           const result = await uploadFile(
             imageUri,
-            `board/${myCompanyId}/images`,
+            `board/images`,
             fileName,
             (progress) => {
               const totalProgress =
@@ -154,13 +130,14 @@ export default function StaffBoardNew() {
         }
       }
 
+      // 파일 업로드 (Firebase Storage)
       if (files.length > 0) {
         for (let i = 0; i < files.length; i++) {
           const file = files[i];
           const fileName = `${Date.now()}_${file.name}`;
           const result = await uploadFile(
             file.uri,
-            `board/${myCompanyId}/files`,
+            `board/files`,
             fileName,
             (progress) => {
               const totalProgress =
@@ -177,23 +154,24 @@ export default function StaffBoardNew() {
         }
       }
 
-      await addDoc(collection(db, "boardPosts"), {
+      // PostgreSQL에 게시글 생성
+      const result = await createBoardPost({
         title: title.trim(),
         content: content.trim(),
-        authorId: uid,
-        authorName: myName,
-        companyId: myCompanyId,
-        images: uploadedImageUrls,
-        files: uploadedFiles,
-        createdAt: serverTimestamp(),
+        images: uploadedImageUrls.length > 0 ? uploadedImageUrls : undefined,
+        files: uploadedFiles.length > 0 ? uploadedFiles : undefined,
       });
 
-      Alert.alert("완료", "게시글이 작성되었습니다.", [
-        {
-          text: "확인",
-          onPress: () => router.push("/staff/board"),
-        },
-      ]);
+      if (result.success) {
+        Alert.alert("완료", "게시글이 작성되었습니다.", [
+          {
+            text: "확인",
+            onPress: () => router.push("/staff/board"),
+          },
+        ]);
+      } else {
+        Alert.alert("오류", result.error ?? "게시글 저장에 실패했습니다.");
+      }
     } catch (error) {
       console.error("Save error:", error);
       Alert.alert("오류", "게시글 저장에 실패했습니다.");

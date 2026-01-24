@@ -1,6 +1,6 @@
 # ESKA WMS & Store Notice App - 통합 문서
 
-> 최종 업데이트: 2026-01-24
+> 최종 업데이트: 2026-01-25
 
 ---
 
@@ -123,10 +123,10 @@ ssh -i ~/.ssh/LightsailDefaultKey-ap-northeast-2.pem ubuntu@13.125.126.15 \
 | 부서 관리 | PostgreSQL Department | ✅ 완료 |
 | 매장 관리 | PostgreSQL Store | ✅ 완료 |
 | 재고 조회 | PostgreSQL (WMS API) | ✅ 완료 |
-| 게시판 | Firebase boardPosts | 마이그레이션 예정 |
-| 달력 | Firebase events | 마이그레이션 예정 |
-| 결재 | Firebase approvals | 마이그레이션 예정 |
-| 공지발송 | Firebase messages | 마이그레이션 예정 |
+| 달력 | PostgreSQL Event | ✅ 완료 |
+| 게시판 | PostgreSQL BoardPost | ✅ 완료 |
+| 공지발송 | PostgreSQL Message/Receipt | ✅ 완료 |
+| 결재 | PostgreSQL Approval | ✅ 완료 |
 
 ### 4.3 역할별 기능
 
@@ -211,7 +211,7 @@ App 로그인 → Firebase Auth → core-api로 idToken 전송 → PostgreSQL Em
 
 ## 7. 아키텍처 현황 및 로드맵
 
-### 7.1 완료된 작업 (MVP 7단계)
+### 7.1 완료된 작업
 
 | 단계 | 작업 | 상태 |
 |------|------|:----:|
@@ -223,10 +223,13 @@ App 로그인 → Firebase Auth → core-api로 idToken 전송 → PostgreSQL Em
 | 6 | role별 화면 분기 | ✅ |
 | 7 | 푸시토큰 연동 | ✅ |
 | 8 | 부서/매장 관리 PostgreSQL 전환 | ✅ |
+| 9 | 달력 Firebase → PostgreSQL 마이그레이션 | ✅ |
+| 10 | 게시판 Firebase → PostgreSQL 마이그레이션 | ✅ |
+| 11 | 공지발송 Firebase → PostgreSQL 마이그레이션 | ✅ |
+| 12 | 결재 Firebase → PostgreSQL 마이그레이션 | ✅ |
 
-### 7.2 Firebase → PostgreSQL 마이그레이션 계획
+### 7.2 현재 아키텍처
 
-#### 현재 상태
 ```
 ┌─────────────┐     ┌─────────────┐
 │   Desktop   │────▶│  PostgreSQL │  (WMS: 재고/출고/매장/부서/직원)
@@ -234,113 +237,24 @@ App 로그인 → Firebase Auth → core-api로 idToken 전송 → PostgreSQL Em
 
 ┌─────────────┐     ┌─────────────┐     ┌─────────────┐
 │     App     │────▶│  PostgreSQL │ +   │  Firebase   │
-└─────────────┘     │ (인증/매장)  │     │(게시판/달력)│
+└─────────────┘     │ (모든 데이터)│     │ (Auth만)    │
                     └─────────────┘     └─────────────┘
 ```
 
-#### 마이그레이션 대상
+**Firebase 역할**: 사용자 인증(Auth)만 담당
+**PostgreSQL 역할**: 모든 비즈니스 데이터 (직원, 매장, 부서, 달력, 게시판, 공지, 결재)
 
-| 기능 | 현재 | 이전 후 | 난이도 | 실시간 필요 |
-|------|------|---------|:------:|:-----------:|
-| 달력 | Firebase events | PostgreSQL Event | ⭐ | X |
-| 게시판 | Firebase boardPosts | PostgreSQL BoardPost | ⭐⭐ | △ |
-| 공지발송 | Firebase messages | PostgreSQL Message | ⭐⭐ | X |
-| 결재 | Firebase approvals | PostgreSQL Approval | ⭐⭐⭐ | O |
+### 7.3 추가된 테이블 (PostgreSQL)
 
-#### 실시간 대안 (Firebase 제거 시)
-
-| 방식 | 장점 | 단점 |
-|------|------|------|
-| Polling (5초) | 구현 쉬움 | 배터리/트래픽 소모 |
-| WebSocket | 진짜 실시간 | 서버 복잡도 증가 |
-| 푸시알림 | 인프라 있음 | 잦은 알림 부적합 |
-
-**권장**: Polling + 새글/상태변경 시 푸시알림
-
-#### 푸시알림 구현 방안 (PostgreSQL 전환 시)
-
-```typescript
-// core-api에서 Expo Push API 직접 호출
-await fetch('https://exp.host/--/api/v2/push/send', {
-  method: 'POST',
-  headers: { 'Content-Type': 'application/json' },
-  body: JSON.stringify({
-    to: employee.pushToken,
-    title: '새 공지',
-    body: '내용...',
-  }),
-});
-```
-
-- 대량 발송: 100개씩 배치 처리 필요
-- 실패 재시도: 작업 큐(Bull 등) 도입 권장
-
-#### 마이그레이션 우선순위
-
-1. **달력** - 가장 쉬움, 실시간 불필요
-2. **게시판** - Polling 방식으로 충분
-3. **공지발송** - 푸시 서비스와 함께
-4. **결재** - 가장 복잡, 마지막
-
-### 7.3 예정 테이블 (PostgreSQL)
-
-```sql
--- 달력
-CREATE TABLE events (
-  id UUID PRIMARY KEY,
-  title VARCHAR,
-  description TEXT,
-  date DATE,
-  created_by UUID REFERENCES employees(id)
-);
-
--- 게시판
-CREATE TABLE board_posts (
-  id UUID PRIMARY KEY,
-  title VARCHAR,
-  content TEXT,
-  author_id UUID REFERENCES employees(id),
-  created_at TIMESTAMP
-);
-
--- 공지
-CREATE TABLE messages (
-  id UUID PRIMARY KEY,
-  title VARCHAR,
-  body TEXT,
-  sender_id UUID,
-  target_type VARCHAR, -- ALL, STORE, DEPARTMENT
-  target_ids TEXT[],
-  created_at TIMESTAMP
-);
-
-CREATE TABLE message_receipts (
-  id UUID PRIMARY KEY,
-  message_id UUID REFERENCES messages(id),
-  recipient_id UUID REFERENCES employees(id),
-  read BOOLEAN DEFAULT FALSE,
-  read_at TIMESTAMP
-);
-
--- 결재
-CREATE TABLE approvals (
-  id UUID PRIMARY KEY,
-  title VARCHAR,
-  content TEXT,
-  author_id UUID,
-  status VARCHAR, -- PENDING, APPROVED, REJECTED
-  created_at TIMESTAMP
-);
-
-CREATE TABLE approval_steps (
-  id UUID PRIMARY KEY,
-  approval_id UUID REFERENCES approvals(id),
-  approver_id UUID REFERENCES employees(id),
-  step_order INT,
-  status VARCHAR,
-  acted_at TIMESTAMP
-);
-```
+| 모델 | 설명 |
+|------|------|
+| Event | 달력 이벤트 |
+| BoardPost | 게시판 글 |
+| Message | 공지 메시지 |
+| Receipt | 공지 수신/읽음 기록 |
+| Approval | 결재 문서 |
+| ApprovalApprover | 결재 승인자 |
+| ApprovalAttachment | 결재 첨부파일 |
 
 ---
 
@@ -352,13 +266,14 @@ CREATE TABLE approval_steps (
 
 ---
 
-**마지막 업데이트**: 2026-01-24
+**마지막 업데이트**: 2026-01-25
 **작성**: Claude Code
 
 ---
 
 <!--
-작업 이력 (2026-01-24 이전):
+작업 이력:
+- 2026-01-25: Firebase → PostgreSQL 마이그레이션 완료 (달력, 게시판, 공지, 결재)
 - 2026-01-24: MVP 7단계 완료, 부서/매장 PostgreSQL 전환, 승인대기 화면 개선
 - 2026-01-22: 매장 Excel 일괄 등록, 재고 조정/초기화
 - 2026-01-20: Multi-Tenant 리팩토링, Firebase Functions

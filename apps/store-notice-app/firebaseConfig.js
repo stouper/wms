@@ -1,6 +1,5 @@
 // firebaseConfig.ts
 import { initializeApp, getApps } from "firebase/app";
-import { getFirestore } from "firebase/firestore";
 import {
   initializeAuth,
   getAuth,
@@ -37,5 +36,4 @@ export const auth =
         }
       })();
 
-export const db = getFirestore(app);
 export const storage = getStorage(app);

@@ -1,6 +1,5 @@
 // app/staff/sales/index.tsx
-// ✅ PostgreSQL 연동: 매장 목록은 core-api에서 가져옴
-// 직원용 매출등록 페이지
+// ✅ PostgreSQL 연동: 매출 등록 (자기 소속 매장만)
 
 import React, { useEffect, useState, useCallback } from "react";
 import {
@@ -12,217 +11,222 @@ import {
   FlatList,
   TextInput,
   Modal,
+  Alert,
+  ActivityIndicator,
 } from "react-native";
 import { useRouter } from "expo-router";
-import { doc, onSnapshot, collection, query, where, addDoc, updateDoc, deleteDoc, serverTimestamp } from "firebase/firestore";
-import { auth, db } from "../../../firebaseConfig";
-import Card from "../../../components/ui/Card";
 import { SafeAreaView } from "react-native-safe-area-context";
-import { getStores, StoreInfo } from "../../../lib/authApi";
-
-interface SalesRecord {
-  id: string;
-  companyId: string;
-  storeId: string;
-  storeName: string;
-  date: string;
-  amount: number;
-  category?: string;
-  description?: string;
-  registeredBy?: string;
-  createdAt: any;
-  updatedAt: any;
-}
+import Card from "../../../components/ui/Card";
+import {
+  getSalesList,
+  createSale,
+  updateSale,
+  deleteSale,
+  SalesRecordInfo,
+  authenticateWithCoreApi,
+  EmployeeInfo,
+} from "../../../lib/authApi";
 
 export default function StaffSalesPage() {
   const router = useRouter();
-  const [myCompanyId, setMyCompanyId] = useState<string | null>(null);
-  const [companyName, setCompanyName] = useState("");
-  const [salesRecords, setSalesRecords] = useState<SalesRecord[]>([]);
-  const [filteredSalesRecords, setFilteredSalesRecords] = useState<SalesRecord[]>([]);
+  const [myEmployee, setMyEmployee] = useState<EmployeeInfo | null>(null);
+  const [salesRecords, setSalesRecords] = useState<SalesRecordInfo[]>([]);
+  const [filteredSalesRecords, setFilteredSalesRecords] = useState<SalesRecordInfo[]>([]);
   const [loading, setLoading] = useState(true);
   const [searchText, setSearchText] = useState("");
   const [selectedDate, setSelectedDate] = useState(
     new Date().toISOString().split("T")[0]
   );
   const [showAddModal, setShowAddModal] = useState(false);
-  const [editingRecord, setEditingRecord] = useState<SalesRecord | null>(null);
+  const [editingRecord, setEditingRecord] = useState<SalesRecordInfo | null>(null);
 
   // Form fields
-  const [selectedStore, setSelectedStore] = useState("");
   const [saleDate, setSaleDate] = useState(
     new Date().toISOString().split("T")[0]
   );
   const [amount, setAmount] = useState("");
   const [category, setCategory] = useState("일반");
   const [description, setDescription] = useState("");
-  const [stores, setStores] = useState<StoreInfo[]>([]);
 
-  // PostgreSQL에서 매장 목록 가져오기
-  const loadStores = useCallback(async () => {
-    try {
-      const data = await getStores();
-      // 본사(isHq=true) 제외
-      const regularStores = data.filter((s) => !s.isHq);
-      setStores(regularStores);
-      if (regularStores.length > 0 && !selectedStore) {
-        setSelectedStore(regularStores[0].id);
-      }
-    } catch (e: any) {
-      console.error("매장 목록 로드 실패:", e);
-    }
-  }, [selectedStore]);
-
+  // 내 직원 정보 가져오기
   useEffect(() => {
-    loadStores();
-  }, []);
+    const loadMyInfo = async () => {
+      try {
+        const result = await authenticateWithCoreApi();
+        if (result.success && result.employee) {
+          setMyEmployee(result.employee);
 
-  useEffect(() => {
-    const uid = auth.currentUser?.uid;
-    if (!uid) return;
-
-    let unsubCompany: (() => void) | undefined;
-    let unsubSales: (() => void) | undefined;
-
-    const unsubUser = onSnapshot(doc(db, "users", uid), async (userSnap) => {
-      if (userSnap.exists()) {
-        const companyId = (userSnap.data() as any)?.companyId;
-        if (!companyId) return;
-
-        setMyCompanyId(companyId);
-
-        unsubCompany = onSnapshot(doc(db, "companies", companyId), (companySnap) => {
-          if (companySnap.exists()) {
-            setCompanyName((companySnap.data() as any)?.name || "");
+          // 본사 직원이면 매출 등록 불가
+          if (result.employee.isHq) {
+            Alert.alert("안내", "매장 직원만 매출을 등록할 수 있습니다.");
           }
-        });
-
-        const salesQuery = query(
-          collection(db, "sales"),
-          where("companyId", "==", companyId)
-        );
-        unsubSales = onSnapshot(salesQuery, (snapshot) => {
-          const records: SalesRecord[] = [];
-          snapshot.forEach((doc) => {
-            records.push({ id: doc.id, ...doc.data() } as SalesRecord);
-          });
-          setSalesRecords(records);
-          setLoading(false);
-        });
+        }
+      } catch (error) {
+        console.error("직원 정보 로드 실패:", error);
       }
-    });
-
-    return () => {
-      unsubUser();
-      unsubCompany?.();
-      unsubSales?.();
     };
+    loadMyInfo();
   }, []);
 
+  // PostgreSQL에서 매출 목록 가져오기 (내 매장만)
+  const loadSales = useCallback(async () => {
+    if (!myEmployee?.storeCode) return;
+
+    setLoading(true);
+    try {
+      // 내 매장 매출만 조회
+      const data = await getSalesList(myEmployee.storeCode);
+      setSalesRecords(data);
+    } catch (error) {
+      console.error("매출 목록 로드 실패:", error);
+      Alert.alert("오류", "매출 목록을 불러오는데 실패했습니다.");
+    } finally {
+      setLoading(false);
+    }
+  }, [myEmployee?.storeCode]);
+
+  useEffect(() => {
+    if (myEmployee?.storeCode) {
+      loadSales();
+    }
+  }, [myEmployee?.storeCode]);
+
+  // 검색 및 필터링
   useEffect(() => {
     let filtered = salesRecords;
 
+    // 날짜 필터 (saleDate를 YYYY-MM-DD로 변환)
     if (selectedDate) {
-      filtered = filtered.filter((record) => record.date === selectedDate);
+      filtered = filtered.filter((record) => {
+        const recordDate = new Date(record.saleDate).toISOString().split("T")[0];
+        return recordDate === selectedDate;
+      });
     }
 
+    // 검색어 필터
     if (searchText) {
       filtered = filtered.filter(
         (record) =>
-          record.storeName.toLowerCase().includes(searchText.toLowerCase()) ||
-          record.category?.toLowerCase().includes(searchText.toLowerCase())
+          record.productType?.toLowerCase().includes(searchText.toLowerCase()) ||
+          record.codeName?.toLowerCase().includes(searchText.toLowerCase())
       );
     }
 
     setFilteredSalesRecords(filtered);
   }, [searchText, salesRecords, selectedDate]);
 
+  // 매출 추가/수정
   const handleSave = async () => {
-    if (!myCompanyId || !selectedStore || !amount || !saleDate) {
-      alert("필수 정보를 모두 입력하세요");
+    if (!myEmployee?.storeCode) {
+      Alert.alert("오류", "직원 정보를 확인해주세요.");
       return;
     }
 
-    const store = stores.find((s) => s.id === selectedStore);
-    const storeName = store?.name || store?.code || "";
-    const uid = auth.currentUser?.uid;
+    if (myEmployee.isHq) {
+      Alert.alert("권한 없음", "본사 직원은 매출을 등록할 수 없습니다.");
+      return;
+    }
+
+    if (!amount || !saleDate) {
+      Alert.alert("확인", "필수 정보를 모두 입력하세요");
+      return;
+    }
 
     try {
       if (editingRecord) {
-        await updateDoc(doc(db, "sales", editingRecord.id), {
-          storeId: selectedStore,
-          storeName,
-          date: saleDate,
+        // 기존 항목 수정
+        await updateSale(editingRecord.id, {
+          storeCode: myEmployee.storeCode,
+          storeName: myEmployee.storeName || undefined,
+          saleDate,
           amount: parseInt(amount),
-          category,
-          description,
-          updatedAt: serverTimestamp(),
+          productType: category !== "일반" ? category : undefined,
+          codeName: description || undefined,
+          qty: 1,
         });
+        Alert.alert("완료", "매출이 수정되었습니다.");
       } else {
-        await addDoc(collection(db, "sales"), {
-          companyId: myCompanyId,
-          storeId: selectedStore,
-          storeName,
-          date: saleDate,
+        // 새 항목 추가
+        await createSale({
+          storeCode: myEmployee.storeCode,
+          storeName: myEmployee.storeName || undefined,
+          saleDate,
           amount: parseInt(amount),
-          category,
-          description,
-          registeredBy: uid,
-          createdAt: serverTimestamp(),
-          updatedAt: serverTimestamp(),
+          productType: category !== "일반" ? category : undefined,
+          codeName: description || undefined,
+          qty: 1,
         });
+        Alert.alert("완료", "매출이 등록되었습니다.");
       }
 
+      // 폼 초기화 및 목록 새로고침
       setShowAddModal(false);
       setEditingRecord(null);
       setAmount("");
       setCategory("일반");
       setDescription("");
       setSaleDate(new Date().toISOString().split("T")[0]);
-      if (stores.length > 0 && !selectedStore) {
-        setSelectedStore(stores[0].id);
-      }
+      loadSales();
     } catch (error) {
       console.error("저장 실패:", error);
-      alert("저장에 실패했습니다");
+      Alert.alert("오류", "저장에 실패했습니다");
     }
   };
 
+  // 매출 삭제
   const handleDelete = async (id: string) => {
-    if (confirm("정말 삭제하시겠습니까?")) {
-      try {
-        await deleteDoc(doc(db, "sales", id));
-      } catch (error) {
-        console.error("삭제 실패:", error);
-        alert("삭제에 실패했습니다");
-      }
-    }
+    Alert.alert("삭제 확인", "정말 삭제하시겠습니까?", [
+      { text: "취소", style: "cancel" },
+      {
+        text: "삭제",
+        style: "destructive",
+        onPress: async () => {
+          try {
+            await deleteSale(id);
+            Alert.alert("완료", "매출이 삭제되었습니다.");
+            loadSales();
+          } catch (error) {
+            console.error("삭제 실패:", error);
+            Alert.alert("오류", "삭제에 실패했습니다");
+          }
+        },
+      },
+    ]);
   };
 
-  const handleEdit = (record: SalesRecord) => {
+  // 수정 모드 열기
+  const handleEdit = (record: SalesRecordInfo) => {
     setEditingRecord(record);
-    setSelectedStore(record.storeId);
     setAmount(record.amount.toString());
-    setSaleDate(record.date);
-    setCategory(record.category || "일반");
-    setDescription(record.description || "");
+    setSaleDate(new Date(record.saleDate).toISOString().split("T")[0]);
+    setCategory(record.productType || "일반");
+    setDescription(record.codeName || "");
     setShowAddModal(true);
   };
 
+  // 추가 모드 열기
   const handleOpenAdd = () => {
+    if (myEmployee?.isHq) {
+      Alert.alert("권한 없음", "본사 직원은 매출을 등록할 수 없습니다.");
+      return;
+    }
+
+    if (!myEmployee?.storeCode) {
+      Alert.alert("오류", "소속 매장 정보가 없습니다.");
+      return;
+    }
+
     setEditingRecord(null);
     setAmount("");
     setCategory("일반");
     setDescription("");
     setSaleDate(new Date().toISOString().split("T")[0]);
-    if (stores.length > 0) {
-      setSelectedStore(stores[0].id);
-    }
     setShowAddModal(true);
   };
 
+  // 날짜 표시 형식
   const formatDate = (dateStr: string) => {
-    const date = new Date(dateStr + "T00:00:00");
+    const date = new Date(dateStr);
     return date.toLocaleDateString("ko-KR", {
       month: "numeric",
       day: "numeric",
@@ -230,32 +234,36 @@ export default function StaffSalesPage() {
     });
   };
 
+  // 금액 포맷팅
   const formatAmount = (num: number) => {
     return num.toLocaleString("ko-KR");
   };
 
+  // 일별 매출합계 계산
   const getDailySalesTotal = (date: string) => {
     return filteredSalesRecords
-      .filter((r) => r.date === date)
+      .filter((r) => {
+        const recordDate = new Date(r.saleDate).toISOString().split("T")[0];
+        return recordDate === date;
+      })
       .reduce((sum, r) => sum + r.amount, 0);
   };
 
-  const SalesCard = ({ record }: { record: SalesRecord }) => (
+  const SalesCard = ({ record }: { record: SalesRecordInfo }) => (
     <Pressable
       onPress={() => handleEdit(record)}
       style={styles.salesCard}
     >
       <View style={styles.salesHeader}>
         <View style={{ flex: 1 }}>
-          <Text style={styles.storeName}>{record.storeName}</Text>
-          {record.description && (
+          {record.codeName && (
             <Text style={styles.description} numberOfLines={1}>
-              {record.description}
+              {record.codeName}
             </Text>
           )}
-          {record.category && record.category !== "일반" && (
+          {record.productType && record.productType !== "일반" && (
             <View style={styles.categoryBadge}>
-              <Text style={styles.categoryText}>{record.category}</Text>
+              <Text style={styles.categoryText}>{record.productType}</Text>
             </View>
           )}
         </View>
@@ -273,22 +281,64 @@ export default function StaffSalesPage() {
     </Pressable>
   );
 
-  const groupedByDate = new Map<string, SalesRecord[]>();
+  // 일별 그룹화
+  const groupedByDate = new Map<string, SalesRecordInfo[]>();
   filteredSalesRecords.forEach((record) => {
-    if (!groupedByDate.has(record.date)) {
-      groupedByDate.set(record.date, []);
+    const recordDate = new Date(record.saleDate).toISOString().split("T")[0];
+    if (!groupedByDate.has(recordDate)) {
+      groupedByDate.set(recordDate, []);
     }
-    groupedByDate.get(record.date)!.push(record);
+    groupedByDate.get(recordDate)!.push(record);
   });
   const sortedDates = Array.from(groupedByDate.keys()).sort().reverse();
+
+  // 본사 직원이거나 매장 정보 없으면 안내 표시
+  if (!myEmployee) {
+    return (
+      <SafeAreaView style={styles.safe} edges={["top"]}>
+        <View style={styles.header}>
+          <Pressable onPress={() => router.back()}>
+            <Text style={styles.backButton}>‹</Text>
+          </Pressable>
+          <Text style={styles.headerTitle}>매출등록</Text>
+          <View style={{ width: 24 }} />
+        </View>
+        <View style={styles.loadingBox}>
+          <ActivityIndicator color="#1E5BFF" />
+          <Text style={styles.loadingText}>직원 정보 불러오는 중...</Text>
+        </View>
+      </SafeAreaView>
+    );
+  }
+
+  if (myEmployee.isHq || !myEmployee.storeCode) {
+    return (
+      <SafeAreaView style={styles.safe} edges={["top"]}>
+        <View style={styles.header}>
+          <Pressable onPress={() => router.back()}>
+            <Text style={styles.backButton}>‹</Text>
+          </Pressable>
+          <Text style={styles.headerTitle}>매출등록</Text>
+          <View style={{ width: 24 }} />
+        </View>
+        <View style={styles.loadingBox}>
+          <Text style={styles.errorText}>
+            {myEmployee.isHq
+              ? "본사 직원은 매출을 등록할 수 없습니다."
+              : "소속 매장 정보가 없습니다."}
+          </Text>
+        </View>
+      </SafeAreaView>
+    );
+  }
 
   return (
     <SafeAreaView style={styles.safe} edges={["top"]}>
       <View style={styles.header}>
-        <Pressable onPress={() => router.push("/staff")}>
+        <Pressable onPress={() => router.back()}>
           <Text style={styles.backButton}>‹</Text>
         </Pressable>
-        <Text style={styles.headerTitle}>매출등록</Text>
+        <Text style={styles.headerTitle}>매출등록 - {myEmployee.storeName}</Text>
         <View style={{ width: 24 }} />
       </View>
 
@@ -302,7 +352,7 @@ export default function StaffSalesPage() {
         />
         <TextInput
           style={[styles.dateInput, { flex: 1 }]}
-          placeholder="매장 또는 카테고리 검색..."
+          placeholder="카테고리 또는 설명 검색..."
           placeholderTextColor="#64748b"
           value={searchText}
           onChangeText={setSearchText}
@@ -337,9 +387,12 @@ export default function StaffSalesPage() {
         </View>
       </View>
 
-      <View style={{ flex: 1, paddingHorizontal: 16, paddingBottom: 100 }}>
+      <View style={{ flex: 1, paddingHorizontal: 16, paddingBottom: 20 }}>
         {loading ? (
-          <Text style={styles.loadingText}>로딩 중...</Text>
+          <View style={styles.loadingBox}>
+            <ActivityIndicator color="#1E5BFF" />
+            <Text style={styles.loadingText}>로딩 중...</Text>
+          </View>
         ) : filteredSalesRecords.length === 0 ? (
           <Text style={styles.emptyText}>
             {searchText || selectedDate
@@ -398,33 +451,15 @@ export default function StaffSalesPage() {
             contentContainerStyle={styles.modalContent}
             keyboardShouldPersistTaps="handled"
           >
+            {/* 매장 정보 표시 (변경 불가) */}
             <Card>
               <Text style={styles.formLabel}>매장</Text>
-              <View style={styles.storeSelect}>
-                {stores.map((store) => (
-                  <Pressable
-                    key={store.id}
-                    onPress={() => setSelectedStore(store.id)}
-                    style={[
-                      styles.storeOption,
-                      selectedStore === store.id &&
-                        styles.storeOptionSelected,
-                    ]}
-                  >
-                    <Text
-                      style={[
-                        styles.storeOptionText,
-                        selectedStore === store.id &&
-                          styles.storeOptionTextSelected,
-                      ]}
-                    >
-                      {store.name || store.code}
-                    </Text>
-                  </Pressable>
-                ))}
+              <View style={styles.storeInfoBox}>
+                <Text style={styles.storeInfoText}>{myEmployee.storeName}</Text>
               </View>
             </Card>
 
+            {/* 날짜 */}
             <Card>
               <Text style={styles.formLabel}>날짜</Text>
               <TextInput
@@ -436,6 +471,7 @@ export default function StaffSalesPage() {
               />
             </Card>
 
+            {/* 매출액 */}
             <Card>
               <Text style={styles.formLabel}>매출액</Text>
               <View style={styles.amountInputContainer}>
@@ -451,6 +487,7 @@ export default function StaffSalesPage() {
               </View>
             </Card>
 
+            {/* 카테고리 */}
             <Card>
               <Text style={styles.formLabel}>카테고리</Text>
               <View style={styles.categorySelect}>
@@ -476,6 +513,7 @@ export default function StaffSalesPage() {
               </View>
             </Card>
 
+            {/* 설명 */}
             <Card>
               <Text style={styles.formLabel}>설명 (선택사항)</Text>
               <TextInput
@@ -491,27 +529,6 @@ export default function StaffSalesPage() {
           </ScrollView>
         </SafeAreaView>
       </Modal>
-
-      {/* 하단 네비게이션 바 */}
-      <SafeAreaView edges={["bottom"]} style={styles.bottomNavContainer}>
-        <View style={styles.bottomNav}>
-          <Pressable
-            onPress={() => router.push("/staff")}
-            style={styles.navButton}
-          >
-            <Text style={styles.navIcon}>🏠</Text>
-            <Text style={styles.navText}>홈</Text>
-          </Pressable>
-
-          <Pressable
-            onPress={() => router.push("/staff/settings")}
-            style={styles.navButton}
-          >
-            <Text style={styles.navIcon}>⚙️</Text>
-            <Text style={styles.navText}>설정</Text>
-          </Pressable>
-        </View>
-      </SafeAreaView>
     </SafeAreaView>
   );
 }
@@ -581,11 +598,22 @@ const styles = StyleSheet.create({
     fontSize: 14,
     fontWeight: "700",
   },
+  loadingBox: {
+    alignItems: "center",
+    justifyContent: "center",
+    gap: 8,
+    paddingVertical: 40,
+  },
   loadingText: {
     color: "#64748b",
     fontSize: 14,
     textAlign: "center",
-    marginTop: 20,
+  },
+  errorText: {
+    color: "#EF4444",
+    fontSize: 16,
+    fontWeight: "600",
+    textAlign: "center",
   },
   emptyText: {
     color: "#64748b",
@@ -627,16 +655,10 @@ const styles = StyleSheet.create({
     alignItems: "flex-start",
     marginBottom: 8,
   },
-  storeName: {
+  description: {
     color: "#E6E7EB",
     fontSize: 14,
     fontWeight: "600",
-    marginBottom: 2,
-  },
-  description: {
-    color: "#A9AFBC",
-    fontSize: 12,
-    fontWeight: "400",
     marginBottom: 4,
   },
   categoryBadge: {
@@ -678,7 +700,7 @@ const styles = StyleSheet.create({
   },
   fab: {
     position: "absolute",
-    bottom: 80,
+    bottom: 24,
     right: 16,
     width: 56,
     height: 56,
@@ -751,30 +773,18 @@ const styles = StyleSheet.create({
     textAlignVertical: "top",
     paddingTop: 10,
   },
-  storeSelect: {
-    flexDirection: "row",
-    gap: 8,
-    flexWrap: "wrap",
-  },
-  storeOption: {
-    paddingHorizontal: 12,
-    paddingVertical: 8,
-    borderRadius: 6,
-    backgroundColor: "#0B0C10",
+  storeInfoBox: {
+    backgroundColor: "#1A1D24",
     borderWidth: 1,
     borderColor: "#2A2F3A",
+    borderRadius: 8,
+    paddingHorizontal: 12,
+    paddingVertical: 10,
   },
-  storeOptionSelected: {
-    backgroundColor: "#1E5BFF",
-    borderColor: "#1E5BFF",
-  },
-  storeOptionText: {
+  storeInfoText: {
     color: "#A9AFBC",
-    fontSize: 12,
-    fontWeight: "500",
-  },
-  storeOptionTextSelected: {
-    color: "#fff",
+    fontSize: 14,
+    fontWeight: "600",
   },
   amountInputContainer: {
     position: "relative",
@@ -811,37 +821,5 @@ const styles = StyleSheet.create({
   },
   categoryOptionTextSelected: {
     color: "#fff",
-  },
-
-  bottomNavContainer: {
-    position: "absolute",
-    bottom: 0,
-    left: 0,
-    right: 0,
-    backgroundColor: "#1A1D24",
-  },
-  bottomNav: {
-    flexDirection: "row",
-    backgroundColor: "#1A1D24",
-    borderTopWidth: 1,
-    borderTopColor: "#2A2F3A",
-    paddingVertical: 4,
-    paddingHorizontal: 16,
-  },
-  navButton: {
-    flex: 1,
-    alignItems: "center",
-    paddingVertical: 4,
-  },
-  navIcon: {
-    fontSize: 16,
-    marginBottom: 2,
-    opacity: 0.5,
-  },
-  navText: {
-    color: "#A9AFBC",
-    fontSize: 9,
-    fontWeight: "600",
-    opacity: 0.5,
   },
 });

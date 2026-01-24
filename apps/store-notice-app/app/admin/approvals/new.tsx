@@ -19,20 +19,18 @@ import { SafeAreaView } from "react-native-safe-area-context";
 import { auth } from "../../../firebaseConfig";
 import Card from "../../../components/ui/Card";
 import {
-  ApprovalType,
-  APPROVAL_TYPE_LABELS,
-  VacationDetails,
-  ExpenseDetails,
-  ReportDetails,
-  ApprovalAttachment,
-} from "../../../lib/approvalTypes";
-import {
   getEmployees,
   authenticateWithCoreApi,
   createApproval,
   ApproverInput,
   ApprovalAttachmentInput,
   EmployeeInfo,
+  ApprovalType,
+  APPROVAL_TYPE_LABELS,
+  VacationDetails,
+  ExpenseDetails,
+  ReportDetails,
+  ApprovalAttachment,
 } from "../../../lib/authApi";
 import * as ImagePicker from "expo-image-picker";
 import * as DocumentPicker from "expo-document-picker";

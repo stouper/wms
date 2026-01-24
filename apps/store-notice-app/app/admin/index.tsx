@@ -1,5 +1,5 @@
 // app/admin/index.tsx
-// ✅ Multi-tenant: 초대 코드 보기 기능 추가
+// 관리자 대시보드 - PostgreSQL 기반
 
 import React, { useEffect, useState } from "react";
 import {
@@ -10,83 +10,51 @@ import {
   Pressable,
 } from "react-native";
 import { useRouter } from "expo-router";
-import { doc, onSnapshot, collection, query, where } from "firebase/firestore";
-import { auth, db } from "../../firebaseConfig";
+import { auth } from "../../firebaseConfig";
+import { getEvents, getEmployees, EventInfo, authenticateWithCoreApi } from "../../lib/authApi";
 import Card from "../../components/ui/Card";
 import { SafeAreaView } from "react-native-safe-area-context";
-import { Event } from "../../lib/eventTypes";
 
 export default function AdminDashboard() {
   const router = useRouter();
-  const [todayEvents, setTodayEvents] = useState<Event[]>([]);
-  const [myCompanyId, setMyCompanyId] = useState<string | null>(null);
+  const [todayEvents, setTodayEvents] = useState<EventInfo[]>([]);
   const [companyName, setCompanyName] = useState("");
   const [pendingCount, setPendingCount] = useState(0);
 
   useEffect(() => {
-    const uid = auth.currentUser?.uid;
-    if (!uid) return;
+    if (!auth.currentUser) return;
 
-    let unsubCompany: (() => void) | undefined;
-    let unsubPending: (() => void) | undefined;
-    let unsubEvents: (() => void) | undefined;
-
-    // 내 user 정보 가져와서 companyId 확인
-    const unsubUser = onSnapshot(doc(db, "users", uid), async (userSnap) => {
-      if (userSnap.exists()) {
-        const companyId = (userSnap.data() as any)?.companyId;
-        if (!companyId) return;
-
-        setMyCompanyId(companyId);
-
-        // 회사 정보 가져오기
-        unsubCompany = onSnapshot(doc(db, "companies", companyId), (companySnap) => {
-          if (companySnap.exists()) {
-            setCompanyName((companySnap.data() as any)?.name || "");
-          }
-        });
-
-        // PENDING 사용자 수 실시간 가져오기
-        const pendingQuery = query(
-          collection(db, "users"),
-          where("companyId", "==", companyId),
-          where("status", "==", "PENDING")
-        );
-        unsubPending = onSnapshot(pendingQuery, (snapshot) => {
-          setPendingCount(snapshot.size);
-        });
-
-        // 오늘 일정 실시간 가져오기
-        const today = new Date();
-        const year = today.getFullYear();
-        const month = String(today.getMonth() + 1).padStart(2, "0");
-        const day = String(today.getDate()).padStart(2, "0");
-        const todayStr = `${year}-${month}-${day}`;
-
-        const eventsQuery = query(
-          collection(db, "events"),
-          where("companyId", "==", companyId)
-        );
-        unsubEvents = onSnapshot(eventsQuery, (snapshot) => {
-          const events: Event[] = [];
-          snapshot.forEach((doc) => {
-            const data = doc.data();
-            // 클라이언트에서 오늘 날짜만 필터링
-            if (data.date === todayStr) {
-              events.push({ id: doc.id, ...data } as Event);
-            }
-          });
-          setTodayEvents(events);
-        });
+    // 직원 정보 가져오기
+    authenticateWithCoreApi().then((result) => {
+      if (result.success && result.employee) {
+        setCompanyName(result.employee.storeName || result.employee.departmentName || "관리자");
       }
     });
 
-    return () => {
-      unsubUser();
-      unsubCompany?.();
-      unsubPending?.();
-      unsubEvents?.();
-    };
+    // 오늘 일정 가져오기
+    const today = new Date();
+    const year = today.getFullYear();
+    const month = String(today.getMonth() + 1).padStart(2, "0");
+    const day = String(today.getDate()).padStart(2, "0");
+    const todayStr = `${year}-${month}-${day}`;
+
+    getEvents(todayStr, todayStr).then((events) => {
+      setTodayEvents(events);
+    });
+
+    // PENDING 직원 수 가져오기
+    getEmployees('PENDING').then((employees) => {
+      setPendingCount(employees.length);
+    });
+
+    // 주기적으로 PENDING 수 갱신
+    const interval = setInterval(() => {
+      getEmployees('PENDING').then((employees) => {
+        setPendingCount(employees.length);
+      });
+    }, 30000); // 30초마다
+
+    return () => clearInterval(interval);
   }, []);
 
 

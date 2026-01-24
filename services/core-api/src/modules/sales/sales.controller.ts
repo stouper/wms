@@ -2,8 +2,11 @@ import {
   BadRequestException,
   Body,
   Controller,
+  Delete,
   Get,
+  Param,
   Post,
+  Put,
   Query,
   UploadedFile,
   UseInterceptors,
@@ -46,5 +49,84 @@ export class SalesController {
   @Get('debug-recent')
   async debugRecent() {
     return this.sales.getRecentSalesRaw();
+  }
+
+  /**
+   * 매출 목록 조회
+   * GET /sales?storeCode=xxx&from=2026-01-01&to=2026-01-31
+   */
+  @Get()
+  async getSalesList(
+    @Query('storeCode') storeCode?: string,
+    @Query('from') from?: string,
+    @Query('to') to?: string,
+  ) {
+    return this.sales.getSalesList(storeCode, from, to);
+  }
+
+  /**
+   * 매출 단건 조회
+   * GET /sales/:id
+   */
+  @Get(':id')
+  async getSalesById(@Param('id') id: string) {
+    return this.sales.getSalesById(id);
+  }
+
+  /**
+   * 매출 생성
+   * POST /sales
+   */
+  @Post()
+  async createSale(
+    @Body()
+    body: {
+      storeCode: string;
+      storeName?: string;
+      saleDate: string; // YYYY-MM-DD
+      amount: number;
+      qty?: number;
+      productType?: string;
+      itemCode?: string;
+      codeName?: string;
+      sourceKey?: string;
+    },
+  ) {
+    if (!body.storeCode || !body.saleDate || body.amount === undefined) {
+      throw new BadRequestException('storeCode, saleDate, amount are required');
+    }
+    return this.sales.createSale(body);
+  }
+
+  /**
+   * 매출 수정
+   * PUT /sales/:id
+   */
+  @Put(':id')
+  async updateSale(
+    @Param('id') id: string,
+    @Body()
+    body: {
+      storeCode?: string;
+      storeName?: string;
+      saleDate?: string; // YYYY-MM-DD
+      amount?: number;
+      qty?: number;
+      productType?: string;
+      itemCode?: string;
+      codeName?: string;
+      sourceKey?: string;
+    },
+  ) {
+    return this.sales.updateSale(id, body);
+  }
+
+  /**
+   * 매출 삭제
+   * DELETE /sales/:id
+   */
+  @Delete(':id')
+  async deleteSale(@Param('id') id: string) {
+    return this.sales.deleteSale(id);
   }
 }
