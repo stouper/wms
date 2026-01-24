@@ -298,4 +298,24 @@ export class ExportsService {
   async cancelCjReservation(jobId: string) {
     return this.cjApi.cancelReservation(jobId);
   }
+
+  /**
+   * ============================================
+   * CJ API 테스트용 메서드
+   * ============================================
+   */
+
+  async testVerifyAddress(addr: string) {
+    if (!addr) {
+      throw new BadRequestException('주소(addr)를 입력하세요');
+    }
+    return this.cjApi.verifyAddress(addr);
+  }
+
+  async testGenerateWaybillNumbers(count: number = 1) {
+    if (count < 1 || count > 10) {
+      throw new BadRequestException('count는 1~10 사이여야 합니다');
+    }
+    return this.cjApi.generateWaybillNumbers(count);
+  }
 }

@@ -91,4 +91,23 @@ export class ExportsController {
   async cancelCjReservation(@Param('jobId') jobId: string) {
     return this.exports.cancelCjReservation(jobId);
   }
+
+  /**
+   * 주소 정제 테스트
+   * GET /exports/cj/test/address?addr=서울시 강남구 테헤란로 123
+   */
+  @Get('cj/test/address')
+  async testVerifyAddress(@Query('addr') addr: string) {
+    return this.exports.testVerifyAddress(addr);
+  }
+
+  /**
+   * 운송장 번호 발급 테스트
+   * GET /exports/cj/test/waybill-numbers?count=3
+   */
+  @Get('cj/test/waybill-numbers')
+  async testGenerateWaybillNumbers(@Query('count') count?: string) {
+    const numCount = count ? parseInt(count) : 1;
+    return this.exports.testGenerateWaybillNumbers(numCount);
+  }
 }
