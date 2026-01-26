@@ -652,34 +652,71 @@ export default function SettingsPage() {
 
   const cardStyle = {
     background: "#fff",
-    borderRadius: 8,
-    padding: 14,
-    border: "1px solid #e5e7eb",
+    borderRadius: 10,
+    padding: "16px 18px",
+    border: "1px solid #e2e8f0",
+    boxShadow: "0 1px 3px rgba(0,0,0,0.04)",
   };
 
   const thStyle = {
     textAlign: "left",
-    padding: "8px 10px",
+    padding: "10px 12px",
     fontSize: 12,
-    color: "#64748b",
+    color: "#475569",
     fontWeight: 600,
-    borderBottom: "1px solid #e5e7eb",
+    borderBottom: "2px solid #e2e8f0",
+    background: "#f8fafc",
   };
 
   const tdStyle = {
-    padding: "8px 10px",
+    padding: "10px 12px",
     fontSize: 13,
     borderBottom: "1px solid #f1f5f9",
+    color: "#334155",
   };
 
   const smallBtnStyle = {
-    padding: "5px 8px",
-    borderRadius: 5,
+    padding: "5px 10px",
+    borderRadius: 6,
     border: "1px solid #e5e7eb",
     background: "#fff",
     cursor: "pointer",
     fontSize: 12,
     fontWeight: 600,
+  };
+
+  const sectionHeaderStyle = {
+    display: "flex",
+    alignItems: "center",
+    justifyContent: "space-between",
+    marginBottom: 12,
+  };
+
+  const sectionTitleStyle = {
+    fontSize: 14,
+    fontWeight: 700,
+    color: "#1e293b",
+  };
+
+  const actionBtnGroup = {
+    display: "flex",
+    gap: 6,
+    alignItems: "center",
+  };
+
+  const queryBtnStyle = {
+    ...smallBtnStyle,
+    background: "#3b82f6",
+    color: "#fff",
+    border: "none",
+    minWidth: 50,
+  };
+
+  const closeBtnStyle = {
+    ...smallBtnStyle,
+    background: "#f1f5f9",
+    color: "#64748b",
+    border: "1px solid #e2e8f0",
   };
 
   const inputSmall = {
@@ -689,67 +726,359 @@ export default function SettingsPage() {
   };
 
   return (
-    <div style={{ display: "grid", gap: 12, width: "100%" }}>
-      <h1 style={{ fontSize: 20, fontWeight: 800 }}>설정</h1>
+    <div style={{ display: "grid", gap: 14, width: "100%" }}>
+      <h1 style={{ fontSize: 22, fontWeight: 800, color: "#0f172a", marginBottom: 4 }}>설정</h1>
+
+      {/* 직원 관리 */}
+      <div style={cardStyle}>
+        <div style={sectionHeaderStyle}>
+          <span style={sectionTitleStyle}>직원 관리</span>
+          <div style={actionBtnGroup}>
+            {employeesVisible && (
+              <button
+                type="button"
+                onClick={() => setEmployeesVisible(false)}
+                style={closeBtnStyle}
+              >
+                닫기
+              </button>
+            )}
+            <button
+              type="button"
+              onClick={loadEmployees}
+              disabled={employeesLoading}
+              style={queryBtnStyle}
+            >
+              {employeesLoading ? "..." : "조회"}
+            </button>
+          </div>
+        </div>
+
+        {/* 직원 목록 */}
+        {employeesVisible && (
+          <>
+            {employeesLoading ? (
+              <div style={{ fontSize: 12, color: "#64748b", marginTop: 8 }}>로딩 중...</div>
+            ) : employees.length === 0 ? (
+              <div style={{ fontSize: 12, color: "#64748b", marginTop: 8 }}>등록된 직원이 없습니다.</div>
+            ) : (
+              <>
+                <div style={{ fontSize: 12, color: "#64748b", marginTop: 8, marginBottom: 4 }}>
+                  총 <b style={{ color: "#0ea5e9" }}>{employees.length}</b>명 |
+                  활성: {employees.filter(e => e.status === "ACTIVE").length}명 |
+                  승인대기: {employees.filter(e => e.status === "PENDING").length}명 |
+                  비활성: {employees.filter(e => e.status === "DISABLED").length}명
+                </div>
+                <table style={{ width: "100%", borderCollapse: "collapse" }}>
+                  <thead>
+                    <tr style={{ background: "#f8fafc" }}>
+                      <th style={{ ...thStyle, width: 40 }}>#</th>
+                      <th style={thStyle}>이름</th>
+                      <th style={thStyle}>이메일</th>
+                      <th style={thStyle}>전화번호</th>
+                      <th style={thStyle}>역할</th>
+                      <th style={thStyle}>소속</th>
+                      <th style={thStyle}>상태</th>
+                      <th style={thStyle}>가입일</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {employees.map((emp, idx) => (
+                      <tr key={emp.id}>
+                        <td style={{ ...tdStyle, color: "#94a3b8", fontSize: 11 }}>{idx + 1}</td>
+                        <td style={tdStyle}>
+                          <b>{emp.name}</b>
+                        </td>
+                        <td style={{ ...tdStyle, fontSize: 11, color: "#64748b" }}>{emp.email}</td>
+                        <td style={{ ...tdStyle, fontSize: 11 }}>{emp.phone || "-"}</td>
+                        <td style={tdStyle}>
+                          <span style={{
+                            fontSize: 11,
+                            fontWeight: 600,
+                            color: emp.role === "MASTER" ? "#8B5CF6" : emp.isHq ? "#0ea5e9" : "#64748b"
+                          }}>
+                            {emp.role === "MASTER" ? "최고관리자" :
+                             emp.role === "ADMIN" ? "관리자" :
+                             emp.role === "STAFF" ? "직원" : emp.role}
+                          </span>
+                        </td>
+                        <td style={tdStyle}>
+                          {emp.isHq ? (
+                            <span style={{ fontSize: 11, color: "#0ea5e9" }}>
+                              {emp.departmentName || "본사"}
+                            </span>
+                          ) : (
+                            <span style={{ fontSize: 11 }}>
+                              {emp.storeName || "-"}
+                            </span>
+                          )}
+                        </td>
+                        <td style={tdStyle}>
+                          {emp.status === "ACTIVE" ? (
+                            <span style={{ color: "#16a34a", fontWeight: 600, fontSize: 11 }}>활성</span>
+                          ) : emp.status === "PENDING" ? (
+                            <span style={{ color: "#f59e0b", fontWeight: 600, fontSize: 11 }}>승인대기</span>
+                          ) : (
+                            <span style={{ color: "#94a3b8", fontSize: 11 }}>비활성</span>
+                          )}
+                        </td>
+                        <td style={{ ...tdStyle, fontSize: 11, color: "#64748b" }}>
+                          {emp.createdAt ? new Date(emp.createdAt).toLocaleDateString("ko-KR") : "-"}
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </>
+            )}
+          </>
+        )}
+      </div>
+
+      {/* 부서 관리 */}
+      <div style={cardStyle}>
+        <div style={sectionHeaderStyle}>
+          <span style={sectionTitleStyle}>부서 관리</span>
+          <div style={actionBtnGroup}>
+            {deptsVisible && (
+              <button
+                type="button"
+                onClick={() => setDeptsVisible(false)}
+                style={closeBtnStyle}
+              >
+                닫기
+              </button>
+            )}
+            <button
+              type="button"
+              onClick={loadDepartments}
+              disabled={deptsLoading}
+              style={queryBtnStyle}
+            >
+              {deptsLoading ? "..." : "조회"}
+            </button>
+          </div>
+        </div>
+
+        {/* 부서 추가 입력 */}
+        <div style={{ display: "flex", gap: 6, alignItems: "center", marginBottom: deptError ? 8 : 0 }}>
+          <input
+            type="text"
+            value={newDeptCode}
+            onChange={(e) => setNewDeptCode(e.target.value)}
+            placeholder="부서코드"
+            style={{ ...inputSmall, width: 100 }}
+          />
+          <input
+            type="text"
+            value={newDeptName}
+            onChange={(e) => setNewDeptName(e.target.value)}
+            placeholder="부서명"
+            style={{ ...inputSmall, width: 120 }}
+            onKeyDown={(e) => e.key === "Enter" && handleAddDept()}
+          />
+          <button
+            type="button"
+            onClick={handleAddDept}
+            style={{ ...primaryBtn, padding: "6px 12px", fontSize: 12 }}
+          >
+            추가
+          </button>
+        </div>
+
+        {deptError && (
+          <div style={{ marginBottom: 8, fontSize: 11, color: "#ef4444" }}>
+            {deptError}
+          </div>
+        )}
+
+        {/* 부서 목록 */}
+        {deptsVisible && (
+          <>
+            {deptsLoading ? (
+              <div style={{ fontSize: 12, color: "#64748b", marginTop: 8 }}>로딩 중...</div>
+            ) : departments.length === 0 ? (
+              <div style={{ fontSize: 12, color: "#64748b", marginTop: 8 }}>등록된 부서가 없습니다.</div>
+            ) : (
+              <>
+                <div style={{ fontSize: 12, color: "#64748b", marginTop: 8, marginBottom: 4 }}>
+                  총 <b style={{ color: "#0ea5e9" }}>{departments.length}</b>개 부서
+                </div>
+                <table style={{ width: "100%", borderCollapse: "collapse" }}>
+                  <thead>
+                    <tr style={{ background: "#f8fafc" }}>
+                      <th style={{ ...thStyle, width: 60 }}>#</th>
+                      <th style={thStyle}>코드</th>
+                      <th style={thStyle}>부서명</th>
+                      <th style={thStyle}>직원수</th>
+                      <th style={thStyle}>상태</th>
+                      <th style={{ ...thStyle, width: 100 }}>관리</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {departments.map((d, idx) => (
+                      <tr key={d.id}>
+                        <td style={{ ...tdStyle, color: "#94a3b8", fontSize: 11 }}>{idx + 1}</td>
+                        <td style={tdStyle}>
+                          {editingDept?.id === d.id ? (
+                            <input
+                              type="text"
+                              value={editingDept.code}
+                              onChange={(e) => setEditingDept({ ...editingDept, code: e.target.value })}
+                              style={{ ...inputSmall, width: 80 }}
+                            />
+                          ) : (
+                            <b>{d.code}</b>
+                          )}
+                        </td>
+                        <td style={tdStyle}>
+                          {editingDept?.id === d.id ? (
+                            <input
+                              type="text"
+                              value={editingDept.name || ""}
+                              onChange={(e) => setEditingDept({ ...editingDept, name: e.target.value })}
+                              style={{ ...inputSmall, width: "100%" }}
+                            />
+                          ) : (
+                            d.name || "-"
+                          )}
+                        </td>
+                        <td style={tdStyle}>
+                          <span style={{ color: "#64748b" }}>{d.employeeCount || 0}명</span>
+                        </td>
+                        <td style={tdStyle}>
+                          {editingDept?.id === d.id ? (
+                            <select
+                              value={editingDept.isActive ? "active" : "inactive"}
+                              onChange={(e) => setEditingDept({ ...editingDept, isActive: e.target.value === "active" })}
+                              style={{ ...inputSmall, width: 80 }}
+                            >
+                              <option value="active">활성</option>
+                              <option value="inactive">비활성</option>
+                            </select>
+                          ) : d.isActive ? (
+                            <span style={{ color: "#16a34a", fontWeight: 600, fontSize: 11 }}>활성</span>
+                          ) : (
+                            <span style={{ color: "#94a3b8", fontSize: 11 }}>비활성</span>
+                          )}
+                        </td>
+                        <td style={tdStyle}>
+                          {editingDept?.id === d.id ? (
+                            <div style={{ display: "flex", gap: 4, whiteSpace: "nowrap" }}>
+                              <button
+                                type="button"
+                                onClick={handleUpdateDept}
+                                style={{ ...smallBtnStyle, background: "#3b82f6", color: "#fff", border: "none", padding: "4px 8px", whiteSpace: "nowrap" }}
+                              >
+                                저장
+                              </button>
+                              <button
+                                type="button"
+                                onClick={() => setEditingDept(null)}
+                                style={{ ...smallBtnStyle, padding: "4px 8px", whiteSpace: "nowrap" }}
+                              >
+                                취소
+                              </button>
+                            </div>
+                          ) : (
+                            <div style={{ display: "flex", gap: 4, whiteSpace: "nowrap" }}>
+                              <button
+                                type="button"
+                                onClick={() => setEditingDept({ id: d.id, code: d.code, name: d.name || "", isActive: d.isActive })}
+                                style={{ ...smallBtnStyle, padding: "4px 8px", whiteSpace: "nowrap" }}
+                              >
+                                수정
+                              </button>
+                              <button
+                                type="button"
+                                onClick={() => handleDeleteDept(d.id, d.name)}
+                                style={{ ...smallBtnStyle, color: "#ef4444", padding: "4px 8px", whiteSpace: "nowrap" }}
+                              >
+                                삭제
+                              </button>
+                            </div>
+                          )}
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </>
+            )}
+          </>
+        )}
+      </div>
 
       {/* 매장 관리 */}
       <div style={cardStyle}>
-        <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 10 }}>
-          <span style={{ fontSize: 13, fontWeight: 700 }}>매장 관리</span>
-          <span style={{ fontSize: 11, color: "#64748b" }}>
-            Excel 일괄 등록 - 필수: <b>매장코드</b>, <b>매장명</b>
-          </span>
-        </div>
-        <div style={{ display: "flex", gap: 6, alignItems: "center", justifyContent: "space-between", marginBottom: storeError ? 8 : 0 }}>
-          <div style={{ display: "flex", gap: 6, alignItems: "center" }}>
-            <input
-              type="text"
-              value={newStoreCode}
-              onChange={(e) => setNewStoreCode(e.target.value)}
-              placeholder="매장코드"
-              style={{ ...inputSmall, width: 100 }}
-            />
-            <input
-              type="text"
-              value={newStoreName}
-              onChange={(e) => setNewStoreName(e.target.value)}
-              placeholder="매장명"
-              style={{ ...inputSmall, width: 120 }}
-              onKeyDown={(e) => e.key === "Enter" && handleAddStore()}
-            />
-            <input
-              type="file"
-              accept=".xlsx,.xls"
-              onChange={handleStoreFileSelect}
-              disabled={storeUploading}
-              style={{ fontSize: 12 }}
-            />
-            <button
-              type="button"
-              onClick={handleStoreUpload}
-              disabled={storeUploading || !storePreview?.items?.length}
-              style={{ ...primaryBtn, padding: "6px 12px", fontSize: 12 }}
-            >
-              {storeUploading ? "..." : "업로드"}
-            </button>
+        <div style={sectionHeaderStyle}>
+          <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+            <span style={sectionTitleStyle}>매장 관리</span>
+            <span style={{ fontSize: 11, color: "#64748b" }}>
+              Excel 일괄 등록 - 필수: <b>매장코드</b>, <b>매장명</b>
+            </span>
           </div>
-          <div style={{ display: "flex", gap: 6, alignItems: "center" }}>
-            <button
-              type="button"
-              onClick={handleAddStore}
-              style={{ ...primaryBtn, padding: "6px 12px", fontSize: 12 }}
-            >
-              추가
-            </button>
+          <div style={actionBtnGroup}>
+            {storesVisible && (
+              <button
+                type="button"
+                onClick={() => setStoresVisible(false)}
+                style={closeBtnStyle}
+              >
+                닫기
+              </button>
+            )}
             <button
               type="button"
               onClick={loadStores}
               disabled={storesLoading}
-              style={{ ...smallBtnStyle, background: "#3b82f6", color: "#fff", border: "none" }}
+              style={queryBtnStyle}
             >
               {storesLoading ? "..." : "조회"}
             </button>
           </div>
+        </div>
+
+        {/* 매장 추가/업로드 입력 */}
+        <div style={{ display: "flex", gap: 6, alignItems: "center", flexWrap: "wrap", marginBottom: storeError ? 8 : 0 }}>
+          <input
+            type="text"
+            value={newStoreCode}
+            onChange={(e) => setNewStoreCode(e.target.value)}
+            placeholder="매장코드"
+            style={{ ...inputSmall, width: 100 }}
+          />
+          <input
+            type="text"
+            value={newStoreName}
+            onChange={(e) => setNewStoreName(e.target.value)}
+            placeholder="매장명"
+            style={{ ...inputSmall, width: 120 }}
+            onKeyDown={(e) => e.key === "Enter" && handleAddStore()}
+          />
+          <button
+            type="button"
+            onClick={handleAddStore}
+            style={{ ...primaryBtn, padding: "6px 12px", fontSize: 12 }}
+          >
+            추가
+          </button>
+          <span style={{ color: "#d1d5db", margin: "0 4px" }}>|</span>
+          <input
+            type="file"
+            accept=".xlsx,.xls"
+            onChange={handleStoreFileSelect}
+            disabled={storeUploading}
+            style={{ fontSize: 12 }}
+          />
+          <button
+            type="button"
+            onClick={handleStoreUpload}
+            disabled={storeUploading || !storePreview?.items?.length}
+            style={{ ...primaryBtn, padding: "6px 12px", fontSize: 12 }}
+          >
+            {storeUploading ? "..." : "업로드"}
+          </button>
         </div>
 
         {storeError && (
@@ -926,42 +1255,53 @@ export default function SettingsPage() {
 
       {/* Location 관리 */}
       <div style={cardStyle}>
-        <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 10 }}>
-          <div style={{ display: "flex", gap: 6, alignItems: "center" }}>
-            <span style={{ fontSize: 13, fontWeight: 700 }}>창고/Location 관리</span>
-            <input
-              type="text"
-              value={newLocCode}
-              onChange={(e) => setNewLocCode(e.target.value)}
-              placeholder="Location 코드"
-              style={{ ...inputSmall, width: 130 }}
-            />
-            <input
-              type="text"
-              value={newLocName}
-              onChange={(e) => setNewLocName(e.target.value)}
-              placeholder="명칭"
-              style={{ ...inputSmall, width: 120 }}
-              onKeyDown={(e) => e.key === "Enter" && handleAddLoc()}
-            />
-          </div>
-          <div style={{ display: "flex", gap: 6, alignItems: "center" }}>
-            <button
-              type="button"
-              onClick={handleAddLoc}
-              style={{ ...primaryBtn, padding: "6px 12px", fontSize: 12 }}
-            >
-              추가
-            </button>
+        <div style={sectionHeaderStyle}>
+          <span style={sectionTitleStyle}>창고/Location 관리</span>
+          <div style={actionBtnGroup}>
+            {locationsVisible && (
+              <button
+                type="button"
+                onClick={() => setLocationsVisible(false)}
+                style={closeBtnStyle}
+              >
+                닫기
+              </button>
+            )}
             <button
               type="button"
               onClick={loadLocations}
               disabled={locationsLoading}
-              style={{ ...smallBtnStyle, background: "#3b82f6", color: "#fff", border: "none" }}
+              style={queryBtnStyle}
             >
               {locationsLoading ? "..." : "조회"}
             </button>
           </div>
+        </div>
+
+        {/* Location 추가 입력 */}
+        <div style={{ display: "flex", gap: 6, alignItems: "center", marginBottom: locError ? 8 : 0 }}>
+          <input
+            type="text"
+            value={newLocCode}
+            onChange={(e) => setNewLocCode(e.target.value)}
+            placeholder="Location 코드"
+            style={{ ...inputSmall, width: 130 }}
+          />
+          <input
+            type="text"
+            value={newLocName}
+            onChange={(e) => setNewLocName(e.target.value)}
+            placeholder="명칭"
+            style={{ ...inputSmall, width: 120 }}
+            onKeyDown={(e) => e.key === "Enter" && handleAddLoc()}
+          />
+          <button
+            type="button"
+            onClick={handleAddLoc}
+            style={{ ...primaryBtn, padding: "6px 12px", fontSize: 12 }}
+          >
+            추가
+          </button>
         </div>
 
         {locError && (
@@ -1062,178 +1402,79 @@ export default function SettingsPage() {
         )}
       </div>
 
-      {/* 부서 관리 */}
+      {/* 매출 관리 */}
       <div style={cardStyle}>
-        <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 10 }}>
-          <div style={{ display: "flex", gap: 6, alignItems: "center" }}>
-            <span style={{ fontSize: 13, fontWeight: 700 }}>부서 관리</span>
-            <input
-              type="text"
-              value={newDeptCode}
-              onChange={(e) => setNewDeptCode(e.target.value)}
-              placeholder="부서코드"
-              style={{ ...inputSmall, width: 100 }}
-            />
-            <input
-              type="text"
-              value={newDeptName}
-              onChange={(e) => setNewDeptName(e.target.value)}
-              placeholder="부서명"
-              style={{ ...inputSmall, width: 120 }}
-              onKeyDown={(e) => e.key === "Enter" && handleAddDept()}
-            />
+        <div style={sectionHeaderStyle}>
+          <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+            <span style={sectionTitleStyle}>매출 관리</span>
+            <span style={{ fontSize: 11, color: "#0ea5e9" }}>매출 데이터 업로드</span>
           </div>
-          <div style={{ display: "flex", gap: 6, alignItems: "center" }}>
-            <button
-              type="button"
-              onClick={handleAddDept}
-              style={{ ...primaryBtn, padding: "6px 12px", fontSize: 12 }}
-            >
-              추가
-            </button>
-            <button
-              type="button"
-              onClick={loadDepartments}
-              disabled={deptsLoading}
-              style={{ ...smallBtnStyle, background: "#3b82f6", color: "#fff", border: "none" }}
-            >
-              {deptsLoading ? "..." : "조회"}
-            </button>
-          </div>
+          <span style={{ fontSize: 11, color: "#64748b" }}>
+            필수: <b>매장명</b>, <b>매출일</b>, <b>매출금액</b>, <b>수량</b>, <b>코드명</b> | 선택: 구분, 단품코드
+          </span>
         </div>
 
-        {deptError && (
-          <div style={{ marginBottom: 8, fontSize: 11, color: "#ef4444" }}>
-            {deptError}
+        <div style={{ display: "flex", gap: 6, alignItems: "center", flexWrap: "wrap" }}>
+          <input
+            type="file"
+            accept=".xlsx,.xls"
+            onChange={handleSalesFileSelect}
+            disabled={salesUploading}
+            style={{ fontSize: 12 }}
+          />
+          <input
+            type="text"
+            value={salesSourceKey}
+            onChange={(e) => setSalesSourceKey(e.target.value)}
+            placeholder="sourceKey (중복 추적용)"
+            style={{ ...inputSmall, width: 180 }}
+            disabled={salesUploading}
+          />
+          <button
+            type="button"
+            onClick={handleSalesUpload}
+            disabled={salesUploading || !salesFile}
+            style={{ ...primaryBtn, padding: "6px 12px", fontSize: 12 }}
+          >
+            {salesUploading ? "업로드 중..." : "업로드"}
+          </button>
+        </div>
+
+        {salesFile && (
+          <div style={{ marginTop: 8, fontSize: 12, color: "#78716c" }}>
+            선택됨: <b>{salesFile.name}</b>
           </div>
         )}
 
-        {/* 부서 목록 */}
-        {deptsVisible && (
-          <>
-            {deptsLoading ? (
-              <div style={{ fontSize: 12, color: "#64748b", marginTop: 8 }}>로딩 중...</div>
-            ) : departments.length === 0 ? (
-              <div style={{ fontSize: 12, color: "#64748b", marginTop: 8 }}>등록된 부서가 없습니다.</div>
-            ) : (
-              <>
-                <div style={{ fontSize: 12, color: "#64748b", marginTop: 8, marginBottom: 4 }}>
-                  총 <b style={{ color: "#0ea5e9" }}>{departments.length}</b>개 부서
-                </div>
-                <table style={{ width: "100%", borderCollapse: "collapse" }}>
-                  <thead>
-                    <tr style={{ background: "#f8fafc" }}>
-                      <th style={{ ...thStyle, width: 60 }}>#</th>
-                      <th style={thStyle}>코드</th>
-                      <th style={thStyle}>부서명</th>
-                      <th style={thStyle}>직원수</th>
-                      <th style={thStyle}>상태</th>
-                      <th style={{ ...thStyle, width: 100 }}>관리</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {departments.map((d, idx) => (
-                      <tr key={d.id}>
-                        <td style={{ ...tdStyle, color: "#94a3b8", fontSize: 11 }}>{idx + 1}</td>
-                        <td style={tdStyle}>
-                          {editingDept?.id === d.id ? (
-                            <input
-                              type="text"
-                              value={editingDept.code}
-                              onChange={(e) => setEditingDept({ ...editingDept, code: e.target.value })}
-                              style={{ ...inputSmall, width: 80 }}
-                            />
-                          ) : (
-                            <b>{d.code}</b>
-                          )}
-                        </td>
-                        <td style={tdStyle}>
-                          {editingDept?.id === d.id ? (
-                            <input
-                              type="text"
-                              value={editingDept.name || ""}
-                              onChange={(e) => setEditingDept({ ...editingDept, name: e.target.value })}
-                              style={{ ...inputSmall, width: "100%" }}
-                            />
-                          ) : (
-                            d.name || "-"
-                          )}
-                        </td>
-                        <td style={tdStyle}>
-                          <span style={{ color: "#64748b" }}>{d.employeeCount || 0}명</span>
-                        </td>
-                        <td style={tdStyle}>
-                          {editingDept?.id === d.id ? (
-                            <select
-                              value={editingDept.isActive ? "active" : "inactive"}
-                              onChange={(e) => setEditingDept({ ...editingDept, isActive: e.target.value === "active" })}
-                              style={{ ...inputSmall, width: 80 }}
-                            >
-                              <option value="active">활성</option>
-                              <option value="inactive">비활성</option>
-                            </select>
-                          ) : d.isActive ? (
-                            <span style={{ color: "#16a34a", fontWeight: 600, fontSize: 11 }}>활성</span>
-                          ) : (
-                            <span style={{ color: "#94a3b8", fontSize: 11 }}>비활성</span>
-                          )}
-                        </td>
-                        <td style={tdStyle}>
-                          {editingDept?.id === d.id ? (
-                            <div style={{ display: "flex", gap: 4, whiteSpace: "nowrap" }}>
-                              <button
-                                type="button"
-                                onClick={handleUpdateDept}
-                                style={{ ...smallBtnStyle, background: "#3b82f6", color: "#fff", border: "none", padding: "4px 8px", whiteSpace: "nowrap" }}
-                              >
-                                저장
-                              </button>
-                              <button
-                                type="button"
-                                onClick={() => setEditingDept(null)}
-                                style={{ ...smallBtnStyle, padding: "4px 8px", whiteSpace: "nowrap" }}
-                              >
-                                취소
-                              </button>
-                            </div>
-                          ) : (
-                            <div style={{ display: "flex", gap: 4, whiteSpace: "nowrap" }}>
-                              <button
-                                type="button"
-                                onClick={() => setEditingDept({ id: d.id, code: d.code, name: d.name || "", isActive: d.isActive })}
-                                style={{ ...smallBtnStyle, padding: "4px 8px", whiteSpace: "nowrap" }}
-                              >
-                                수정
-                              </button>
-                              <button
-                                type="button"
-                                onClick={() => handleDeleteDept(d.id, d.name)}
-                                style={{ ...smallBtnStyle, color: "#ef4444", padding: "4px 8px", whiteSpace: "nowrap" }}
-                              >
-                                삭제
-                              </button>
-                            </div>
-                          )}
-                        </td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
-              </>
+        {salesError && (
+          <div style={{ marginTop: 8, fontSize: 11, color: "#ef4444" }}>
+            {salesError}
+          </div>
+        )}
+
+        {salesResult && (
+          <div style={{ marginTop: 10, padding: 10, background: "#f0fdf4", borderRadius: 8, fontSize: 12 }}>
+            <div>
+              저장: <b style={{ color: "#16a34a" }}>{salesResult.inserted}</b>건 | 스킵: <b>{salesResult.skipped}</b>건
+            </div>
+            {salesResult.errorsSample?.length > 0 && (
+              <div style={{ marginTop: 6, color: "#dc2626" }}>
+                에러 샘플: {salesResult.errorsSample.slice(0, 3).join(", ")}
+              </div>
             )}
-          </>
+          </div>
         )}
       </div>
 
-      {/* 재고 초기화 (전체 교체) */}
+      {/* 재고관리 */}
       <div style={cardStyle}>
-        <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 6 }}>
-          <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-            <span style={{ fontSize: 13, fontWeight: 700 }}>재고 초기화</span>
-            <span style={{ fontSize: 11, color: "#dc2626" }}>전체 교체 (엑셀에 없는 재고 삭제)</span>
+        <div style={sectionHeaderStyle}>
+          <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+            <span style={sectionTitleStyle}>재고관리</span>
+            <span style={{ fontSize: 11, color: "#dc2626", fontWeight: 600 }}>전체 교체 (엑셀에 없는 재고 삭제)</span>
           </div>
           <span style={{ fontSize: 11, color: "#64748b" }}>
-            필수: <b>매장/창고</b>, <b>SKU</b>, <b>수량</b>, <b>MakerCode</b>, <b>상품명</b> | 선택: Location (매장은 FLOOR 자동)
+            필수: <b>매장/창고</b>, <b>SKU</b>, <b>수량</b>, <b>MakerCode</b>, <b>상품명</b> | 선택: Location
           </span>
         </div>
         <div style={{ display: "flex", gap: 6, alignItems: "center", justifyContent: "space-between", marginBottom: 10 }}>
@@ -1348,170 +1589,12 @@ export default function SettingsPage() {
         )}
       </div>
 
-      {/* 매출 관리 */}
-      <div style={cardStyle}>
-        <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 6 }}>
-          <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-            <span style={{ fontSize: 13, fontWeight: 700 }}>매출 관리</span>
-            <span style={{ fontSize: 11, color: "#0ea5e9" }}>매출 데이터 업로드</span>
-          </div>
-          <span style={{ fontSize: 11, color: "#64748b" }}>
-            필수: <b>매장명</b>, <b>매출일</b>, <b>매출금액</b>, <b>수량</b>, <b>코드명</b> | 선택: 구분, 단품코드
-          </span>
-        </div>
-
-        <div style={{ display: "flex", gap: 6, alignItems: "center", flexWrap: "wrap" }}>
-          <input
-            type="file"
-            accept=".xlsx,.xls"
-            onChange={handleSalesFileSelect}
-            disabled={salesUploading}
-            style={{ fontSize: 12 }}
-          />
-          <input
-            type="text"
-            value={salesSourceKey}
-            onChange={(e) => setSalesSourceKey(e.target.value)}
-            placeholder="sourceKey (중복 추적용)"
-            style={{ ...inputSmall, width: 180 }}
-            disabled={salesUploading}
-          />
-          <button
-            type="button"
-            onClick={handleSalesUpload}
-            disabled={salesUploading || !salesFile}
-            style={{ ...primaryBtn, padding: "6px 12px", fontSize: 12 }}
-          >
-            {salesUploading ? "업로드 중..." : "업로드"}
-          </button>
-        </div>
-
-        {salesFile && (
-          <div style={{ marginTop: 8, fontSize: 12, color: "#78716c" }}>
-            선택됨: <b>{salesFile.name}</b>
-          </div>
-        )}
-
-        {salesError && (
-          <div style={{ marginTop: 8, fontSize: 11, color: "#ef4444" }}>
-            {salesError}
-          </div>
-        )}
-
-        {salesResult && (
-          <div style={{ marginTop: 10, padding: 10, background: "#f0fdf4", borderRadius: 8, fontSize: 12 }}>
-            <div>
-              저장: <b style={{ color: "#16a34a" }}>{salesResult.inserted}</b>건 | 스킵: <b>{salesResult.skipped}</b>건
-            </div>
-            {salesResult.errorsSample?.length > 0 && (
-              <div style={{ marginTop: 6, color: "#dc2626" }}>
-                에러 샘플: {salesResult.errorsSample.slice(0, 3).join(", ")}
-              </div>
-            )}
-          </div>
-        )}
-      </div>
-
-      {/* 직원 관리 */}
-      <div style={cardStyle}>
-        <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 10 }}>
-          <span style={{ fontSize: 13, fontWeight: 700 }}>직원 관리</span>
-          <button
-            type="button"
-            onClick={loadEmployees}
-            disabled={employeesLoading}
-            style={{ ...smallBtnStyle, background: "#3b82f6", color: "#fff", border: "none" }}
-          >
-            {employeesLoading ? "..." : "조회"}
-          </button>
-        </div>
-
-        {/* 직원 목록 */}
-        {employeesVisible && (
-          <>
-            {employeesLoading ? (
-              <div style={{ fontSize: 12, color: "#64748b", marginTop: 8 }}>로딩 중...</div>
-            ) : employees.length === 0 ? (
-              <div style={{ fontSize: 12, color: "#64748b", marginTop: 8 }}>등록된 직원이 없습니다.</div>
-            ) : (
-              <>
-                <div style={{ fontSize: 12, color: "#64748b", marginTop: 8, marginBottom: 4 }}>
-                  총 <b style={{ color: "#0ea5e9" }}>{employees.length}</b>명 |
-                  활성: {employees.filter(e => e.status === "ACTIVE").length}명 |
-                  승인대기: {employees.filter(e => e.status === "PENDING").length}명 |
-                  비활성: {employees.filter(e => e.status === "DISABLED").length}명
-                </div>
-                <table style={{ width: "100%", borderCollapse: "collapse" }}>
-                  <thead>
-                    <tr style={{ background: "#f8fafc" }}>
-                      <th style={{ ...thStyle, width: 40 }}>#</th>
-                      <th style={thStyle}>이름</th>
-                      <th style={thStyle}>이메일</th>
-                      <th style={thStyle}>전화번호</th>
-                      <th style={thStyle}>역할</th>
-                      <th style={thStyle}>소속</th>
-                      <th style={thStyle}>상태</th>
-                      <th style={thStyle}>가입일</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {employees.map((emp, idx) => (
-                      <tr key={emp.id}>
-                        <td style={{ ...tdStyle, color: "#94a3b8", fontSize: 11 }}>{idx + 1}</td>
-                        <td style={tdStyle}>
-                          <b>{emp.name}</b>
-                        </td>
-                        <td style={{ ...tdStyle, fontSize: 11, color: "#64748b" }}>{emp.email}</td>
-                        <td style={{ ...tdStyle, fontSize: 11 }}>{emp.phone || "-"}</td>
-                        <td style={tdStyle}>
-                          <span style={{
-                            fontSize: 11,
-                            fontWeight: 600,
-                            color: emp.isHq ? "#0ea5e9" : "#64748b"
-                          }}>
-                            {emp.role === "ADMIN" ? (emp.isHq ? "관리자" : "관리자") :
-                             emp.role === "STAFF" ? (emp.isHq ? "직원" : "직원") : emp.role}
-                          </span>
-                        </td>
-                        <td style={tdStyle}>
-                          {emp.isHq ? (
-                            <span style={{ fontSize: 11, color: "#0ea5e9" }}>
-                              {emp.departmentName || "본사"}
-                            </span>
-                          ) : (
-                            <span style={{ fontSize: 11 }}>
-                              {emp.storeName || "-"}
-                            </span>
-                          )}
-                        </td>
-                        <td style={tdStyle}>
-                          {emp.status === "ACTIVE" ? (
-                            <span style={{ color: "#16a34a", fontWeight: 600, fontSize: 11 }}>활성</span>
-                          ) : emp.status === "PENDING" ? (
-                            <span style={{ color: "#f59e0b", fontWeight: 600, fontSize: 11 }}>승인대기</span>
-                          ) : (
-                            <span style={{ color: "#94a3b8", fontSize: 11 }}>비활성</span>
-                          )}
-                        </td>
-                        <td style={{ ...tdStyle, fontSize: 11, color: "#64748b" }}>
-                          {emp.createdAt ? new Date(emp.createdAt).toLocaleDateString("ko-KR") : "-"}
-                        </td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
-              </>
-            )}
-          </>
-        )}
-      </div>
-
       {/* 재고 조정 */}
       <div style={cardStyle}>
-        <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 10 }}>
-          <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-            <span style={{ fontSize: 13, fontWeight: 700 }}>재고 조정</span>
-            <span style={{ fontSize: 11, color: "#16a34a" }}>기존 재고 유지, 단건 수정</span>
+        <div style={sectionHeaderStyle}>
+          <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+            <span style={sectionTitleStyle}>재고 조정</span>
+            <span style={{ fontSize: 11, color: "#16a34a", fontWeight: 600 }}>기존 재고 유지, 단건 수정</span>
           </div>
         </div>
 
