@@ -241,6 +241,7 @@ const rows = await this.prisma.job.findMany({
         qtyPicked: true,
         makerCodeSnapshot: true,
         nameSnapshot: true,
+        locationHint: true,
         sku: {
           select: { sku: true, makerCode: true, name: true },
         },
@@ -265,6 +266,7 @@ const rows = await this.prisma.job.findMany({
             qtyPicked: true,
             makerCodeSnapshot: true,
             nameSnapshot: true,
+            locationHint: true,
             sku: {
               select: { sku: true, makerCode: true, name: true },
             },
