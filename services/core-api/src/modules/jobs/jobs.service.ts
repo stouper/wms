@@ -457,6 +457,24 @@ async addItems(jobId: string, dto: any) {
         } as any,
       });
     } else {
+      // ✅ 재고 위치 힌트 조회: HQ 창고에서 이 SKU가 있는 위치 (qty 높은 순)
+      let locationHint: string | null = null;
+      try {
+        const hqStore = await this.prisma.store.findFirst({ where: { isHq: true } as any } as any);
+        if (hqStore) {
+          const inv = await this.prisma.inventory.findFirst({
+            where: { skuId: it.skuId, location: { storeId: hqStore.id } } as any,
+            include: { location: true } as any,
+            orderBy: { qty: 'desc' } as any,
+          } as any);
+          if (inv?.location?.code) {
+            locationHint = inv.location.code;
+          }
+        }
+      } catch (e) {
+        // locationHint 조회 실패 시 무시
+      }
+
       await (this.prisma as any).jobItem.create({
         data: {
           jobId,
@@ -467,6 +485,7 @@ async addItems(jobId: string, dto: any) {
           nameSnapshot: it.nameSnapshot,
           extraApprovedQty: 0,
           extraPickedQty: 0,
+          locationHint,
         } as any,
       });
     }

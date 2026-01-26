@@ -931,7 +931,7 @@ export default function StoreOutboundPage({ pageTitle = "매장 출고", default
                 name: it?.sku?.name || it?.nameSnapshot || "",
                 qtyPlanned: Number(it?.qtyPlanned ?? 0),
                 qtyPicked: Number(it?.qtyPicked ?? 0),
-                locationCode: "",
+                locationCode: it?.locationHint || "",
               })),
             };
 
