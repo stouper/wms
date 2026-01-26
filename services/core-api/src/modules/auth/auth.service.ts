@@ -213,9 +213,13 @@ export class AuthService {
   // 직원 관리 (권한 필요)
   // ========================================
 
-  // Employee 목록 조회 (ADMIN 이상)
-  async getEmployees(requesterUid: string, status?: EmployeeStatus) {
-    await this.validateRequester(requesterUid, [EmployeeRole.MASTER, EmployeeRole.ADMIN]);
+  // Employee 목록 조회 (Desktop은 인증 없이 허용, Mobile은 ADMIN 이상)
+  async getEmployees(requesterUid: string | null, status?: EmployeeStatus) {
+    // requesterUid가 있으면 Mobile 요청 → 권한 검증
+    if (requesterUid) {
+      await this.validateRequester(requesterUid, [EmployeeRole.MASTER, EmployeeRole.ADMIN]);
+    }
+    // requesterUid가 없으면 Desktop 요청 → 권한 검증 스킵 (읽기 전용)
 
     const employees = await this.prisma.employee.findMany({
       where: status ? { status } : undefined,

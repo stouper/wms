@@ -32,17 +32,15 @@ export class AuthController {
     return this.authService.registerEmployee(body);
   }
 
-  // GET /auth/employees - 직원 목록 (ADMIN 이상)
+  // GET /auth/employees - 직원 목록 (Desktop은 인증 없이 허용, Mobile은 ADMIN 이상)
   @Get('employees')
   async getEmployees(
     @Headers('x-firebase-uid') firebaseUid: string,
     @Query('status') status?: string,
   ) {
-    if (!firebaseUid) {
-      return { success: false, error: 'x-firebase-uid header is required' };
-    }
     const employeeStatus = status as EmployeeStatus | undefined;
-    return this.authService.getEmployees(firebaseUid, employeeStatus);
+    // firebaseUid가 없으면 Desktop 요청으로 간주 (인증 스킵)
+    return this.authService.getEmployees(firebaseUid || null, employeeStatus);
   }
 
   // PATCH /auth/employees/:id/approve - 직원 승인 (ADMIN 이상)
