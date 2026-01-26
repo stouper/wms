@@ -149,6 +149,7 @@ export class CjApiService {
       DATA: {
         TOKEN_NUM: token,
         CLNTNUM: this.custId,
+        CLNTMGMCUSTCD: this.custId, // 고객관리거래처코드 (표준 필드)
         ADDRESS: addr,
       },
     };
@@ -352,9 +353,9 @@ export class CjApiService {
         INVC_NO: waybillNo,
 
         // 기타
-        PRT_ST: '01', // 01: 미출력
+        PRT_ST: '02', // 02: 선출력 (자체 운송장 출력)
         DLV_DV: '01', // 01: 택배
-        DLV_MSG: rcvrMemo,
+        REMARK_1: rcvrMemo, // 배송 메시지 (표준 필드)
 
         // 상품 정보 (ARRAY 형식)
         ARRAY: [
@@ -529,7 +530,7 @@ export class CjApiService {
         INVC_NO: shipment.invcNo,
 
         // 기타
-        PRT_ST: '01', // 미출력
+        PRT_ST: '02', // 02: 선출력 (자체 운송장 출력)
         DLV_DV: '01', // 택배
 
         ARRAY: [
@@ -600,6 +601,7 @@ export class CjApiService {
     const payload = {
       DATA: {
         TOKEN_NUM: token,
+        CLNTNUM: this.custId, // 고객 ID (표준 필드)
         INVC_NO: waybillNo,
       },
     };

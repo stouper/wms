@@ -32,12 +32,19 @@ export interface CjAddressRequest {
 }
 
 /**
- * 주소 정제 응답
+ * 주소 정제 응답 (표준 API V3.9.3)
  */
 export interface CjAddressData {
-  ADDR: string;           // 정제된 주소
-  ADDR_DETAIL?: string;   // 상세주소
-  ZIP_NO?: string;        // 우편번호
+  ADDR: string;              // 정제된 주소
+  ADDR_DETAIL?: string;      // 상세주소
+  ZIP_NO?: string;           // 우편번호
+  CLSFCD?: string;           // 권역코드
+  SUBCLSFCD?: string;        // 서브권역코드
+  CLSFADDR?: string;         // 권역주소
+  CLLDLVBRANNM?: string;     // 집배점명
+  CLLDLVBRANCD?: string;     // 집배점코드
+  ROADADDR?: string;         // 도로명주소
+  JIBUNADDR?: string;        // 지번주소
 }
 
 /**
@@ -88,8 +95,10 @@ export interface CjReservationRequest {
   // 운송장
   INVC_NO: string;          // 운송장 번호
 
-  // 기타
-  REMARK?: string;          // 배송 메시지
+  // 기타 (표준 API V3.9.3)
+  REMARK_1?: string;        // 배송 메시지 1
+  REMARK_2?: string;        // 배송 메시지 2
+  REMARK_3?: string;        // 배송 메시지 3
 }
 
 /**
@@ -102,10 +111,11 @@ export interface CjReservationData {
 }
 
 /**
- * 상품 추적 요청 (단건)
+ * 상품 추적 요청 (단건) - 표준 API V3.9.3
  */
 export interface CjTrackingRequest {
   TOKEN_NUM: string;
+  CLNTNUM: string;          // 고객 ID (계약코드)
   INVC_NO: string;          // 운송장 번호
 }
 
