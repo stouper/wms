@@ -4,27 +4,19 @@ rules_version = '2';
 service firebase.storage {
   match /b/{bucket}/o {
 
-    // Board files: images and documents
-    match /board/{companyId}/{type}/{fileName} {
-      // 로그인한 사용자만 접근 가능하도록 단순화
+    // Board files: images and documents (board/images/*, board/files/*)
+    match /board/{type}/{fileName} {
+      // 로그인한 사용자만 접근 가능
       allow read: if request.auth != null;
-
-      // 로그인한 사용자만 업로드 가능 (companyId는 클라이언트에서 검증)
       allow write: if request.auth != null;
-
-      // 로그인한 사용자만 삭제 가능
       allow delete: if request.auth != null;
     }
 
-    // Approval attachments: images and documents
-    match /approvals/{companyId}/{type}/{fileName} {
+    // Approval attachments: images and documents (approvals/images/*, approvals/files/*)
+    match /approvals/{type}/{fileName} {
       // 로그인한 사용자만 접근 가능
       allow read: if request.auth != null;
-
-      // 로그인한 사용자만 업로드 가능
       allow write: if request.auth != null;
-
-      // 로그인한 사용자만 삭제 가능
       allow delete: if request.auth != null;
     }
 

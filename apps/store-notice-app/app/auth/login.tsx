@@ -15,6 +15,7 @@ import { signInWithEmailAndPassword } from "firebase/auth";
 import { auth } from "../../firebaseConfig";
 import { useRouter } from "expo-router";
 import { authenticateWithCoreApi } from "../../lib/authApi";
+import { registerPushToken } from "../../lib/push/registerPushToken";
 
 export default function Login() {
   const router = useRouter();
@@ -37,6 +38,11 @@ export default function Login() {
       } else {
         console.log('core-api auth success:', result.employee?.status);
       }
+
+      // 3. 푸시 토큰 등록 (백그라운드로 실행)
+      registerPushToken().catch((e) => {
+        console.warn('Push token registration failed:', e);
+      });
 
       router.replace("/");
     } catch (e: any) {
