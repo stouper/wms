@@ -467,8 +467,8 @@ async addItems(jobId: string, dto: any) {
             include: { location: true } as any,
             orderBy: { qty: 'desc' } as any,
           } as any);
-          if (inv?.location?.code) {
-            locationHint = inv.location.code;
+          if ((inv as any)?.location?.code) {
+            locationHint = (inv as any).location.code;
           }
         }
       } catch (e) {
