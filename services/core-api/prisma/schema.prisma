@@ -15,10 +15,11 @@ enum JobType {
   ADJUST
 }
 
-// 직원 역할 (isHq 플래그와 함께 사용)
+// 직원 역할
 enum EmployeeRole {
-  ADMIN   // 관리자 (isHq=true: 본사 관리자, isHq=false: 매장 관리자)
-  STAFF   // 직원 (isHq=true: 본사 직원, isHq=false: 매장 직원)
+  MASTER  // 최고 관리자 (1명, .env로 고정, 삭제/강등 불가)
+  ADMIN   // 관리자 (MASTER가 지정, 직원 승인 가능)
+  STAFF   // 직원 (ADMIN이 승인)
 }
 
 // 직원 상태

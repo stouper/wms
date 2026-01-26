@@ -1,4 +1,4 @@
-import { Controller, Post, Body, Get, Param, Patch, Query, Delete } from '@nestjs/common';
+import { Controller, Post, Body, Get, Param, Patch, Query, Delete, Headers } from '@nestjs/common';
 import { AuthService } from './auth.service';
 import { EmployeeStatus } from '@prisma/client';
 
@@ -32,32 +32,42 @@ export class AuthController {
     return this.authService.registerEmployee(body);
   }
 
-  // GET /auth/employees - 직원 목록 (관리자용)
+  // GET /auth/employees - 직원 목록 (ADMIN 이상)
   @Get('employees')
-  async getEmployees(@Query('status') status?: string) {
+  async getEmployees(
+    @Headers('x-firebase-uid') firebaseUid: string,
+    @Query('status') status?: string,
+  ) {
+    if (!firebaseUid) {
+      return { success: false, error: 'x-firebase-uid header is required' };
+    }
     const employeeStatus = status as EmployeeStatus | undefined;
-    return this.authService.getEmployees(employeeStatus);
+    return this.authService.getEmployees(firebaseUid, employeeStatus);
   }
 
-  // PATCH /auth/employees/:id/approve - 직원 승인
+  // PATCH /auth/employees/:id/approve - 직원 승인 (ADMIN 이상)
   @Patch('employees/:id/approve')
   async approveEmployee(
+    @Headers('x-firebase-uid') firebaseUid: string,
     @Param('id') id: string,
     @Body() body: { role?: string; storeId?: string; departmentId?: string },
   ) {
-    return this.authService.updateEmployeeStatus(
-      id,
-      EmployeeStatus.ACTIVE,
-      body.role,
-      body.storeId,
-      body.departmentId,
-    );
+    if (!firebaseUid) {
+      return { success: false, error: 'x-firebase-uid header is required' };
+    }
+    return this.authService.approveEmployee(firebaseUid, id, body.role, body.storeId, body.departmentId);
   }
 
-  // PATCH /auth/employees/:id/reject - 직원 거부/비활성화
+  // PATCH /auth/employees/:id/reject - 직원 거부/비활성화 (ADMIN 이상)
   @Patch('employees/:id/reject')
-  async rejectEmployee(@Param('id') id: string) {
-    return this.authService.updateEmployeeStatus(id, EmployeeStatus.DISABLED);
+  async rejectEmployee(
+    @Headers('x-firebase-uid') firebaseUid: string,
+    @Param('id') id: string,
+  ) {
+    if (!firebaseUid) {
+      return { success: false, error: 'x-firebase-uid header is required' };
+    }
+    return this.authService.rejectEmployee(firebaseUid, id);
   }
 
   // POST /auth/push-token - 푸시 토큰 업데이트
@@ -73,18 +83,28 @@ export class AuthController {
     return { success: true, employee };
   }
 
-  // PATCH /auth/employees/:id - 직원 정보 수정
+  // PATCH /auth/employees/:id - 직원 정보 수정 (ADMIN 이상)
   @Patch('employees/:id')
   async updateEmployee(
+    @Headers('x-firebase-uid') firebaseUid: string,
     @Param('id') id: string,
     @Body() body: { name?: string; phone?: string; role?: string; storeId?: string; departmentId?: string },
   ) {
-    return this.authService.updateEmployee(id, body);
+    if (!firebaseUid) {
+      return { success: false, error: 'x-firebase-uid header is required' };
+    }
+    return this.authService.updateEmployee(firebaseUid, id, body);
   }
 
-  // DELETE /auth/employees/:id - 직원 삭제
+  // DELETE /auth/employees/:id - 직원 삭제 (MASTER만)
   @Delete('employees/:id')
-  async deleteEmployee(@Param('id') id: string) {
-    return this.authService.deleteEmployee(id);
+  async deleteEmployee(
+    @Headers('x-firebase-uid') firebaseUid: string,
+    @Param('id') id: string,
+  ) {
+    if (!firebaseUid) {
+      return { success: false, error: 'x-firebase-uid header is required' };
+    }
+    return this.authService.deleteEmployee(firebaseUid, id);
   }
 }
