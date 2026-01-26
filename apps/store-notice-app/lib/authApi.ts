@@ -10,7 +10,7 @@ export interface EmployeeInfo {
   name: string;
   email: string | null;
   phone: string | null;
-  role: 'ADMIN' | 'STAFF';
+  role: 'MASTER' | 'ADMIN' | 'STAFF';
   status: 'ACTIVE' | 'PENDING' | 'DISABLED';
   isHq: boolean;
   storeId: string | null;
@@ -86,11 +86,18 @@ export async function updatePushToken(pushToken: string): Promise<boolean> {
 // 관리자용: 직원 목록 조회
 export async function getEmployees(status?: string): Promise<EmployeeInfo[]> {
   try {
+    const user = auth.currentUser;
+    if (!user) return [];
+
     const url = status
       ? `${API_BASE_URL}/auth/employees?status=${status}`
       : `${API_BASE_URL}/auth/employees`;
 
-    const response = await fetch(url);
+    const response = await fetch(url, {
+      headers: {
+        'x-firebase-uid': user.uid,
+      },
+    });
     if (!response.ok) return [];
 
     return await response.json();
@@ -108,10 +115,14 @@ export async function approveEmployee(
   departmentId?: string
 ): Promise<boolean> {
   try {
+    const user = auth.currentUser;
+    if (!user) return false;
+
     const response = await fetch(`${API_BASE_URL}/auth/employees/${employeeId}/approve`, {
       method: 'PATCH',
       headers: {
         'Content-Type': 'application/json',
+        'x-firebase-uid': user.uid,
       },
       body: JSON.stringify({ role, storeId, departmentId }),
     });
@@ -126,8 +137,14 @@ export async function approveEmployee(
 // 관리자용: 직원 거부
 export async function rejectEmployee(employeeId: string): Promise<boolean> {
   try {
+    const user = auth.currentUser;
+    if (!user) return false;
+
     const response = await fetch(`${API_BASE_URL}/auth/employees/${employeeId}/reject`, {
       method: 'PATCH',
+      headers: {
+        'x-firebase-uid': user.uid,
+      },
     });
 
     return response.ok;
@@ -299,10 +316,14 @@ export async function updateEmployee(
   data: { name?: string; phone?: string; role?: string; storeId?: string }
 ): Promise<boolean> {
   try {
+    const user = auth.currentUser;
+    if (!user) return false;
+
     const response = await fetch(`${API_BASE_URL}/auth/employees/${employeeId}`, {
       method: 'PATCH',
       headers: {
         'Content-Type': 'application/json',
+        'x-firebase-uid': user.uid,
       },
       body: JSON.stringify(data),
     });
@@ -317,8 +338,14 @@ export async function updateEmployee(
 // 관리자용: 직원 삭제
 export async function deleteEmployee(employeeId: string): Promise<boolean> {
   try {
+    const user = auth.currentUser;
+    if (!user) return false;
+
     const response = await fetch(`${API_BASE_URL}/auth/employees/${employeeId}`, {
       method: 'DELETE',
+      headers: {
+        'x-firebase-uid': user.uid,
+      },
     });
 
     return response.ok;

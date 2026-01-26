@@ -61,11 +61,12 @@ export default function MembersManagement() {
     try {
       const allEmployees = await getEmployees();
 
-      // ADMIN 역할을 최상단에 정렬
+      // MASTER > ADMIN > STAFF 순으로 정렬
+      const roleOrder = { MASTER: 0, ADMIN: 1, STAFF: 2 };
       allEmployees.sort((a, b) => {
-        if (a.role === "ADMIN" && b.role !== "ADMIN") return -1;
-        if (a.role !== "ADMIN" && b.role === "ADMIN") return 1;
-        return 0;
+        const orderA = roleOrder[a.role as keyof typeof roleOrder] ?? 99;
+        const orderB = roleOrder[b.role as keyof typeof roleOrder] ?? 99;
+        return orderA - orderB;
       });
 
       setMembers(allEmployees);
@@ -219,12 +220,13 @@ export default function MembersManagement() {
     }
   };
 
-  const getRoleLabel = (role: string, isHq: boolean) => {
-    const labels: Record<string, Record<string, string>> = {
-      ADMIN: { true: "관리자", false: "관리자" },
-      STAFF: { true: "직원", false: "직원" },
+  const getRoleLabel = (role: string) => {
+    const labels: Record<string, string> = {
+      MASTER: "최고관리자",
+      ADMIN: "관리자",
+      STAFF: "직원",
     };
-    return labels[role]?.[isHq ? "true" : "false"] || role;
+    return labels[role] || role;
   };
 
   const getStatusLabel = (status: string) => {
@@ -263,7 +265,7 @@ export default function MembersManagement() {
         {!loading &&
           members.map((member) => {
             const isExpanded = expandedMemberId === member.id;
-            const isAdmin = member.role === "ADMIN";
+            const isAdmin = member.role === "MASTER" || member.role === "ADMIN";
 
             return (
               <Card key={member.id}>
@@ -282,7 +284,12 @@ export default function MembersManagement() {
                             {getStatusLabel(member.status)}
                           </Text>
                         </View>
-                        {isAdmin && (
+                        {member.role === "MASTER" && (
+                          <View style={[styles.ownerBadge, { backgroundColor: "#8B5CF6" }]}>
+                            <Text style={styles.ownerText}>master</Text>
+                          </View>
+                        )}
+                        {member.role === "ADMIN" && (
                           <View style={styles.ownerBadge}>
                             <Text style={styles.ownerText}>admin</Text>
                           </View>
@@ -296,7 +303,7 @@ export default function MembersManagement() {
                             이메일: {member.email}
                           </Text>
                           <Text style={styles.memberDetail}>
-                            역할: {getRoleLabel(member.role, member.isHq)}
+                            역할: {getRoleLabel(member.role)}
                           </Text>
                           {member.storeName && (
                             <Text style={styles.memberDetail}>

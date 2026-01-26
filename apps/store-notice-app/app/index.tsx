@@ -7,9 +7,9 @@ import { onAuthStateChanged } from "firebase/auth";
 import { auth } from "../firebaseConfig";
 import { authenticateWithCoreApi, EmployeeInfo } from "../lib/authApi";
 
-// Employee role → admin 여부 판단 (ADMIN 역할이면 /admin)
+// Employee role → admin 여부 판단 (MASTER 또는 ADMIN 역할이면 /admin)
 const isAdminRole = (role: string): boolean => {
-  return role === "ADMIN";
+  return role === "MASTER" || role === "ADMIN";
 };
 
 export default function Index() {
