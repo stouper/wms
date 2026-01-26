@@ -8,6 +8,7 @@ import { safeReadJson, safeReadLocal, safeWriteJson, safeWriteLocal } from "../l
 import { inputStyle, primaryBtn } from "../ui/styles";
 import { exportsApi } from "../workflows/_common/exports.api";
 import { getOperatorId } from "../workflows/_common/operator";
+import { openJobSheetA4PrintWindow } from "../workflows/_common/print";
 
 const PAGE_KEY = "parcelShip";
 
@@ -403,6 +404,41 @@ export default function ParcelShipmentPage({ pageTitle = "택배 작업" }) {
           onClick={() => setShowUpload(!showUpload)}
         >
           {showUpload ? "업로드 닫기" : "엑셀 업로드"}
+        </button>
+
+        {/* A4 작업지시서 */}
+        <button
+          type="button"
+          style={{ ...smallBtn, background: "#fbfcf8" }}
+          disabled={loading || !selectedBatch || childJobs.length === 0}
+          onClick={() => {
+            // 모든 하위 Job의 items를 합쳐서 출력
+            const allItems = childJobs.flatMap((child) =>
+              (child.items || []).map((it) => ({
+                skuCode: it?.sku?.sku || it?.skuCode || "",
+                makerCode: it?.sku?.makerCode || it?.makerCodeSnapshot || "",
+                name: it?.sku?.name || it?.nameSnapshot || "",
+                qtyPlanned: Number(it?.qtyPlanned ?? 0),
+                qtyPicked: Number(it?.qtyPicked ?? 0),
+                locationCode: it?.locationHint || "",
+              }))
+            );
+
+            const payload = {
+              jobTitle: selectedBatch?.title || "택배 작업지시서",
+              jobId: selectedBatch?.id || "",
+              storeCode: "",
+              storeName: "택배 출고",
+              memo: selectedBatch?.memo || "",
+              createdAt: selectedBatch?.createdAt || new Date().toISOString(),
+              doneAt: selectedBatch?.doneAt || "",
+              items: allItems,
+            };
+
+            openJobSheetA4PrintWindow(payload);
+          }}
+        >
+          A4 작업지시서
         </button>
 
         <div style={{ marginLeft: "auto", display: "flex", gap: 4 }}>
