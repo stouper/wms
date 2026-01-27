@@ -30,6 +30,19 @@
 
 ## 2. 전체 프로젝트 구조
 
+### 2.1 Git 저장소
+```
+https://github.com/stouper/wms.git
+```
+
+**클론:**
+```bash
+git clone https://github.com/stouper/wms.git
+cd wms
+npm install
+```
+
+### 2.2 폴더 구조
 ```
 C:\repo\wms/
 ├── apps/
