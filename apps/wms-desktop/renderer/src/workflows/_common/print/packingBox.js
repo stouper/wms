@@ -1,6 +1,10 @@
 import { printPackingListLabel } from "./index.js";
 
-const LABEL_TARGET = "\\\\localhost\\\\XPDT108B_RAW";
+// config.json에서 프린터 경로 읽기 (window.__APP_CONFIG__.printer.label)
+function getLabelTarget() {
+  const cfg = window.__APP_CONFIG__;
+  return cfg?.printer?.label || "\\\\localhost\\BV420D_RAW";
+}
 
 // scan 응답에서 skuCode 최대한 안전하게 뽑기
 export function pickSkuFromScan(res) {
@@ -41,7 +45,7 @@ export async function printBoxLabel({
     jobId: job.id,
     boxNo,
     boxItems,
-    target: LABEL_TARGET,
+    target: getLabelTarget(),
     sendRaw,
   });
 

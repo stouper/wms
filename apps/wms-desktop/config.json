@@ -3,5 +3,8 @@
   "api": {
     "dev": "http://localhost:3000",
     "prod": "https://backend.dheska.com"
+  },
+  "printer": {
+    "label": "\\\\localhost\\BV420D_RAW"
   }
 }

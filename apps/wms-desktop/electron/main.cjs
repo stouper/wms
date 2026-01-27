@@ -1,7 +1,9 @@
 ﻿﻿// apps/wms-desktop/electron/main.cjs
 const path = require("path");
 const fs = require("fs");
-const { app, BrowserWindow } = require("electron");
+const os = require("os");
+const { exec } = require("child_process");
+const { app, BrowserWindow, ipcMain } = require("electron");
 
 /**
  * ✅ config.json 기반 dev/prod API 스위치
@@ -23,7 +25,13 @@ function readJsonSafe(p) {
 }
 
 function getAppConfig() {
-  const configPath = path.join(__dirname, "..", "config.json");
+  // 개발 환경: __dirname/../config.json
+  // 배포 환경: process.resourcesPath/config.json
+  const devPath = path.join(__dirname, "..", "config.json");
+  const prodPath = path.join(process.resourcesPath || "", "config.json");
+  const configPath = fs.existsSync(prodPath) ? prodPath : devPath;
+
+  console.log("[config] loading from:", configPath);
   const cfg = readJsonSafe(configPath);
 
   const fallback = {
@@ -78,6 +86,34 @@ function createWindow() {
 
   // win.webContents.openDevTools({ mode: "detach" });
 }
+
+// ✅ 라벨 프린터 RAW 출력 핸들러
+ipcMain.handle("print:sendRaw", async (event, { target, raw }) => {
+  return new Promise((resolve, reject) => {
+    try {
+      // 임시 파일에 RAW 데이터 저장
+      const tmpFile = path.join(os.tmpdir(), `label_${Date.now()}.raw`);
+      fs.writeFileSync(tmpFile, raw, "utf-8");
+
+      // Windows 공유 프린터로 RAW 전송
+      exec(`copy /b "${tmpFile}" "${target}"`, { shell: "cmd.exe" }, (err, stdout, stderr) => {
+        // 임시 파일 삭제
+        try { fs.unlinkSync(tmpFile); } catch (e) {}
+
+        if (err) {
+          console.error("[print:sendRaw] error:", err.message);
+          reject(new Error(`프린터 출력 실패: ${err.message}`));
+        } else {
+          console.log("[print:sendRaw] success:", target);
+          resolve({ ok: true });
+        }
+      });
+    } catch (e) {
+      console.error("[print:sendRaw] exception:", e.message);
+      reject(e);
+    }
+  });
+});
 
 app.whenReady().then(() => {
   createWindow();
