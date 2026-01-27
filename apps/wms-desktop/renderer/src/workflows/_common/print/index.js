@@ -2,6 +2,13 @@
 import { renderShippingLabelZPL } from "./shippingLabel.zpl.js";
 import { buildZplPackingListLabel } from "./packingList.zpl.js";
 import { renderJobSheetA4Html, openJobSheetA4PrintWindow } from "./jobSheet.a4.js";
+
+// ✅ config.json에서 프린터 경로 읽기
+function getLabelTargetFromConfig() {
+  const cfg = window.__APP_CONFIG__;
+  return cfg?.printer?.label || "\\\\localhost\\Toshiba";
+}
+
 // ✅ Packing List (ZPL 고정)
 export async function printPackingListLabel({
   storeCode,
@@ -13,10 +20,46 @@ export async function printPackingListLabel({
   sendRaw,
 }) {
   if (typeof sendRaw !== "function") throw new Error("sendRaw is not a function");
-  if (!target) throw new Error("target is required");
+
+  // target이 없으면 config에서 가져옴
+  const finalTarget = target || getLabelTargetFromConfig();
+  if (!finalTarget) throw new Error("target is required");
+
+  console.log("[printPackingListLabel] target =", finalTarget);
 
   const raw = buildZplPackingListLabel({ storeCode, jobTitle, jobId, boxNo, boxItems });
-  await sendRaw({ target, raw });
+
+  // ZPL 유효성 로그
+  console.log("[printPackingListLabel] raw length =", raw.length);
+  console.log("[printPackingListLabel] raw starts with ^XA:", raw.trimStart().startsWith("^XA"));
+  console.log("[printPackingListLabel] raw ends with ^XZ:", raw.trimEnd().endsWith("^XZ"));
+
+  await sendRaw({ target: finalTarget, raw });
+  return { ok: true };
+}
+
+// ✅ CJ 송장 라벨 출력
+export async function printShippingLabel({
+  data,
+  mode = "zpl",
+  target,
+  sendRaw,
+}) {
+  if (typeof sendRaw !== "function") throw new Error("sendRaw is not a function");
+
+  // target이 없으면 config에서 가져옴
+  const finalTarget = target || getLabelTargetFromConfig();
+  if (!finalTarget) throw new Error("target is required");
+
+  console.log("[printShippingLabel] target =", finalTarget);
+
+  const raw = buildShippingLabelRaw({ mode, data });
+
+  // ZPL 유효성 로그
+  console.log("[printShippingLabel] raw length =", raw.length);
+  console.log("[printShippingLabel] raw head =", raw.substring(0, 100));
+
+  await sendRaw({ target: finalTarget, raw });
   return { ok: true };
 }
 

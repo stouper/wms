@@ -1,4 +1,4 @@
-// apps/wms-desktop/renderer/src/workflows/_common/print/labels/shippingLabel.zpl.js
+// apps/wms-desktop/renderer/src/workflows/_common/print/shippingLabel.zpl.js
 // ZPL CJ대한통운 표준 운송장 (100x150mm, 세로)
 // CJ대한통운 택배 표준 API Developer Guide V3.9.3 기준
 // ⚠️ 한글은 프린터 폰트/인코딩에 따라 깨질 수 있어 (일단 영문/숫자 중심 운영 추천)
@@ -50,7 +50,8 @@ export function renderShippingLabelZPL(data) {
 
   // 100mm ≈ 4in, 150mm ≈ 6in
   // 203dpi 기준: 폭 812 dots, 높이 1218 dots
-  return [
+  // ✅ 반드시 ^XA로 시작, ^XZ로 끝나야 함
+  const zplLines = [
     "^XA",
     "^CI28", // UTF-8 인코딩
 
@@ -123,5 +124,8 @@ export function renderShippingLabelZPL(data) {
     "^FO40,700^FD고객님/받는분 상품 수령을 완료하신후 배송완료 해주십니다.^FS",
 
     "^XZ",
-  ].filter(Boolean).join("\n");
+  ];
+
+  // ✅ 빈 줄 제거 후 반환 (^XA로 시작, ^XZ로 끝 보장)
+  return zplLines.filter(Boolean).join("\n");
 }
