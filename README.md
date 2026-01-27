@@ -1,6 +1,6 @@
 # ESKA WMS & Store Notice App - 통합 문서
 
-> 최종 업데이트: 2026-01-25
+> 최종 업데이트: 2026-01-27
 
 ---
 
@@ -8,11 +8,13 @@
 
 1. [프로젝트 개요](#1-프로젝트-개요)
 2. [전체 프로젝트 구조](#2-전체-프로젝트-구조)
-3. [WMS (창고관리시스템)](#3-wms-창고관리시스템)
-4. [Store Notice App (매장 공지 앱)](#4-store-notice-app-매장-공지-앱)
-5. [CJ 택배 API 연동](#5-cj-택배-api-연동)
-6. [Claude Code 작업 규칙](#6-claude-code-작업-규칙)
-7. [아키텍처 현황 및 로드맵](#7-아키텍처-현황-및-로드맵)
+3. [WMS Desktop 빌드 및 배포](#3-wms-desktop-빌드-및-배포)
+4. [라벨 프린터 설정](#4-라벨-프린터-설정)
+5. [WMS (창고관리시스템)](#5-wms-창고관리시스템)
+6. [Store Notice App (매장 공지 앱)](#6-store-notice-app-매장-공지-앱)
+7. [CJ 택배 API 연동](#7-cj-택배-api-연동)
+8. [Claude Code 작업 규칙](#8-claude-code-작업-규칙)
+9. [아키텍처 현황 및 로드맵](#9-아키텍처-현황-및-로드맵)
 
 ---
 
@@ -42,9 +44,119 @@ C:\repo\wms/
 
 ---
 
-## 3. WMS (창고관리시스템)
+## 3. WMS Desktop 빌드 및 배포
 
-### 3.1 기술 스택
+### 3.1 요구사항
+- Node.js 18 이상
+
+### 3.2 빌드 명령어
+```bash
+cd apps/wms-desktop
+npm install
+npm run dist
+```
+
+### 3.3 빌드 결과물
+```
+apps/wms-desktop/dist-electron/
+├── ESKA WMS Setup 1.0.0.exe   # 설치 파일 (81MB)
+└── win-unpacked/               # 포터블 버전
+    └── ESKA WMS.exe
+```
+
+### 3.4 설치 방법
+
+**방법 1: 설치 파일**
+```
+ESKA WMS Setup 1.0.0.exe 실행 → 설치 경로 선택 → 완료
+```
+
+**방법 2: 포터블**
+```
+win-unpacked 폴더 통째로 복사 → ESKA WMS.exe 실행
+```
+
+### 3.5 설정 파일 (config.json)
+
+**위치:**
+- 설치 버전: `C:\Program Files\ESKA WMS\resources\config.json`
+- 포터블 버전: `win-unpacked\resources\config.json`
+
+**내용:**
+```json
+{
+  "mode": "prod",
+  "api": {
+    "dev": "http://localhost:3000",
+    "prod": "https://backend.dheska.com"
+  },
+  "printer": {
+    "label": "\\\\localhost\\BV420D_RAW"
+  }
+}
+```
+
+| 항목 | 설명 | 예시 |
+|------|------|------|
+| `mode` | API 모드 (dev/prod) | `"prod"` |
+| `api.dev` | 개발 서버 주소 | `"http://localhost:3000"` |
+| `api.prod` | 운영 서버 주소 | `"https://backend.dheska.com"` |
+| `printer.label` | 라벨 프린터 경로 | `"\\\\localhost\\BV420D_RAW"` |
+
+---
+
+## 4. 라벨 프린터 설정
+
+### 4.1 지원 프린터
+- Toshiba BV420D
+- 기타 ZPL/TSPL 지원 라벨 프린터
+
+### 4.2 Windows 공유 프린터 등록
+
+1. **제어판** → **장치 및 프린터**
+2. 프린터 **우클릭** → **프린터 속성**
+3. **공유 탭** 클릭
+4. **"이 프린터 공유"** 체크
+5. **공유 이름** 입력 (예: `BV420D_RAW`)
+6. **확인**
+
+### 4.3 config.json 프린터 경로 설정
+
+```json
+"printer": {
+  "label": "\\\\localhost\\공유이름"
+}
+```
+
+**예시:**
+| 상황 | 경로 |
+|------|------|
+| 로컬 프린터 | `"\\\\localhost\\BV420D_RAW"` |
+| 네트워크 프린터 | `"\\\\192.168.1.100\\BV420D_RAW"` |
+| 다른 PC 프린터 | `"\\\\PC이름\\BV420D_RAW"` |
+
+### 4.4 프린터 테스트 (Windows CMD)
+
+```cmd
+echo ^XA^FO50,50^A0N,50,50^FDTEST^FS^XZ > test.txt
+copy /b test.txt \\localhost\BV420D_RAW
+del test.txt
+```
+→ "TEST" 라벨이 출력되면 성공
+
+### 4.5 문제 해결
+
+| 증상 | 해결 방법 |
+|------|----------|
+| 프린터 출력 안됨 | 1. Windows 공유 설정 확인<br>2. config.json 경로 확인<br>3. 프린터 드라이버 확인 |
+| 하얀 화면 | 1. 개발자 도구(Ctrl+Shift+I)로 에러 확인<br>2. config.json 문법 오류 확인 |
+| API 연결 안됨 | 1. mode 설정 확인 (dev/prod)<br>2. 서버 주소 접근 확인 |
+
+---
+
+## 5. WMS (창고관리시스템)
+
+### 5.1 기술 스택
 
 | 구성요소 | 기술 |
 |----------|------|
@@ -52,13 +164,19 @@ C:\repo\wms/
 | Backend | NestJS + Prisma + PostgreSQL |
 | 외부 연동 | CJ 대한통운 API |
 
-### 3.2 주요 기능
+### 5.2 주요 기능
 
 #### 입고/출고
 - 바코드 스캔 기반 입고 (본사 창고)
 - 바코드 스캔 기반 출고 (매장 배송)
 - UNDO 기능 (직전/연속/전체 취소)
 - 강제 출고 (재고 부족 시 0 유지)
+
+#### 입고 유형
+| 유형 | JobType | 설명 |
+|------|---------|------|
+| 외부입고 | `INBOUND` | 외부→창고 (창고 재고만 +증가) |
+| 매장반품 | `RETURN` | 매장→창고 (매장 -감소, 창고 +증가) |
 
 #### 택배 발송
 - Excel 업로드 (택배 요청 일괄 등록)
@@ -71,7 +189,7 @@ C:\repo\wms/
 - 수동 재고 조정 (사유 기록)
 - 재고 이력 추적 (InventoryTx)
 
-### 3.3 데이터 모델 (Prisma)
+### 5.3 데이터 모델 (Prisma)
 
 | 모델 | 설명 |
 |------|------|
@@ -87,7 +205,7 @@ C:\repo\wms/
 | JobParcel | 택배 정보 |
 | CjShipment | CJ 송장 정보 |
 
-### 3.4 서버 배포 정보
+### 5.4 서버 배포 정보
 
 | 항목 | 값 |
 |------|-----|
@@ -98,90 +216,83 @@ C:\repo\wms/
 ```bash
 # SSH 접속 + 배포
 ssh -i ~/.ssh/LightsailDefaultKey-ap-northeast-2.pem ubuntu@13.125.126.15 \
-  "cd ~/wms/services/core-api && git pull && npm run build && pm2 restart all"
+  "cd ~/wms && git pull && cd services/core-api && npm run build && pm2 restart wms-core-api"
 ```
 
 ---
 
-## 4. Store Notice App (매장 공지 앱)
+## 6. Store Notice App (매장 공지 앱)
 
-### 4.1 기술 스택
+### 6.1 기술 스택
 
 | 구성요소 | 기술 |
 |----------|------|
 | Frontend | Expo + React Native + TypeScript |
 | Backend | Firebase (Auth) + PostgreSQL (core-api) |
 | Routing | Expo Router (file-based routing) |
-| Push | Expo Notifications |
+| Push | Expo Push Notifications |
 
-### 4.2 현재 데이터 소스 현황
+### 6.2 역할 시스템 (EmployeeRole)
+
+| 역할 | 설명 | 권한 |
+|------|------|------|
+| `MASTER` | 최고 관리자 | 모든 권한, ADMIN 지정 가능, 삭제/강등 불가 |
+| `ADMIN` | 관리자 | 직원 승인, STAFF만 지정 가능 |
+| `STAFF` | 일반 직원 | 기본 기능만 |
+
+**MASTER 자동 생성:** `.env`의 `MASTER_EMAIL`과 일치하는 이메일로 로그인 시 자동 MASTER 권한 부여
+
+### 6.3 현재 데이터 소스 현황
 
 | 기능 | 저장소 | 상태 |
 |------|--------|:----:|
 | 사용자 인증 | Firebase Auth | 유지 |
-| 사용자 정보/권한 | PostgreSQL Employee | ✅ 완료 |
-| 부서 관리 | PostgreSQL Department | ✅ 완료 |
-| 매장 관리 | PostgreSQL Store | ✅ 완료 |
-| 재고 조회 | PostgreSQL (WMS API) | ✅ 완료 |
-| 달력 | PostgreSQL Event | ✅ 완료 |
-| 게시판 | PostgreSQL BoardPost | ✅ 완료 |
-| 공지발송 | PostgreSQL Message/Receipt | ✅ 완료 |
-| 결재 | PostgreSQL Approval | ✅ 완료 |
+| 사용자 정보/권한 | PostgreSQL Employee | ✅ |
+| 부서 관리 | PostgreSQL Department | ✅ |
+| 매장 관리 | PostgreSQL Store | ✅ |
+| 재고 조회 | PostgreSQL (WMS API) | ✅ |
+| 달력 | PostgreSQL Event | ✅ |
+| 게시판 | PostgreSQL BoardPost | ✅ |
+| 공지발송 | PostgreSQL Message/Receipt | ✅ |
+| 결재 | PostgreSQL Approval | ✅ |
 
-### 4.3 역할별 기능
-
-| 기능 | 관리자 (HQ_ADMIN/HQ_WMS) | 직원 (STORE_STAFF 등) |
-|------|--------------------------|----------------------|
-| 공지 작성 | O | X |
-| 게시판 | O (모든 글 삭제) | O (본인 글만 삭제) |
-| 결재 | O | X |
-| 매장재고 | O | O |
-| 매출등록 | O | O |
-| 설정 | 전체 (승인대기, 부서/매장/회원 관리) | 제한적 |
-
-### 4.4 Employee 모델 (PostgreSQL)
+### 6.4 Employee 모델 (PostgreSQL)
 
 ```
 Employee
 ├── firebaseUid     ← Firebase Auth 연결 (unique)
 ├── storeId         ← PostgreSQL Store 연결
 ├── departmentId    ← PostgreSQL Department 연결
-├── pushToken       ← 알림 발송용
+├── pushToken       ← Expo Push Token (알림용)
 ├── name, phone, email
-├── role            ← HQ_ADMIN/HQ_WMS/SALES/STORE_MANAGER/STORE_STAFF
+├── role            ← MASTER/ADMIN/STAFF
 ├── status          ← ACTIVE/PENDING/DISABLED
 └── isHq            ← 본사 여부
 ```
 
-### 4.5 인증 흐름
+### 6.5 인증 흐름
 
 ```
 App 로그인 → Firebase Auth → core-api로 idToken 전송 → PostgreSQL Employee 조회
                                                          ↓
-                                              Employee 없음 → 회원가입 화면
+                                              Employee 없음 → 자동 생성 (PENDING)
                                               Employee PENDING → 승인대기 안내
                                               Employee ACTIVE → role에 따라 화면 분기
+                                              MASTER 이메일 → 자동 MASTER + ACTIVE
 ```
-
-### 4.6 승인대기 화면 (admin/staff/pending.tsx)
-
-- 역할 선택: **부서관리** (STORE_MANAGER) / **매장관리** (STORE_STAFF)
-- 부서관리 선택 시 → 부서 목록 표시 (PostgreSQL Department)
-- 매장관리 선택 시 → 매장 목록 표시 (PostgreSQL Store)
-- 2열 그리드 레이아웃
 
 ---
 
-## 5. CJ 택배 API 연동
+## 7. CJ 택배 API 연동
 
-### 5.1 환경별 URL
+### 7.1 환경별 URL
 
 | 환경 | Base URL |
 |------|----------|
 | 개발 | `https://dxapi-dev.cjlogistics.com:5054` |
 | 운영 | `https://dxapi.cjlogistics.com:5052` |
 
-### 5.2 API 목록
+### 7.2 API 목록
 
 | API | Endpoint | 설명 |
 |-----|----------|------|
@@ -190,9 +301,7 @@ App 로그인 → Firebase Auth → core-api로 idToken 전송 → PostgreSQL Em
 | 운송장 번호 생성 | `/ReqInvcNo` | 단건 운송장 번호 채번 |
 | 예약 접수 | `/RegBook` | 배송 예약 등록 |
 
-### 5.3 테스트 환경 및 방법
-
-#### 환경변수 설정 (.env)
+### 7.3 환경변수 설정 (.env)
 
 ```bash
 # CJ API 개발환경
@@ -210,92 +319,17 @@ CJ_SENDER_ADDR=서울시 강남구 테스트로 123
 CJ_SENDER_DETAIL_ADDR=테스트빌딩 1층
 ```
 
-#### 테스트 엔드포인트
-
-| Method | Endpoint | 설명 | 예시 |
-|--------|----------|------|------|
-| GET | `/exports/cj/test/address?addr=주소` | 주소 정제 테스트 | `?addr=서울시 강남구 테헤란로 123` |
-| GET | `/exports/cj/test/waybill-numbers?count=개수` | 운송장 번호 발급 테스트 | `?count=3` |
-
-#### 테스트 실행 방법
-
-**1. 서버에서 직접 테스트**
-
-```bash
-# 주소 정제
-curl "http://localhost:3000/exports/cj/test/address?addr=서울시%20강남구%20테헤란로%20123"
-
-# 운송장 번호 3개 발급
-curl "http://localhost:3000/exports/cj/test/waybill-numbers?count=3"
-```
-
-**2. Node.js 스크립트로 테스트**
-
-```javascript
-// test-cj-api.js
-const API_BASE = 'http://localhost:3000';
-
-async function testCjApi() {
-  // 주소 정제
-  const res1 = await fetch(API_BASE + '/exports/cj/test/address?addr=' +
-    encodeURIComponent('서울시 강남구 테헤란로 123'));
-  console.log('주소 정제:', await res1.json());
-
-  // 운송장 번호 발급
-  const res2 = await fetch(API_BASE + '/exports/cj/test/waybill-numbers?count=3');
-  console.log('운송장 번호:', await res2.json());
-}
-
-testCjApi();
-```
-
-**3. Lightsail 서버에서 3회 반복 테스트**
-
-```bash
-ssh -i ~/.ssh/LightsailDefaultKey-ap-northeast-2.pem ubuntu@13.125.126.15 \
-  'for i in 1 2 3; do
-    echo "=== 테스트 $i/3 ===";
-    curl -s "http://localhost:3000/exports/cj/test/address?addr=서울시%20강남구%20테헤란로%20123" | head -3;
-    curl -s "http://localhost:3000/exports/cj/test/waybill-numbers?count=1";
-    echo "";
-    sleep 2;
-  done'
-```
-
-#### 테스트 결과 예시
-
-**주소 정제 성공:**
-```json
-{
-  "CLSFCD": "2T01",
-  "CLSFADDR": "역삼1 648-23 여삼빌딩",
-  "CLLDLVBRANNM": "신역삼"
-}
-```
-
-**운송장 번호 발급 성공:**
-```json
-["660026600291", "660026600302", "660026600313"]
-```
-
-#### 주의사항
-
-- 토큰은 24시간 유효, DB(CjToken)에 자동 저장 및 갱신
-- 운송장 번호는 당일 사용 원칙 (미사용 다수 발생 시 API 제약)
-- 1초에 1회 이상 요청 시 차단될 수 있음
-- 개발환경은 개발 DB와 연동되어 실제 배송은 되지 않음
-
 ---
 
-## 6. Claude Code 작업 규칙
+## 8. Claude Code 작업 규칙
 
-### 6.1 기본 규칙
+### 8.1 기본 규칙
 
 - 모든 설명과 답변은 **한국어**로 한다
 - **코드 수정 시 코드를 절대 출력하지 않는다** → Edit/Write 도구로 직접 수정
 - 수정 완료 후 변경 파일 목록과 요약만 보고
 
-### 6.2 WMS 실무 기준 우선순위
+### 8.2 WMS 실무 기준 우선순위
 
 1. Inbound / Outbound 스캔 흐름 안정성
 2. Inventory / InventoryTx 수량 정합성
@@ -304,26 +338,9 @@ ssh -i ~/.ssh/LightsailDefaultKey-ap-northeast-2.pem ubuntu@13.125.126.15 \
 
 ---
 
-## 7. 아키텍처 현황 및 로드맵
+## 9. 아키텍처 현황 및 로드맵
 
-### 7.1 완료된 작업
-
-| 단계 | 작업 | 상태 |
-|------|------|:----:|
-| 1 | Prisma에 Employee 모델 추가 | ✅ |
-| 2 | core-api에 firebase-admin + idToken 검증 | ✅ |
-| 3 | `POST /auth/firebase` 엔드포인트 | ✅ |
-| 4 | App 로그인 후 core-api 호출 | ✅ |
-| 5 | 승인대기 화면 + 승인 API | ✅ |
-| 6 | role별 화면 분기 | ✅ |
-| 7 | 푸시토큰 연동 | ✅ |
-| 8 | 부서/매장 관리 PostgreSQL 전환 | ✅ |
-| 9 | 달력 Firebase → PostgreSQL 마이그레이션 | ✅ |
-| 10 | 게시판 Firebase → PostgreSQL 마이그레이션 | ✅ |
-| 11 | 공지발송 Firebase → PostgreSQL 마이그레이션 | ✅ |
-| 12 | 결재 Firebase → PostgreSQL 마이그레이션 | ✅ |
-
-### 7.2 현재 아키텍처
+### 9.1 현재 아키텍처
 
 ```
 ┌─────────────┐     ┌─────────────┐
@@ -336,20 +353,20 @@ ssh -i ~/.ssh/LightsailDefaultKey-ap-northeast-2.pem ubuntu@13.125.126.15 \
                     └─────────────┘     └─────────────┘
 ```
 
-**Firebase 역할**: 사용자 인증(Auth)만 담당
-**PostgreSQL 역할**: 모든 비즈니스 데이터 (직원, 매장, 부서, 달력, 게시판, 공지, 결재)
+**Firebase 역할**: 사용자 인증(Auth) + Storage만 담당
+**PostgreSQL 역할**: 모든 비즈니스 데이터
 
-### 7.3 추가된 테이블 (PostgreSQL)
+### 9.2 완료된 작업
 
-| 모델 | 설명 |
-|------|------|
-| Event | 달력 이벤트 |
-| BoardPost | 게시판 글 |
-| Message | 공지 메시지 |
-| Receipt | 공지 수신/읽음 기록 |
-| Approval | 결재 문서 |
-| ApprovalApprover | 결재 승인자 |
-| ApprovalAttachment | 결재 첨부파일 |
+| 작업 | 상태 |
+|------|:----:|
+| Prisma Employee 모델 + Firebase 연동 | ✅ |
+| 역할 시스템 (MASTER/ADMIN/STAFF) | ✅ |
+| 부서/매장 관리 PostgreSQL 전환 | ✅ |
+| 달력/게시판/공지/결재 PostgreSQL 마이그레이션 | ✅ |
+| Desktop 빌드 환경 구성 (electron-builder) | ✅ |
+| 라벨 프린터 RAW 출력 지원 | ✅ |
+| 프린터 경로 config.json 외부화 | ✅ |
 
 ---
 
@@ -361,16 +378,15 @@ ssh -i ~/.ssh/LightsailDefaultKey-ap-northeast-2.pem ubuntu@13.125.126.15 \
 
 ---
 
-**마지막 업데이트**: 2026-01-25
+**마지막 업데이트**: 2026-01-27
 **작성**: Claude Code
 
 ---
 
 <!--
 작업 이력:
+- 2026-01-27: Desktop 빌드 환경 구성, 라벨 프린터 설정, 역할 시스템 업데이트 (MASTER/ADMIN/STAFF)
 - 2026-01-25: Firebase → PostgreSQL 마이그레이션 완료 (달력, 게시판, 공지, 결재)
 - 2026-01-24: MVP 7단계 완료, 부서/매장 PostgreSQL 전환, 승인대기 화면 개선
 - 2026-01-22: 매장 Excel 일괄 등록, 재고 조정/초기화
-- 2026-01-20: Multi-Tenant 리팩토링, Firebase Functions
-- 2026-01-19: store-notice-app 초기 개발
 -->
