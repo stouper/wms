@@ -210,6 +210,11 @@ export class ExportsService {
         waybillNo: data.INVC_NO, // 호환성
         rcptYmd: data.RCPT_YMD,
         mpckKey: data.MPCK_KEY,
+        // ✅ 주소 정제 데이터 추가 (송장 출력용)
+        destCode: data.DEST_CODE,
+        subDestCode: data.SUB_DEST_CODE,
+        clsfAddr: data.CLSF_ADDR,
+        branchName: data.BRANCH_NAME,
       };
 
     } catch (apiError: any) {

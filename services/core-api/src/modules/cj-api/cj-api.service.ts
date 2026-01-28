@@ -452,11 +452,16 @@ export class CjApiService {
 
       this.logger.log(`CJ Reservation created for Job ${jobId}, waybill: ${responseInvcNo}`);
 
-      // 반환 데이터 구성
+      // 반환 데이터 구성 (주소 정제 데이터 포함)
       return {
         RCPT_YMD: responseRcptYmd,
         INVC_NO: responseInvcNo,
         MPCK_KEY: responseMpckKey,
+        // ✅ 주소 정제 API 응답 데이터 추가
+        DEST_CODE: addressData?.CLSFCD || null,
+        SUB_DEST_CODE: addressData?.SUBCLSFCD || null,
+        CLSF_ADDR: addressData?.CLSFADDR || null,
+        BRANCH_NAME: addressData?.CLLDLVBRANNM || null,
       };
     } catch (error: any) {
       this.logger.error('Failed to create CJ reservation', error);

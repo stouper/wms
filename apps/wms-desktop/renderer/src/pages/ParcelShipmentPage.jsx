@@ -8,7 +8,7 @@ import { safeReadJson, safeReadLocal, safeWriteJson, safeWriteLocal } from "../l
 import { inputStyle, primaryBtn } from "../ui/styles";
 import { exportsApi } from "../workflows/_common/exports.api";
 import { getOperatorId } from "../workflows/_common/operator";
-import { openJobSheetA4PrintWindow } from "../workflows/_common/print";
+import { openJobSheetA4PrintWindow, printShippingLabelHtml } from "../workflows/_common/print";
 
 const PAGE_KEY = "parcelShip";
 
@@ -289,6 +289,46 @@ export default function ParcelShipmentPage({ pageTitle = "택배 작업" }) {
             title: "송장 발급 완료",
             message: `${matchedTitle} - 운송장: ${cjRes.invcNo}`,
           });
+
+          // ✅ 송장 라벨 자동 출력 (HTML → Windows 드라이버 방식)
+          try {
+            const parcel = res.matchedParcel || {};
+            await printShippingLabelHtml({
+              data: {
+                trackingNo: cjRes.invcNo,
+                orderNo: parcel.orderNo || "",
+                rcptYmd: new Date().toISOString().slice(0, 10),
+                destCode: cjRes.destCode || "",
+                subDestCode: cjRes.subDestCode || "",
+                clsfAddr: cjRes.clsfAddr || "",
+                branchName: cjRes.branchName || "",
+                receiverName: parcel.recipientName || "",
+                receiverPhone: parcel.phone || "",
+                receiverZip: parcel.zip || "",
+                receiverAddr: parcel.addr1 || "",
+                receiverDetailAddr: parcel.addr2 || "",
+                senderName: cjRes.senderName || "",
+                senderPhone: cjRes.senderPhone || "",
+                senderAddr: cjRes.senderAddr || "",
+                goodsName: parcel.memo || "택배상품",
+                goodsQty: 1,
+                remark: parcel.memo || "",
+              },
+              printHtml: window.wms?.printHtml,
+            });
+            push({
+              kind: "success",
+              title: "라벨 출력",
+              message: `송장 ${cjRes.invcNo} 출력 완료`,
+            });
+          } catch (printErr) {
+            console.error("[printShippingLabelHtml] error:", printErr);
+            push({
+              kind: "warn",
+              title: "라벨 출력 실패",
+              message: printErr?.message || String(printErr),
+            });
+          }
         } else if (cjRes && cjRes.error) {
           push({
             kind: "warn",
