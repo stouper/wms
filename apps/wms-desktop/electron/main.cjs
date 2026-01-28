@@ -102,38 +102,59 @@ function normalizeTarget(t) {
 }
 
 /**
- * ✅ 라벨 프린터 RAW(ZPL) 출력 핸들러
- * renderer → window.wms.sendRaw({ target, raw })
- * main → tmp file 저장 → copy /b tmp target
+ * ✅ 라벨 프린터 RAW 출력 핸들러 (Windows API 방식)
+ * renderer → window.wms.sendRaw({ printerName, raw })
+ * main → tmp file 저장 → RawPrint.exe로 Windows API 호출
  */
 ipcMain.handle("print:sendRaw", async (event, payload) => {
   return new Promise((resolve, reject) => {
     const startedAt = Date.now();
 
     try {
-      const target = normalizeTarget(payload?.target);
+      // printerName: 프린터 이름 (예: "TOSHIBA")
+      // target: 하위 호환용 (UNC 경로에서 프린터 이름 추출)
+      let printerName = safeString(payload?.printerName).trim();
+      if (!printerName && payload?.target) {
+        // \\localhost\TOSHIBA → TOSHIBA 추출
+        const target = safeString(payload.target);
+        const match = target.match(/\\\\[^\\]+\\(.+)/);
+        printerName = match ? match[1] : target;
+      }
+      // 앞에 붙은 \\ 제거 (\\TOSHIBA → TOSHIBA)
+      printerName = printerName.replace(/^\\+/, "");
+
       const raw = safeString(payload?.raw);
 
-      if (!target) {
-        return reject(new Error("프린터 target(UNC 경로)이 비어있습니다. 예: \\\\localhost\\Toshiba"));
+      if (!printerName) {
+        return reject(new Error("프린터 이름이 비어있습니다. 예: TOSHIBA"));
       }
       if (!raw) {
-        return reject(new Error("프린터 raw 데이터가 비어있습니다. (ZPL 문자열이 필요)"));
+        return reject(new Error("프린터 raw 데이터가 비어있습니다."));
       }
 
-      // ✅ 디버깅 로그(앞부분만)
+      // ✅ 디버깅 로그
       const head = raw.slice(0, 200).replace(/\r/g, "\\r").replace(/\n/g, "\\n");
-      console.log("[print:sendRaw] target =", target);
+      console.log("[print:sendRaw] printerName =", printerName);
       console.log("[print:sendRaw] rawLen =", raw.length, "head =", head);
 
-      // 임시 파일에 RAW(ZPL) 저장
-      const tmpFile = path.join(os.tmpdir(), `label_${Date.now()}.zpl`);
-
-      // ✅ Buffer로 저장 (윈도우/한글/특수문자 포함 시에도 바이트 안정)
+      // 임시 파일에 RAW 데이터 저장
+      const tmpFile = path.join(os.tmpdir(), `label_${Date.now()}.raw`);
       fs.writeFileSync(tmpFile, Buffer.from(raw, "utf8"));
 
-      // Windows 공유 프린터로 RAW 전송
-      const cmd = `copy /b "${tmpFile}" "${target}"`;
+      // RawPrint.exe 경로 (개발/배포 환경 모두 지원)
+      const devExePath = path.join(__dirname, "..", "tools", "RawPrint.exe");
+      const prodExePath = path.join(process.resourcesPath || "", "tools", "RawPrint.exe");
+      const exePath = fs.existsSync(prodExePath) ? prodExePath : devExePath;
+
+      if (!fs.existsSync(exePath)) {
+        fs.unlinkSync(tmpFile);
+        return reject(new Error("RawPrint.exe를 찾을 수 없습니다: " + exePath));
+      }
+
+      // Windows API로 RAW 출력
+      const cmd = `"${exePath}" "${printerName}" "${tmpFile}"`;
+      console.log("[print:sendRaw] cmd =", cmd);
+
       exec(cmd, { shell: "cmd.exe" }, (err, stdout, stderr) => {
         // 임시 파일 삭제
         try {
@@ -146,16 +167,109 @@ ipcMain.handle("print:sendRaw", async (event, payload) => {
           console.error("[print:sendRaw] error:", err.message);
           if (stdout) console.error("[print:sendRaw] stdout:", stdout);
           if (stderr) console.error("[print:sendRaw] stderr:", stderr);
-          return reject(new Error(`프린터 출력 실패(${elapsed}ms): ${err.message}`));
+          return reject(new Error(`프린터 출력 실패(${elapsed}ms): ${stderr || err.message}`));
         }
 
-        // copy 명령은 성공해도 stdout이 비어있을 수 있음
-        console.log("[print:sendRaw] success:", target, `(${elapsed}ms)`);
-        return resolve({ ok: true, elapsedMs: elapsed });
+        // RawPrint.exe 출력 확인 (OK:바이트수)
+        const output = (stdout || "").trim();
+        console.log("[print:sendRaw] output:", output);
+
+        if (output.startsWith("OK:")) {
+          const bytes = parseInt(output.split(":")[1], 10);
+          console.log("[print:sendRaw] success:", printerName, `(${elapsed}ms, ${bytes} bytes)`);
+          return resolve({ ok: true, elapsedMs: elapsed, bytes });
+        } else {
+          console.error("[print:sendRaw] unexpected output:", output);
+          return reject(new Error(`프린터 출력 실패: ${output || stderr}`));
+        }
       });
     } catch (e) {
       console.error("[print:sendRaw] exception:", e?.message || e);
       return reject(e);
+    }
+  });
+});
+
+/**
+ * ✅ HTML 기반 Windows 드라이버 출력 (webContents.print 방식)
+ * renderer → window.wms.printHtml({ printerName, html })
+ * main → hidden BrowserWindow → webContents.print()
+ */
+ipcMain.handle("print:html", async (event, payload) => {
+  return new Promise((resolve, reject) => {
+    try {
+      let printerName = safeString(payload?.printerName).trim();
+      const html = safeString(payload?.html);
+
+      if (!printerName) {
+        return reject(new Error("프린터 이름이 비어있습니다."));
+      }
+      if (!html) {
+        return reject(new Error("HTML 내용이 비어있습니다."));
+      }
+
+      console.log("[print:html] printerName =", printerName);
+      console.log("[print:html] htmlLen =", html.length);
+
+      // 숨김 창 생성
+      const printWin = new BrowserWindow({
+        show: false,
+        width: 400,
+        height: 600,
+        webPreferences: {
+          contextIsolation: true,
+          nodeIntegration: false,
+        },
+      });
+
+      // HTML 로드 (data URL 방식)
+      const dataUrl = "data:text/html;charset=utf-8," + encodeURIComponent(html);
+      printWin.loadURL(dataUrl);
+
+      printWin.webContents.on("did-finish-load", () => {
+        console.log("[print:html] page loaded, printing...");
+
+        // 라벨 용지: 123mm x 100mm (CJ대한통운 프리프린트 용지)
+        const pageWidth = 123 * 1000;  // 123mm
+        const pageHeight = 100 * 1000; // 100mm
+
+        printWin.webContents.print(
+          {
+            silent: true,
+            printBackground: true,
+            deviceName: printerName,
+            landscape: true,
+            pageSize: {
+              width: pageWidth,
+              height: pageHeight,
+            },
+            margins: {
+              marginType: "none",
+            },
+            scaleFactor: 100,
+          },
+          (success, failureReason) => {
+            printWin.close();
+
+            if (success) {
+              console.log("[print:html] success");
+              resolve({ ok: true });
+            } else {
+              console.error("[print:html] failed:", failureReason);
+              reject(new Error(`프린트 실패: ${failureReason}`));
+            }
+          }
+        );
+      });
+
+      printWin.webContents.on("did-fail-load", (event, errorCode, errorDescription) => {
+        console.error("[print:html] load failed:", errorCode, errorDescription);
+        printWin.close();
+        reject(new Error(`HTML 로드 실패: ${errorDescription}`));
+      });
+    } catch (e) {
+      console.error("[print:html] exception:", e?.message || e);
+      reject(e);
     }
   });
 });

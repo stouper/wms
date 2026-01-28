@@ -258,6 +258,28 @@ export class CjApiService {
 
     const parcel = job.parcel;
 
+    // ✅ 주소 정제 API 호출하여 분류코드/배달점소 정보 획득
+    let addressData: CjAddressData | null = null;
+    try {
+      const fullAddr = `${parcel.addr1} ${parcel.addr2 || ''}`.trim();
+      addressData = await this.verifyAddress(fullAddr);
+      this.logger.log(`Address verified: destCode=${addressData.CLSFCD}, branch=${addressData.CLLDLVBRANNM}`);
+
+      // JobParcel에 주소 정제 데이터 저장
+      await this.prisma.jobParcel.update({
+        where: { jobId },
+        data: {
+          destCode: addressData.CLSFCD || null,
+          subDestCode: addressData.SUBCLSFCD || null,
+          clsfAddr: addressData.CLSFADDR || null,
+          branchName: addressData.CLLDLVBRANNM || null,
+        },
+      });
+    } catch (addrError: any) {
+      this.logger.warn(`Address verification failed (continuing): ${addrError.message}`);
+      // 주소 정제 실패해도 예약 접수는 계속 진행
+    }
+
     // 운송장 번호 발급
     const [waybillNo] = await this.generateWaybillNumbers(1);
 

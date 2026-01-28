@@ -289,6 +289,12 @@ model JobParcel {
   carrierCode String?
   waybillNo   String?
 
+  // ✅ [추가] CJ 주소 정제 API 응답 데이터
+  destCode    String? // 분류코드 (CLSFCD) - 예: 4W44
+  subDestCode String? // 서브분류코드 (SUBCLSFCD) - 예: 4g
+  clsfAddr    String? // 주소약칭 (CLSFADDR) - 예: 홍길동아파트 101동
+  branchName  String? // 배달점소 (CLLDLVBRANNM) - 예: 대한통운-A01
+
   // ✅ [추가] CJ 예약 요청 시점
   requestedCjAt DateTime?
 

@@ -1,0 +1,254 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="UTF-8">
+  <title>CJ대한통운 송장 - 미리보기</title>
+  <style>
+    @page {
+      size: 123mm 100mm;
+      margin: 0;
+    }
+    * {
+      margin: 0;
+      padding: 0;
+      box-sizing: border-box;
+      font-family: 'Malgun Gothic', 'Noto Sans KR', sans-serif;
+    }
+    html {
+      display: flex;
+      justify-content: center;
+      align-items: center;
+      min-height: 100vh;
+      background: #eee;
+      margin: 0;
+      padding: 0;
+    }
+    body {
+      width: 123mm;
+      height: 100mm;
+      background: #fff;
+      border: 1px solid #ccc;
+      overflow: hidden;
+      position: relative;
+      margin: 0;
+      padding: 0;
+    }
+    .label-inner {
+      width: 100%;
+      height: 100%;
+      position: relative;
+    }
+
+    @media print {
+      html {
+        background: none;
+        display: block;
+        margin: 0 !important;
+        padding: 0 !important;
+      }
+      body {
+        border: none;
+        width: 123mm !important;
+        height: 100mm !important;
+        margin: 0 !important;
+        padding: 0 !important;
+      }
+    }
+
+    /* 프리프린트 용지에 맞춰 데이터만 출력 - 절대 위치 사용 */
+    /* ※ top, left 값은 실제 용지에 맞게 조정 필요 */
+
+    /* 1행: 운송장번호 */
+    .tracking-number {
+      position: absolute;
+      top: 3mm;
+      left: 20mm;
+      font-size: 14pt;
+      font-weight: bold;
+    }
+
+    /* 1행: 날짜 */
+    .date-box {
+      position: absolute;
+      top: 3mm;
+      left: 65mm;
+      font-size: 9pt;
+    }
+
+    /* 1행: 매수 */
+    .box-count {
+      position: absolute;
+      top: 3mm;
+      left: 85mm;
+      font-size: 9pt;
+    }
+
+    /* 2행: 분류코드 바코드 */
+    .clsf-barcode {
+      position: absolute;
+      top: 11mm;
+      left: 3mm;
+      width: 28mm;
+      text-align: center;
+    }
+    .clsf-barcode svg { height: 20mm; }
+
+    /* 2행: 분류코드 텍스트 */
+    .clsf-text {
+      position: absolute;
+      top: 14mm;
+      left: 33mm;
+      display: flex;
+      align-items: center;
+      gap: 2mm;
+    }
+    .clsf-main { font-size: 48pt; font-weight: bold; }
+    .clsf-sub { font-size: 36pt; font-weight: bold; }
+    .clsf-p2p { font-size: 24pt; font-weight: bold; margin-left: 5mm; }
+
+    /* 3행: 받는분 연락처 + 주소 */
+    .receiver-info {
+      position: absolute;
+      top: 37mm;
+      left: 8mm;
+      width: 80mm;
+    }
+    .receiver-contact { font-size: 10pt; font-weight: bold; }
+    .receiver-addr { font-size: 9pt; margin-top: 1mm; line-height: 1.3; }
+
+    /* 3행: 주소약칭 */
+    .addr-short {
+      position: absolute;
+      top: 48mm;
+      left: 8mm;
+      font-size: 24pt;
+      font-weight: bold;
+    }
+
+    /* 4행: 보내는분 정보 */
+    .sender-info {
+      position: absolute;
+      top: 60mm;
+      left: 8mm;
+      font-size: 8pt;
+      width: 55mm;
+    }
+
+    /* 4행: 수량/운임/정산 값 */
+    .freight-values {
+      position: absolute;
+      top: 60mm;
+      left: 68mm;
+      display: flex;
+      font-size: 9pt;
+      font-weight: bold;
+    }
+    .freight-values > div {
+      width: 15mm;
+      text-align: center;
+    }
+
+    /* 5행: 상품정보 */
+    .product-info {
+      position: absolute;
+      top: 70mm;
+      left: 3mm;
+      width: 117mm;
+      font-size: 8pt;
+      line-height: 1.4;
+    }
+
+    /* 6행: 배송메시지 */
+    .delivery-msg {
+      position: absolute;
+      top: 78mm;
+      left: 3mm;
+      width: 117mm;
+      font-size: 8pt;
+    }
+
+    /* 7행: 배달점소 */
+    .branch {
+      position: absolute;
+      top: 86mm;
+      left: 3mm;
+      font-size: 16pt;
+      font-weight: bold;
+    }
+
+    /* 7행: 운송장 바코드 */
+    .tracking-barcode {
+      position: absolute;
+      top: 84mm;
+      left: 80mm;
+      text-align: center;
+    }
+    .tracking-barcode svg { height: 10mm; width: 35mm; }
+    .tracking-barcode .barcode-text { font-size: 8pt; font-weight: bold; }
+  </style>
+</head>
+<body>
+  <div class="label-inner">
+    <!-- 1행: 운송장번호 -->
+    <div class="tracking-number">1234-1234-5678</div>
+    <div class="date-box">2024.01.28</div>
+    <div class="box-count">1/1</div>
+
+    <!-- 2행: 분류코드 -->
+    <div class="clsf-barcode">
+      <svg id="clsfBarcode"></svg>
+    </div>
+    <div class="clsf-text">
+      <span class="clsf-main">4W44</span>
+      <span class="clsf-sub">-4g</span>
+      <span class="clsf-p2p">P1</span>
+    </div>
+
+    <!-- 3행: 받는분 -->
+    <div class="receiver-info">
+      <div class="receiver-contact">홍*동 010-1234-**** / 010-1234-****</div>
+      <div class="receiver-addr">서울 중구 세종대로9길 53 [서소문동 58-12] 홍길동아파트 101동 201호</div>
+    </div>
+    <div class="addr-short">홍길동아파트 101동 201호</div>
+
+    <!-- 4행: 보내는분 + 운임 -->
+    <div class="sender-info">CJ대한통운 012-123-1234<br/>서울 중구 세종대로9길 53</div>
+    <div class="freight-values">
+      <div>1</div>
+      <div>0</div>
+      <div>신용</div>
+    </div>
+
+    <!-- 5행: 상품정보 -->
+    <div class="product-info">테스트 상품 ABCDEFG0000 컬러: 12345BK_블랙 (수량: 1)</div>
+
+    <!-- 6행: 배송메시지 -->
+    <div class="delivery-msg">배송메시지입니다.</div>
+
+    <!-- 7행: 배달점소 + 바코드 -->
+    <div class="branch">대한통운 - A01-1구역</div>
+    <div class="tracking-barcode">
+      <svg id="trackingBarcode"></svg>
+      <div class="barcode-text">1234-1234-5678</div>
+    </div>
+  </div>
+
+  <script src="https://cdn.jsdelivr.net/npm/jsbarcode@3.11.5/dist/JsBarcode.all.min.js"></script>
+  <script>
+    JsBarcode("#clsfBarcode", "4W44-4g", {
+      format: "CODE128",
+      width: 2,
+      height: 65,
+      displayValue: false,
+      margin: 0
+    });
+    JsBarcode("#trackingBarcode", "1234-1234-5678", {
+      format: "CODE128",
+      width: 2,
+      height: 35,
+      displayValue: false,
+      margin: 0
+    });
+  </script>
+</body>
+</html>
