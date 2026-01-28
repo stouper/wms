@@ -38,11 +38,13 @@ export interface CjAddressData {
   ADDR: string;              // 정제된 주소
   ADDR_DETAIL?: string;      // 상세주소
   ZIP_NO?: string;           // 우편번호
-  CLSFCD?: string;           // 권역코드
+  CLSFCD?: string;           // 권역코드 (분류코드)
   SUBCLSFCD?: string;        // 서브권역코드
-  CLSFADDR?: string;         // 권역주소
-  CLLDLVBRANNM?: string;     // 집배점명
+  CLSFADDR?: string;         // 권역주소 (주소약칭)
+  CLLDLVBRANNM?: string;     // 집배점명 (배달점소)
   CLLDLVBRANCD?: string;     // 집배점코드
+  CLLDLVEMPNICKNM?: string;  // 배달사원 별칭
+  P2PCD?: string;            // 권내배송코드 (P0~P50)
   ROADADDR?: string;         // 도로명주소
   JIBUNADDR?: string;        // 지번주소
 }
@@ -113,6 +115,8 @@ export interface CjReservationData {
   SUB_DEST_CODE?: string | null;  // 서브분류코드 (SUBCLSFCD)
   CLSF_ADDR?: string | null;      // 주소약칭 (CLSFADDR)
   BRANCH_NAME?: string | null;    // 배달점소 (CLLDLVBRANNM)
+  EMP_NICKNAME?: string | null;   // 배달사원 별칭 (CLLDLVEMPNICKNM)
+  P2P_CD?: string | null;         // 권내배송코드 (P2PCD) - P0~P50
 }
 
 /**

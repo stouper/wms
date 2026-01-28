@@ -302,6 +302,8 @@ export default function ParcelShipmentPage({ pageTitle = "택배 작업" }) {
                 subDestCode: cjRes.subDestCode || "",
                 clsfAddr: cjRes.clsfAddr || "",
                 branchName: cjRes.branchName || "",
+                empNickname: cjRes.empNickname || "",
+                p2pCd: cjRes.p2pCd || "",
                 receiverName: parcel.recipientName || "",
                 receiverPhone: parcel.phone || "",
                 receiverZip: parcel.zip || "",

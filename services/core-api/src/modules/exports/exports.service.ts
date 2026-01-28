@@ -215,6 +215,8 @@ export class ExportsService {
         subDestCode: data.SUB_DEST_CODE,
         clsfAddr: data.CLSF_ADDR,
         branchName: data.BRANCH_NAME,
+        empNickname: data.EMP_NICKNAME,
+        p2pCd: data.P2P_CD,
       };
 
     } catch (apiError: any) {

@@ -273,6 +273,8 @@ export class CjApiService {
           subDestCode: addressData.SUBCLSFCD || null,
           clsfAddr: addressData.CLSFADDR || null,
           branchName: addressData.CLLDLVBRANNM || null,
+          empNickname: addressData.CLLDLVEMPNICKNM || null,
+          p2pCd: addressData.P2PCD || null,
         },
       });
     } catch (addrError: any) {
@@ -462,6 +464,8 @@ export class CjApiService {
         SUB_DEST_CODE: addressData?.SUBCLSFCD || null,
         CLSF_ADDR: addressData?.CLSFADDR || null,
         BRANCH_NAME: addressData?.CLLDLVBRANNM || null,
+        EMP_NICKNAME: addressData?.CLLDLVEMPNICKNM || null,
+        P2P_CD: addressData?.P2PCD || null,
       };
     } catch (error: any) {
       this.logger.error('Failed to create CJ reservation', error);

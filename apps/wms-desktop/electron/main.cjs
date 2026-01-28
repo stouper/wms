@@ -229,16 +229,16 @@ ipcMain.handle("print:html", async (event, payload) => {
       printWin.webContents.on("did-finish-load", () => {
         console.log("[print:html] page loaded, printing...");
 
-        // 라벨 용지: 123mm x 100mm (CJ대한통운 프리프린트 용지)
-        const pageWidth = 123 * 1000;  // 123mm
-        const pageHeight = 100 * 1000; // 100mm
+        // 라벨 용지: 102mm x 122mm (CJ대한통운 프리프린트 용지)
+        const pageWidth = 102 * 1000;  // 102mm
+        const pageHeight = 122 * 1000; // 122mm
 
         printWin.webContents.print(
           {
             silent: true,
             printBackground: true,
             deviceName: printerName,
-            landscape: true,
+            landscape: false,
             pageSize: {
               width: pageWidth,
               height: pageHeight,
