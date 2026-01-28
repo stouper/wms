@@ -108,6 +108,11 @@ export interface CjReservationData {
   RCPT_YMD: string;         // 접수일자 (YYYYMMDD)
   INVC_NO: string;          // 운송장 번호
   MPCK_KEY?: string;        // 묶음 키
+  // ✅ 주소 정제 API 데이터 (송장 출력용)
+  DEST_CODE?: string | null;      // 분류코드 (CLSFCD)
+  SUB_DEST_CODE?: string | null;  // 서브분류코드 (SUBCLSFCD)
+  CLSF_ADDR?: string | null;      // 주소약칭 (CLSFADDR)
+  BRANCH_NAME?: string | null;    // 배달점소 (CLLDLVBRANNM)
 }
 
 /**
