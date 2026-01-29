@@ -126,13 +126,12 @@ export function renderShippingLabelHTML(data) {
 
   // ============================================================
   // [11] 보내는분 성명+전화번호 (7pt) - 기본값: 테스트 / 010-123-4567
-  // 💡 마스킹: 일반배송 시 마스킹, 반품 시 마스킹 해제
+  // 💡 마스킹 임시 해제 (디버깅)
   // ============================================================
-  const senderMask = !isReturn;
-  const senderName = esc(d.senderName || d.sender || d.sendrNm || "테스트");
-  const senderPhone = esc(d.senderPhone || "010-123-4567");
-  const senderNameOut = senderMask ? maskNameSecondChar(senderName) : senderName;
-  const senderPhoneOut = senderMask ? maskPhoneLast4(senderPhone) : senderPhone;
+  const senderName = d.senderName || d.sender || d.sendrNm || "테스트";
+  const senderPhone = d.senderPhone || "010-123-4567";
+  const senderNameOut = esc(senderName);
+  const senderPhoneOut = esc(senderPhone);
 
   // ============================================================
   // [12] 운임그룹조정 + 수량 (10pt)
