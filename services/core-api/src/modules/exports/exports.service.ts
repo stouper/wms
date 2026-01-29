@@ -202,6 +202,7 @@ export class ExportsService {
       });
 
       this.logger.log(`CJ 예약 완료: ${jobId}, 운송장: ${data.INVC_NO}`);
+      this.logger.log(`보내는분 정보: name=${data.SENDER_NAME}, phone=${data.SENDER_PHONE}, addr=${data.SENDER_ADDR}`);
 
       return {
         success: true,
