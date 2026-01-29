@@ -110,7 +110,7 @@ export function renderShippingLabelHTML(data) {
 
   // 11. 보내는분 성명+전화번호 (7pt)
   const senderMask = !isReturn;
-  const senderName = d.senderName || d.sendrNm || "";
+  const senderName = d.senderName || d.sender || d.sendrNm || "";
   const senderPhone = d.senderPhone || "";
   const senderNameOut = maybeMaskName(senderName, senderMask);
   const senderPhoneOut = maybeMaskPhone(senderPhone, senderMask);
@@ -127,7 +127,7 @@ export function renderShippingLabelHTML(data) {
   const freightLabel = freightType === "01" ? "선불" : freightType === "02" ? "착불" : "신용";
 
   // 15. 보내는분주소 (8pt)
-  const senderAddr = esc(d.senderAddr || "");
+  const senderAddr = esc(d.senderAddr || d.senderAddress || "");
 
   // 16. 상품명 (9pt)
   const goodsName = esc(d.goodsName || d.gdsNm || d.productName || "");
