@@ -173,7 +173,6 @@ export function renderShippingLabelHTML(data) {
       justify-content: space-between;
       align-items: center;
       height: 6mm;
-      border-bottom: 0.3mm solid #000;
       padding-bottom: 1mm;
     }
     .tracking-no { font-size: 12pt; }
@@ -184,7 +183,6 @@ export function renderShippingLabelHTML(data) {
     .row2 {
       display: flex;
       height: 20mm;
-      border-bottom: 0.3mm solid #000;
       align-items: center;
     }
     .clsf-barcode {
@@ -193,7 +191,6 @@ export function renderShippingLabelHTML(data) {
       display: flex;
       align-items: center;
       justify-content: center;
-      border-right: 0.3mm solid #000;
     }
     .clsf-barcode svg { height: 16mm; }
     .clsf-text {
@@ -213,12 +210,10 @@ export function renderShippingLabelHTML(data) {
     .row3 {
       display: flex;
       min-height: 22mm;
-      border-bottom: 0.3mm solid #000;
     }
     .receiver-info {
       flex: 1;
       padding: 1mm;
-      border-right: 0.3mm solid #000;
     }
     .receiver-contact { font-size: 10pt; margin-bottom: 1mm; }
     .receiver-addr { font-size: 9pt; line-height: 1.3; }
@@ -234,7 +229,6 @@ export function renderShippingLabelHTML(data) {
     .row4 {
       display: flex;
       height: 6mm;
-      border-bottom: 0.3mm solid #000;
       font-size: 10pt;
     }
     .row4 > div {
@@ -242,14 +236,11 @@ export function renderShippingLabelHTML(data) {
       display: flex;
       align-items: center;
       justify-content: center;
-      border-right: 0.3mm solid #000;
     }
-    .row4 > div:last-child { border-right: none; }
 
     /* 5행: 보내는분 */
     .row5 {
       height: 10mm;
-      border-bottom: 0.3mm solid #000;
       padding: 1mm;
       font-size: 8pt;
       line-height: 1.4;
@@ -258,7 +249,6 @@ export function renderShippingLabelHTML(data) {
     /* 6행: 상품명 */
     .row6 {
       height: 6mm;
-      border-bottom: 0.3mm solid #000;
       padding: 1mm;
       font-size: 9pt;
       display: flex;
@@ -268,7 +258,6 @@ export function renderShippingLabelHTML(data) {
     /* 7행: 배송메시지 */
     .row7 {
       height: 6mm;
-      border-bottom: 0.3mm solid #000;
       padding: 1mm;
       font-size: 8pt;
       display: flex;
@@ -301,7 +290,7 @@ export function renderShippingLabelHTML(data) {
   <div class="label">
     <!-- 1행: 운송장번호 + 접수일자 + 출력매수 + 재출력 -->
     <div class="row1">
-      <span class="tracking-no">운송장번호 ${trackingNo}</span>
+      <span class="tracking-no">${trackingNo}</span>
       <div class="row1-right">
         <span>${rcptYmd}</span>
         <span>${boxNo}/${boxTotal}</span>
@@ -344,15 +333,15 @@ export function renderShippingLabelHTML(data) {
 
     <!-- 5행: 보내는분 -->
     <div class="row5">
-      <div>보내는분: ${senderNameOut} ${senderPhoneOut}</div>
+      <div>${senderNameOut} ${senderPhoneOut}</div>
       <div>${senderAddr}</div>
     </div>
 
     <!-- 6행: 상품명 -->
-    <div class="row6">상품: ${goodsName} (수량: ${goodsQty})</div>
+    <div class="row6">${goodsName} (${goodsQty})</div>
 
     <!-- 7행: 배송메시지 -->
-    <div class="row7">${remark ? `배송메시지: ${remark}` : ""}</div>
+    <div class="row7">${remark}</div>
 
     <!-- 8행: 배달점소 + 운송장바코드 -->
     <div class="row8">
