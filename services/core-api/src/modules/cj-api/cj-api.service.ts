@@ -275,6 +275,13 @@ export class CjApiService {
           branchName: addressData.CLLDLVBRANNM || null,
           empNickname: addressData.CLLDLVEMPNICKNM || null,
           p2pCd: addressData.P2PCD || null,
+          // ✅ CJ 정제 주소 추가 저장
+          cjAddr: addressData.ADDR || null,
+          cjAddrDetail: addressData.ADDR_DETAIL || null,
+          cjZipNo: addressData.ZIP_NO || null,
+          cjBranchCd: addressData.CLLDLVBRANCD || null,
+          cjRoadAddr: addressData.ROADADDR || null,
+          cjJibunAddr: addressData.JIBUNADDR || null,
         },
       });
     } catch (addrError: any) {

@@ -1,110 +1,199 @@
 // apps/wms-desktop/renderer/src/workflows/_common/print/shippingLabel.html.js
-// CJ대한통운 프리프린트 송장 용지용 (123mm x 100mm)
-// 각 항목별 위치 조정 가능 (top, left 값 수정)
+// CJ대한통운 표준운송장 (123mm x 100mm)
+// ✅ 프린터 방향(102mm x 122mm) 기준 유지 + CJ 좌표계(123x100) "캔버스"를 top-left 기준으로 1회 회전
+// - 방향은 프린터가 잘 나오는 값(102x122)을 그대로 사용
+// - 실제 레이아웃/좌표는 CJ 가이드(123x100) 기준으로 유지 (캔버스만 회전)
+// - 회전/이동은 .canvas에서만 수행 (중앙정렬/translate(-50%) 같은 것 금지)
 
 const esc = (s) => String(s ?? "").replace(/</g, "&lt;").replace(/>/g, "&gt;").trim();
 
-// 이름 마스킹 (두번째 글자)
-function maskName(name) {
-  if (!name || name.length < 2) return name || "";
-  const arr = [...name];
+// --------------------
+// 예약구분(일반/반품) 판단
+// --------------------
+function isReturnReservation(d) {
+  const v =
+    d?.reserveType ??
+    d?.reserveKind ??
+    d?.rsvType ??
+    d?.rsvDvCd ??
+    d?.reqDvCd ??
+    d?.returnType ??
+    d?.returnYn ??
+    d?.isReturn ??
+    "";
+
+  if (v === true) return true;
+
+  const s = String(v).toUpperCase().trim();
+  if (s === "RETURN" || s === "RET" || s === "R") return true;
+  if (s === "반품") return true;
+  if (s === "Y" || s === "YES" || s === "TRUE") return true;
+
+  // (프로젝트별로 다를 수 있어 보수적으로)
+  if (s === "02") return true;
+
+  return false;
+}
+
+// --------------------
+// 마스킹 (가이드 기본값)
+// - 받는분: 일반=해제, 반품=마스킹
+// - 보내는분: 일반=마스킹, 반품=해제
+// - 규칙: 이름 두번째 글자 / 전화번호 마지막 4자리
+// --------------------
+function maskNameSecondChar(name) {
+  const n = String(name ?? "").trim();
+  if (!n) return "";
+  const arr = [...n];
+  if (arr.length < 2) return arr[0] + "*";
   arr[1] = "*";
   return arr.join("");
 }
 
-// 전화번호 마스킹 (마지막 4자리)
-function maskPhone(phone) {
-  if (!phone) return "";
-  return phone.replace(/(\d{4})$/, "****");
+function maskPhoneLast4Safe(phone) {
+  const p = String(phone ?? "").trim();
+  if (!p) return "";
+  const digits = (p.match(/\d/g) || []).join("");
+  if (digits.length < 4) return p;
+
+  let remain = 4;
+  let out = "";
+  for (let i = p.length - 1; i >= 0; i--) {
+    const ch = p[i];
+    if (/\d/.test(ch) && remain > 0) {
+      out = "*" + out;
+      remain--;
+    } else {
+      out = ch + out;
+    }
+  }
+  return out.replace(/\*{4}$/, "****");
+}
+
+function maybeMaskName(name, shouldMask) {
+  return esc(shouldMask ? maskNameSecondChar(name) : name);
+}
+
+function maybeMaskPhone(phone, shouldMask) {
+  return esc(shouldMask ? maskPhoneLast4Safe(phone) : phone);
+}
+
+// --------------------
+// 분류코드 SUB 분리 (SUB1 / SUB2)
+// 예: "4g" -> SUB1="4"(53pt), SUB2="g"(36pt)
+// --------------------
+function splitSubClsf(sub) {
+  const s = String(sub ?? "").trim();
+  if (!s) return { sub1: "", sub2: "" };
+  if (s.length === 1) return { sub1: s, sub2: "" };
+  return { sub1: s.slice(0, 1), sub2: s.slice(1) };
+}
+
+// --------------------
+// 배달점소-별칭 표시 조건
+// - 전담권역=01 또는 배송사원명=## 일 때 표시
+// --------------------
+function shouldShowBranchAlias(d) {
+  const zone = String(
+    d?.dedicatedZone ??
+      d?.dlvZone ??
+      d?.dlvArea ??
+      d?.preArrArea ??
+      d?.dlvPreArrArea ??
+      d?.dlvPreArrAreaCd ??
+      d?.DUTY_AREA ??
+      ""
+  ).trim();
+
+  const emp = String(
+    d?.empNickname ??
+      d?.dlvEmpNickNm ??
+      d?.dlvPreArrEmpNickNm ??
+      d?.CLLDLVEMPNICKNM ??
+      ""
+  ).trim();
+
+  return zone === "01" || emp === "##";
 }
 
 export function renderShippingLabelHTML(data) {
   const d = data || {};
 
-  // ========== CJ 필요 데이터 ==========
+  // ✅ 프린터 미세 오프셋(mm) — 전체가 통째로 조금 밀리면 여기만 조정하면 됨
+  // 예) 오른쪽으로 2mm 밀림 => -2, 아래로 1mm 내려감 => -1
+  const offX = Number(d.printOffsetXmm ?? d.offsetXmm ?? 0) || 0;
+  const offY = Number(d.printOffsetYmm ?? d.offsetYmm ?? 0) || 0;
 
-  // 1. 운송장번호
+  // 예약구분
+  const isReturn = isReturnReservation(d);
+
+  // 운송장번호 (12pt)
   const trackingNo = esc(d.trackingNo || d.waybillNo || d.invcNo || "");
 
-  // 2. 접수일자
+  // 접수일자 (8pt)
   const rcptYmd = esc(d.rcptYmd || d.receiptDate || new Date().toISOString().slice(0, 10));
 
-  // 3. 출력매수 (박스번호/총박스)
+  // 출력매수 (8pt)
   const boxNo = d.boxNo || 1;
   const boxTotal = d.boxTotal || d.boxQty || 1;
 
-  // 4. 분류코드 (대분류)
-  const destCode = esc(d.destCode || d.clsfCd || "");
+  // 분류코드
+  const clsfCd = esc(d.destCode || d.clsfCd || d.dlvClsfCd || "");
+  const subClsfCdRaw = esc(d.subDestCode || d.subClsfCd || d.dlvSubClsfCd || "");
+  const { sub1, sub2 } = splitSubClsf(subClsfCdRaw);
 
-  // 5. 서브분류코드 (소분류)
-  const subDestCode = esc(d.subDestCode || d.subClsfCd || "");
+  // 받는분 (가이드 기본값: 일반 해제 / 반품 마스킹)
+  const receiverMask = isReturn;
+  const receiverName = d.receiverName || d.rcvrNm || "";
+  const receiverPhone = d.receiverPhone || d.phone || "";
+  const receiverMobile = d.receiverMobile || d.mobile || "";
 
-  // 6. 권역코드 P2P
-  const p2pCd = esc(d.p2pCd || "");
+  const receiverNameOut = maybeMaskName(receiverName, receiverMask);
+  const receiverPhoneOut = maybeMaskPhone(receiverPhone, receiverMask);
+  const receiverMobileOut = receiverMobile ? maybeMaskPhone(receiverMobile, receiverMask) : "";
 
-  // 7. 받는분 이름
-  const receiverName = esc(d.receiverName || d.rcvrNm || "");
-  const maskedReceiverName = maskName(receiverName);
+  // 받는분주소 (9pt) - CJ 정제 주소 우선 사용
+  const receiverAddr = esc(d.cjAddr || d.cjRoadAddr || d.receiverAddr || d.address1 || d.addr1 || "");
+  const receiverDetailAddr = esc(d.cjAddrDetail || d.receiverDetailAddr || d.address2 || d.addr2 || "");
+  const fullAddr = `${receiverAddr} ${receiverDetailAddr}`.trim();
 
-  // 8. 받는분 전화번호
-  const receiverPhone = esc(d.receiverPhone || d.phone || "");
-  const maskedReceiverPhone = maskPhone(receiverPhone);
-
-  // 9. 받는분 휴대폰
-  const receiverMobile = esc(d.receiverMobile || d.mobile || "");
-  const maskedReceiverMobile = receiverMobile ? maskPhone(receiverMobile) : "";
-
-  // 10. 받는분 우편번호
-  const receiverZip = esc(d.receiverZip || d.zip || "");
-
-  // 11. 받는분 주소
-  const receiverAddr = esc(d.receiverAddr || d.address1 || d.addr1 || "");
-
-  // 12. 받는분 상세주소
-  const receiverDetailAddr = esc(d.receiverDetailAddr || d.address2 || d.addr2 || "");
-
-  // 13. 주소약칭 (동/건물명 등)
+  // 주소약칭 (24pt)
   const clsfAddr = esc(d.clsfAddr || d.rcvrClsfAddr || "");
 
-  // 14. 보내는분 이름
-  const senderName = esc(d.senderName || d.sendrNm || "");
+  // 보내는분 (가이드 기본값: 일반 마스킹 / 반품 해제)
+  const senderMask = !isReturn;
+  const senderName = d.senderName || d.sendrNm || "";
+  const senderPhone = d.senderPhone || "";
+  const senderAddr = d.senderAddr || "";
 
-  // 15. 보내는분 전화번호
-  const senderPhone = esc(d.senderPhone || "");
+  const senderNameOut = maybeMaskName(senderName, senderMask);
+  const senderPhoneOut = maybeMaskPhone(senderPhone, senderMask);
 
-  // 16. 보내는분 주소
-  const senderAddr = esc(d.senderAddr || "");
-
-  // 17. 수량 (박스 수)
-  const boxQty = d.boxQty || d.qty || 1;
-
-  // 18. 운임금액
-  const freight = d.freight || d.totalFreight || 0;
-
-  // 19. 정산구분 (01:선불, 02:착불, 03:신용)
+  // 운임
   const freightType = d.freightType || d.frtDvCd || "03";
   const freightLabel = freightType === "01" ? "선불" : freightType === "02" ? "착불" : "신용";
+  const freight = Number(d.totalFreight ?? d.freight ?? 0) || 0;
 
-  // 20. 상품명
+  // 운임그룹조정 + 수량
+  const fareGroupAdj = esc(d.fareGroupAdj || d.frtGrpAdj || d.frtGrp || d.frtGrpCd || "");
+  const goodsQty = Number(d.goodsQty || d.qty || 1) || 1;
+  const fareGroupAndQty = `${fareGroupAdj ? `${fareGroupAdj} ` : ""}${goodsQty}`.trim();
+
+  // 상품 / 메시지
   const goodsName = esc(d.goodsName || d.gdsNm || d.productName || "");
-
-  // 21. 상품수량
-  const goodsQty = d.goodsQty || d.qty || 1;
-
-  // 22. 배송메시지
   const remark = esc(d.remark || d.memo || d.dlvMsg || "");
 
-  // 23. 배달점소명
-  const branchName = esc(d.branchName || d.dlvBranNm || "");
+  // 배달점소-별칭
+  const branchName = esc(d.branchName || d.dlvBranNm || d.dlvPreArrBranShortNm || d.dlvPreArrBranNm || "대한통운");
+  const empNickname = esc(d.empNickname || d.dlvEmpNickNm || d.dlvPreArrEmpNickNm || "");
+  const branchDisplay = empNickname ? `${branchName}-${empNickname}` : branchName;
+  const showBranch = shouldShowBranchAlias(d);
 
-  // 24. 배달사원 별칭
-  const empNickname = esc(d.empNickname || d.dlvEmpNickNm || "");
+  // 권역코드 P2P
+  const p2pCd = esc(d.p2pCd || d.p2pcd || "");
 
-  // 25. 주문번호 (고객참조)
-  const orderNo = esc(d.orderNo || d.custUseNo || "");
-
-  // 바코드용 값
-  const destCodeBarcode = destCode + (subDestCode ? "-" + subDestCode : "");
+  // 분류코드 'g' 보정
+  const sub2IsG = String(sub2).toLowerCase().includes("g");
 
   return `<!DOCTYPE html>
 <html>
@@ -112,420 +201,284 @@ export function renderShippingLabelHTML(data) {
   <meta charset="UTF-8">
   <title>CJ대한통운 송장</title>
   <style>
-    @page {
-      size: 102mm 122mm;
-      margin: 0;
-    }
-    * {
-      margin: 0;
-      padding: 0;
-      box-sizing: border-box;
-      font-family: 'Malgun Gothic', 'Noto Sans KR', sans-serif;
-    }
-    body {
+    /* ✅ 프린터가 "정방향"으로 출력되는 종이 설정 (너가 맞다고 확인한 값) */
+    @page { size: 102mm 122mm; margin: 0; }
+
+    html, body {
       width: 102mm;
       height: 122mm;
-      background: #fff;
+      margin: 0;
+      padding: 0;
+    }
+
+    * {
+      box-sizing: border-box;
+      font-family: 'Noto Sans KR', 'Noto Sans Korea', 'HY견고딕', 'Malgun Gothic', sans-serif;
+    }
+
+    /* 프린터용 시트(기준) */
+    .sheet {
       position: relative;
+      width: 102mm;
+      height: 122mm;
+      overflow: hidden;
+      background: #fff;
+      color: #000;
     }
 
-    /* 컨테이너 (반시계방향 90도 회전) */
-    .label-container {
-      width: 122mm;
-      height: 102mm;
+    /* ✅ CJ 좌표계 캔버스(123x100)를 "top-left 기준으로만" 1회 회전 */
+    .canvas {
       position: absolute;
-      top: 50%;
-      left: 50%;
-      transform: translate(-50%, -50%) rotate(-90deg);
-      transform-origin: center center;
-    }
+      top: 0;
+      left: 0;
 
-    @media print {
-      html, body {
-        width: 102mm !important;
-        height: 122mm !important;
-        margin: 0 !important;
-        padding: 0 !important;
-      }
-    }
+      width: 123mm;
+      height: 100mm;
 
-    /* ============================================
-       각 항목별 스타일 - top/left 값 조정하여 위치 변경
-       ============================================ */
+      transform-origin: 0 0;
+      /* rotate(-90deg)만 하면 Y가 음수로 가서 밖으로 튀니,
+         먼저 아래로 123mm 내리고 회전 */
+      transform: translate(${offX}mm, calc(123mm + ${offY}mm)) rotate(-90deg);
 
-    /* 1. 운송장번호 */
-    .field-tracking-no {
-      position: absolute;
-      top: 3mm;
-      left: 20mm;
-      font-size: 14pt;
-      font-weight: bold;
-    }
-
-    /* 2. 접수일자 */
-    .field-rcpt-date {
-      position: absolute;
-      top: 3mm;
-      left: 65mm;
+      /* 캔버스 내부 기본값 */
       font-size: 9pt;
+      font-weight: 700;
+      padding: 2mm;
     }
 
-    /* 3. 출력매수 */
-    .field-box-count {
-      position: absolute;
-      top: 3mm;
-      left: 85mm;
-      font-size: 9pt;
+    /* 1행: 운송장번호 + 날짜 + 매수 */
+    .row1 {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      height: 6mm;
+      border-bottom: 0.3mm solid #000;
     }
+    .tracking-label { font-size: 12pt; font-weight: 700; }
+    .top-right { display: flex; gap: 4mm; font-size: 8pt; font-weight: 700; }
 
-    /* 4. 분류코드 바코드 */
-    .field-dest-barcode {
-      position: absolute;
-      top: 11mm;
-      left: 3mm;
-      width: 28mm;
-      text-align: center;
+    /* 2행: 분류코드 영역 */
+    .row2 {
+      display: flex;
+      height: 20mm;
+      border-bottom: 0.3mm solid #000;
+      align-items: center;
+      overflow: hidden;
     }
-    .field-dest-barcode svg { height: 20mm; }
-
-    /* 5. 분류코드 (대분류) */
-    .field-dest-code {
-      position: absolute;
-      top: 14mm;
-      left: 33mm;
-      font-size: 48pt;
-      font-weight: bold;
+    .clsf-barcode {
+      width: 25mm;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      border-right: 0.3mm solid #000;
+      height: 100%;
     }
-
-    /* 6. 서브분류코드 (소분류) */
-    .field-sub-dest-code {
-      position: absolute;
-      top: 18mm;
-      left: 70mm;
-      font-size: 36pt;
-      font-weight: bold;
+    .clsf-barcode svg { height: 16mm; }
+    .clsf-text {
+      flex: 1;
+      display: flex;
+      align-items: baseline;
+      padding-left: 3mm;
+      gap: 1mm;
+      white-space: nowrap;
     }
+    .clsf-main { font-size: 36pt; font-weight: 700; line-height: 1; }
+    .clsf-hyphen { font-size: 36pt; font-weight: 700; line-height: 1; }
+    .clsf-sub1 { font-size: 53pt; font-weight: 700; line-height: 0.9; }
+    .clsf-sub2 { font-size: 36pt; font-weight: 700; line-height: 1; position: relative; }
+    .clsf-sub2.g-adjust { top: -2mm; }
+    .clsf-p2p { font-size: 30pt; font-weight: 700; margin-left: 2mm; }
 
-    /* 7. 권역코드 P2P */
-    .field-p2p-code {
-      position: absolute;
-      top: 22mm;
-      left: 85mm;
-      font-size: 24pt;
-      font-weight: bold;
+    /* 3행: 받는분 */
+    .row3 {
+      display: flex;
+      border-bottom: 0.3mm solid #000;
+      min-height: 22mm;
     }
-
-    /* 8. 받는분 이름 */
-    .field-receiver-name {
-      position: absolute;
-      top: 37mm;
-      left: 8mm;
-      font-size: 11pt;
-      font-weight: bold;
+    .receiver-left {
+      flex: 1;
+      padding: 1mm;
+      border-right: 0.3mm solid #000;
     }
+    .receiver-contact { font-size: 10pt; font-weight: 700; }
+    .receiver-addr { font-size: 9pt; margin-top: 1mm; line-height: 1.3; font-weight: 700; }
+    .receiver-right {
+      width: 45mm;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      padding: 1mm;
+    }
+    .addr-short { font-size: 24pt; font-weight: 700; text-align: center; line-height: 1.1; }
 
-    /* 9. 받는분 전화번호 */
-    .field-receiver-phone {
-      position: absolute;
-      top: 37mm;
-      left: 35mm;
+    /* 4행: 운임 정보 */
+    .row4 {
+      display: flex;
+      height: 6mm;
+      border-bottom: 0.3mm solid #000;
+      align-items: center;
       font-size: 10pt;
-      font-weight: bold;
+      font-weight: 700;
     }
-
-    /* 10. 받는분 휴대폰 */
-    .field-receiver-mobile {
-      position: absolute;
-      top: 37mm;
-      left: 60mm;
-      font-size: 10pt;
-    }
-
-    /* 11. 받는분 우편번호 */
-    .field-receiver-zip {
-      position: absolute;
-      top: 42mm;
-      left: 8mm;
-      font-size: 9pt;
-    }
-
-    /* 12. 받는분 주소 */
-    .field-receiver-addr {
-      position: absolute;
-      top: 42mm;
-      left: 22mm;
-      font-size: 9pt;
-      width: 75mm;
-      line-height: 1.3;
-    }
-
-    /* 13. 받는분 상세주소 */
-    .field-receiver-detail-addr {
-      position: absolute;
-      top: 47mm;
-      left: 8mm;
-      font-size: 9pt;
-      width: 90mm;
-    }
-
-    /* 14. 주소약칭 */
-    .field-clsf-addr {
-      position: absolute;
-      top: 52mm;
-      left: 8mm;
-      font-size: 20pt;
-      font-weight: bold;
-    }
-
-    /* 15. 보내는분 이름 */
-    .field-sender-name {
-      position: absolute;
-      top: 62mm;
-      left: 8mm;
-      font-size: 8pt;
-    }
-
-    /* 16. 보내는분 전화번호 */
-    .field-sender-phone {
-      position: absolute;
-      top: 62mm;
-      left: 30mm;
-      font-size: 8pt;
-    }
-
-    /* 17. 보내는분 주소 */
-    .field-sender-addr {
-      position: absolute;
-      top: 66mm;
-      left: 8mm;
-      font-size: 8pt;
-      width: 55mm;
-    }
-
-    /* 18. 수량 */
-    .field-box-qty {
-      position: absolute;
-      top: 62mm;
-      left: 68mm;
-      font-size: 9pt;
-      font-weight: bold;
-      width: 12mm;
+    .row4 > div {
+      flex: 1;
       text-align: center;
+      border-right: 0.3mm solid #000;
     }
+    .row4 > div:last-child { border-right: none; }
 
-    /* 19. 운임금액 */
-    .field-freight {
-      position: absolute;
-      top: 62mm;
-      left: 80mm;
-      font-size: 9pt;
-      font-weight: bold;
-      width: 12mm;
-      text-align: center;
-    }
-
-    /* 20. 정산구분 */
-    .field-freight-type {
-      position: absolute;
-      top: 62mm;
-      left: 92mm;
-      font-size: 9pt;
-      font-weight: bold;
-    }
-
-    /* 21. 상품명 */
-    .field-goods-name {
-      position: absolute;
-      top: 72mm;
-      left: 3mm;
-      font-size: 8pt;
-      width: 70mm;
-    }
-
-    /* 22. 상품수량 */
-    .field-goods-qty {
-      position: absolute;
-      top: 72mm;
-      left: 75mm;
-      font-size: 8pt;
-    }
-
-    /* 23. 배송메시지 */
-    .field-remark {
-      position: absolute;
-      top: 78mm;
-      left: 3mm;
-      font-size: 8pt;
-      width: 95mm;
-    }
-
-    /* 24. 배달점소명 */
-    .field-branch-name {
-      position: absolute;
-      top: 86mm;
-      left: 3mm;
-      font-size: 14pt;
-      font-weight: bold;
-    }
-
-    /* 25. 배달사원 별칭 */
-    .field-emp-nickname {
-      position: absolute;
-      top: 86mm;
-      left: 45mm;
-      font-size: 14pt;
-      font-weight: bold;
-    }
-
-    /* 26. 주문번호 */
-    .field-order-no {
-      position: absolute;
-      top: 92mm;
-      left: 3mm;
+    /* 5행: 보내는분 */
+    .row5 {
+      height: 10mm;
+      border-bottom: 0.3mm solid #000;
+      padding: 1mm;
       font-size: 7pt;
-      color: #666;
+      line-height: 1.4;
+      font-weight: 700;
     }
 
-    /* 27. 운송장 바코드 */
-    .field-tracking-barcode {
-      position: absolute;
-      top: 84mm;
-      left: 65mm;
-      text-align: center;
+    /* 6행: 상품 */
+    .row6 {
+      height: 6mm;
+      border-bottom: 0.3mm solid #000;
+      padding: 1mm;
+      font-size: 9pt;
+      display: flex;
+      align-items: center;
+      font-weight: 700;
     }
-    .field-tracking-barcode svg { height: 10mm; width: 32mm; }
 
-    /* 28. 운송장번호 (바코드 아래) */
-    .field-tracking-no-bottom {
-      position: absolute;
-      top: 95mm;
-      left: 65mm;
+    /* 7행: 배송메시지 */
+    .row7 {
+      height: 6mm;
+      border-bottom: 0.3mm solid #000;
+      padding: 1mm;
       font-size: 8pt;
-      font-weight: bold;
-      width: 32mm;
+      display: flex;
+      align-items: center;
+      font-weight: 700;
+    }
+
+    /* 8행: 배달점소 + 바코드 */
+    .row8 {
+      display: flex;
+      height: 18mm;
+      align-items: center;
+    }
+    .branch {
+      flex: 1;
+      font-size: 18pt;
+      font-weight: 700;
+      padding-left: 2mm;
+      overflow: hidden;
+      white-space: nowrap;
+      text-overflow: ellipsis;
+    }
+    .barcode-area {
+      width: 50mm;
       text-align: center;
     }
+    .barcode-area svg { height: 12mm; }
+    .barcode-text { font-size: 9pt; font-weight: 700; margin-top: 1mm; }
   </style>
 </head>
 <body>
-  <div class="label-container">
-    <!-- 1. 운송장번호 -->
-    <div class="field-tracking-no">${trackingNo}</div>
+  <div class="sheet">
+    <div class="canvas">
+      <!-- 1행 -->
+      <div class="row1">
+        <span class="tracking-label">운송장번호 ${trackingNo}</span>
+        <div class="top-right">
+          <span>${rcptYmd}</span>
+          <span>${boxNo}/${boxTotal}</span>
+        </div>
+      </div>
 
-    <!-- 2. 접수일자 -->
-    <div class="field-rcpt-date">${rcptYmd}</div>
+      <!-- 2행: 분류코드 -->
+      <div class="row2">
+        <div class="clsf-barcode">
+          <svg id="clsfBarcode"></svg>
+        </div>
+        <div class="clsf-text">
+          <span class="clsf-main">${clsfCd || "----"}</span>
+          ${sub1 ? `<span class="clsf-hyphen">-</span><span class="clsf-sub1">${sub1}</span>` : ""}
+          ${sub2 ? `<span class="clsf-sub2 ${sub2IsG ? "g-adjust" : ""}">${sub2}</span>` : ""}
+          ${p2pCd ? `<span class="clsf-p2p">${p2pCd}</span>` : ""}
+        </div>
+      </div>
 
-    <!-- 3. 출력매수 -->
-    <div class="field-box-count">${boxNo}/${boxTotal}</div>
+      <!-- 3행: 받는분 -->
+      <div class="row3">
+        <div class="receiver-left">
+          <div class="receiver-contact">${receiverNameOut} ${receiverPhoneOut}${receiverMobileOut ? ` / ${receiverMobileOut}` : ""}</div>
+          <div class="receiver-addr">${fullAddr}</div>
+        </div>
+        <div class="receiver-right">
+          <div class="addr-short">${clsfAddr || ""}</div>
+        </div>
+      </div>
 
-    <!-- 4. 분류코드 바코드 -->
-    <div class="field-dest-barcode">
-      <svg id="destBarcode"></svg>
+      <!-- 4행: 운임 -->
+      <div class="row4">
+        <div>${fareGroupAndQty || ""}</div>
+        <div>${freight}</div>
+        <div>${freightLabel}</div>
+      </div>
+
+      <!-- 5행: 보내는분 -->
+      <div class="row5">
+        <div>보내는분: ${senderNameOut} ${senderPhoneOut}</div>
+        <div>${esc(senderAddr)}</div>
+      </div>
+
+      <!-- 6행: 상품 -->
+      <div class="row6">
+        상품: ${goodsName} (수량: ${goodsQty})
+      </div>
+
+      <!-- 7행: 배송메시지 -->
+      <div class="row7">
+        ${remark ? `배송메시지: ${remark}` : ""}
+      </div>
+
+      <!-- 8행: 배달점소 + 바코드 -->
+      <div class="row8">
+        <div class="branch">${showBranch ? branchDisplay : ""}</div>
+        <div class="barcode-area">
+          <svg id="trackingBarcode"></svg>
+          <div class="barcode-text">${trackingNo}</div>
+        </div>
+      </div>
     </div>
-
-    <!-- 5. 분류코드 (대분류) -->
-    <div class="field-dest-code">${destCode || "----"}</div>
-
-    <!-- 6. 서브분류코드 (소분류) -->
-    <div class="field-sub-dest-code">${subDestCode ? "-" + subDestCode : ""}</div>
-
-    <!-- 7. 권역코드 P2P -->
-    <div class="field-p2p-code">${p2pCd}</div>
-
-    <!-- 8. 받는분 이름 -->
-    <div class="field-receiver-name">${maskedReceiverName}</div>
-
-    <!-- 9. 받는분 전화번호 -->
-    <div class="field-receiver-phone">${maskedReceiverPhone}</div>
-
-    <!-- 10. 받는분 휴대폰 -->
-    <div class="field-receiver-mobile">${maskedReceiverMobile}</div>
-
-    <!-- 11. 받는분 우편번호 -->
-    <div class="field-receiver-zip">${receiverZip}</div>
-
-    <!-- 12. 받는분 주소 -->
-    <div class="field-receiver-addr">${receiverAddr}</div>
-
-    <!-- 13. 받는분 상세주소 -->
-    <div class="field-receiver-detail-addr">${receiverDetailAddr}</div>
-
-    <!-- 14. 주소약칭 -->
-    <div class="field-clsf-addr">${clsfAddr}</div>
-
-    <!-- 15. 보내는분 이름 -->
-    <div class="field-sender-name">${senderName}</div>
-
-    <!-- 16. 보내는분 전화번호 -->
-    <div class="field-sender-phone">${senderPhone}</div>
-
-    <!-- 17. 보내는분 주소 -->
-    <div class="field-sender-addr">${senderAddr}</div>
-
-    <!-- 18. 수량 -->
-    <div class="field-box-qty">${boxQty}</div>
-
-    <!-- 19. 운임금액 -->
-    <div class="field-freight">${freight}</div>
-
-    <!-- 20. 정산구분 -->
-    <div class="field-freight-type">${freightLabel}</div>
-
-    <!-- 21. 상품명 -->
-    <div class="field-goods-name">${goodsName}</div>
-
-    <!-- 22. 상품수량 -->
-    <div class="field-goods-qty">수량: ${goodsQty}</div>
-
-    <!-- 23. 배송메시지 -->
-    <div class="field-remark">${remark}</div>
-
-    <!-- 24. 배달점소명 -->
-    <div class="field-branch-name">${branchName}</div>
-
-    <!-- 25. 배달사원 별칭 -->
-    <div class="field-emp-nickname">${empNickname}</div>
-
-    <!-- 26. 주문번호 -->
-    <div class="field-order-no">${orderNo}</div>
-
-    <!-- 27. 운송장 바코드 -->
-    <div class="field-tracking-barcode">
-      <svg id="trackingBarcode"></svg>
-    </div>
-
-    <!-- 28. 운송장번호 (바코드 아래) -->
-    <div class="field-tracking-no-bottom">${trackingNo}</div>
   </div>
 
   <script src="https://cdn.jsdelivr.net/npm/jsbarcode@3.11.5/dist/JsBarcode.all.min.js"></script>
   <script>
     if (typeof JsBarcode !== 'undefined') {
-      // 분류코드 바코드
-      const destVal = "${destCodeBarcode}";
-      if (destVal && destVal !== '-' && destVal !== '----') {
+      // 5) 분류코드바코드: CODE128A (MOD103) - 가이드 기준
+      if ("${clsfCd}") {
         try {
-          JsBarcode("#destBarcode", destVal, {
-            format: "CODE128",
+          JsBarcode("#clsfBarcode", "${clsfCd}", {
+            format: "CODE128A",
             width: 2,
-            height: 65,
+            height: 50,
             displayValue: false,
             margin: 0
           });
-        } catch(e) { console.error("destBarcode error:", e); }
+        } catch(e) {}
       }
 
-      // 운송장 바코드
+      // 8) 운송장번호바코드: CODE128C (MOD103) - 가이드 기준
       if ("${trackingNo}") {
         try {
           JsBarcode("#trackingBarcode", "${trackingNo}", {
-            format: "CODE128",
+            format: "CODE128C",
             width: 2,
-            height: 35,
+            height: 40,
             displayValue: false,
             margin: 0
           });
-        } catch(e) { console.error("trackingBarcode error:", e); }
+        } catch(e) {}
       }
     }
   </script>
