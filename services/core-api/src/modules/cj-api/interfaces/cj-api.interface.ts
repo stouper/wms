@@ -121,6 +121,8 @@ export interface CjReservationData {
   SENDER_NAME?: string;           // 보내는분 성명
   SENDER_PHONE?: string;          // 보내는분 전화번호
   SENDER_ADDR?: string;           // 보내는분 주소
+  // ✅ 상품명
+  GOODS_NAME?: string;            // 상품명 (SKU name)
 }
 
 /**

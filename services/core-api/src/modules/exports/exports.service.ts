@@ -222,6 +222,8 @@ export class ExportsService {
         senderName: data.SENDER_NAME,
         senderPhone: data.SENDER_PHONE,
         senderAddr: data.SENDER_ADDR,
+        // ✅ 상품명 추가
+        goodsName: data.GOODS_NAME,
       };
 
     } catch (apiError: any) {

@@ -477,6 +477,8 @@ export class CjApiService {
         SENDER_NAME: this.senderName,
         SENDER_PHONE: `${this.senderTel1}-${this.senderTel2}-${this.senderTel3}`,
         SENDER_ADDR: `${this.senderAddr} ${this.senderDetailAddr}`.trim(),
+        // ✅ 상품명 추가
+        GOODS_NAME: goodsName,
       };
     } catch (error: any) {
       this.logger.error('Failed to create CJ reservation', error);

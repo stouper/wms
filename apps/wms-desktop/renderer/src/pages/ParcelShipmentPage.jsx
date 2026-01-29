@@ -312,7 +312,7 @@ export default function ParcelShipmentPage({ pageTitle = "택배 작업" }) {
                 senderName: cjRes.senderName || "",
                 senderPhone: cjRes.senderPhone || "",
                 senderAddr: cjRes.senderAddr || "",
-                goodsName: parcel.memo || "택배상품",
+                goodsName: cjRes.goodsName || "택배상품",
                 goodsQty: 1,
                 remark: parcel.memo || "",
               },
