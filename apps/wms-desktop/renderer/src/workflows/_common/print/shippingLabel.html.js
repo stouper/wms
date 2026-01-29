@@ -60,11 +60,10 @@ function splitSubClsf(sub) {
   return { sub1: s.slice(0, 1), sub2: s.slice(1) };
 }
 
-// 배달점소-별칭 표시 조건 (전담권역=01 또는 배송사원명=##)
+// 배달점소-별칭 표시 조건: branchName이 있으면 표시
 function shouldShowBranchAlias(d) {
-  const zone = String(d?.dedicatedZone ?? d?.dlvZone ?? d?.dlvArea ?? d?.preArrArea ?? "").trim();
-  const emp = String(d?.empNickname ?? d?.dlvEmpNickNm ?? d?.CLLDLVEMPNICKNM ?? "").trim();
-  return zone === "01" || emp === "##";
+  const branch = String(d?.branchName ?? d?.dlvBranNm ?? d?.CLLDLVBRANNM ?? "").trim();
+  return branch.length > 0;
 }
 
 export function renderShippingLabelHTML(data) {
