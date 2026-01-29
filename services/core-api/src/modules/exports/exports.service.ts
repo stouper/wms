@@ -217,6 +217,10 @@ export class ExportsService {
         branchName: data.BRANCH_NAME,
         empNickname: data.EMP_NICKNAME,
         p2pCd: data.P2P_CD,
+        // ✅ 보내는분 정보 추가
+        senderName: data.SENDER_NAME,
+        senderPhone: data.SENDER_PHONE,
+        senderAddr: data.SENDER_ADDR,
       };
 
     } catch (apiError: any) {

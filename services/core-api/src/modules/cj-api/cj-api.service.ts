@@ -473,6 +473,10 @@ export class CjApiService {
         BRANCH_NAME: addressData?.CLLDLVBRANNM || null,
         EMP_NICKNAME: addressData?.CLLDLVEMPNICKNM || null,
         P2P_CD: addressData?.P2PCD || null,
+        // ✅ 보내는분 정보 추가
+        SENDER_NAME: this.senderName,
+        SENDER_PHONE: `${this.senderTel1}-${this.senderTel2}-${this.senderTel3}`,
+        SENDER_ADDR: `${this.senderAddr} ${this.senderDetailAddr}`.trim(),
       };
     } catch (error: any) {
       this.logger.error('Failed to create CJ reservation', error);
