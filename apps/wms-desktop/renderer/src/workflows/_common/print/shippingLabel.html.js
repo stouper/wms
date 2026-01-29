@@ -126,12 +126,13 @@ export function renderShippingLabelHTML(data) {
 
   // ============================================================
   // [11] 보내는분 성명+전화번호 (7pt) - 기본값: 테스트 / 010-123-4567
+  // 💡 마스킹: 일반배송 시 마스킹, 반품 시 마스킹 해제
   // ============================================================
   const senderMask = !isReturn;
-  const senderName = d.senderName || d.sender || d.sendrNm || "테스트";
-  const senderPhone = d.senderPhone || "010-123-4567";
-  const senderNameOut = maybeMaskName(senderName, senderMask);
-  const senderPhoneOut = maybeMaskPhone(senderPhone, senderMask);
+  const senderName = esc(d.senderName || d.sender || d.sendrNm || "테스트");
+  const senderPhone = esc(d.senderPhone || "010-123-4567");
+  const senderNameOut = senderMask ? maskNameSecondChar(senderName) : senderName;
+  const senderPhoneOut = senderMask ? maskPhoneLast4(senderPhone) : senderPhone;
 
   // ============================================================
   // [12] 운임그룹조정 + 수량 (10pt)
@@ -167,12 +168,14 @@ export function renderShippingLabelHTML(data) {
 
   // ============================================================
   // [18] 배달점소-별칭 (18pt)
-  // 💡 조건: 배송사원명="##" 수신 시에만 "배달점소-별칭" 표시
+  // 💡 조건: 배송사원명="##" 수신 시 → "배달점소-별칭: xxx" 표시
+  // 💡 그 외: 원래 값(branchName-empNickname) 그대로 출력
   // ============================================================
   const branchName = esc(d.branchName || d.dlvBranNm || d.dlvPreArrBranShortNm || "");
   const empNickname = esc(d.empNickname || d.dlvEmpNickNm || d.dlvPreArrEmpNickNm || "");
-  const branchDisplay = empNickname ? `${branchName}-${empNickname}` : branchName;
-  const showBranch = shouldShowBranchAlias(d);
+  const branchValue = empNickname ? `${branchName}-${empNickname}` : branchName;
+  const isSpecialBranch = empNickname === "##";
+  const branchDisplay = isSpecialBranch ? `배달점소-별칭: ${branchValue}` : branchValue;
 
   // ============================================================
   // [19] 권내배송코드 P2PCD (30pt) - P0~P50
@@ -291,8 +294,8 @@ export function renderShippingLabelHTML(data) {
     <div class="item item16">${goodsName} (${goodsQty})</div>
     <!-- [17] 배송메시지 -->
     <div class="item item17">${remark}</div>
-    <!-- [18] 배달점소-별칭 (조건: empNickname="##") -->
-    ${showBranch ? `<div class="item item18">배달점소-별칭: ${branchDisplay}</div>` : ""}
+    <!-- [18] 배달점소-별칭 -->
+    ${branchDisplay ? `<div class="item item18">${branchDisplay}</div>` : ""}
     <!-- 하단 운송장바코드 -->
     <div class="item trackingBox">
       <svg id="trackingBarcode"></svg>
