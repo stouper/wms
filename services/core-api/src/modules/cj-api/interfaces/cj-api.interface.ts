@@ -117,6 +117,10 @@ export interface CjReservationData {
   BRANCH_NAME?: string | null;    // 배달점소 (CLLDLVBRANNM)
   EMP_NICKNAME?: string | null;   // 배달사원 별칭 (CLLDLVEMPNICKNM)
   P2P_CD?: string | null;         // 권내배송코드 (P2PCD) - P0~P50
+  // ✅ 보내는분 정보 (환경변수에서)
+  SENDER_NAME?: string;           // 보내는분 성명
+  SENDER_PHONE?: string;          // 보내는분 전화번호
+  SENDER_ADDR?: string;           // 보내는분 주소
 }
 
 /**
