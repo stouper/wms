@@ -238,7 +238,7 @@ export function renderShippingLabelHTML(data) {
     /* [14] 운임구분 */
     .item14 { left: 93mm; top: 37mm; font-size: 10pt; }
     /* [11] 보내는분 성명+전화 */
-    .item11 { left: 7mm; top: 49mm; font-size: 7pt; }
+    .item11 { left: 7mm; top: 49mm; font-size: 10pt; color: blue; }
     /* [15] 보내는분 주소 */
     .item15 { left: 7mm; top: 52mm; font-size: 8pt; }
     /* [16] 상품명 */
