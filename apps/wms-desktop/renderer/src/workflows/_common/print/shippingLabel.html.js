@@ -52,20 +52,6 @@ function maybeMaskPhone(phone, shouldMask) {
   return esc(shouldMask ? maskPhoneLast4(phone) : phone);
 }
 
-// [6] 분류코드 SUB 분리 (예: "4g" -> sub1="4", sub2="g")
-function splitSubClsf(sub) {
-  const s = String(sub ?? "").trim();
-  if (!s) return { sub1: "", sub2: "" };
-  if (s.length === 1) return { sub1: s, sub2: "" };
-  return { sub1: s.slice(0, 1), sub2: s.slice(1) };
-}
-
-// [18] 배달점소-별칭 표시 조건: 배송사원명이 "##"일 때만 표시
-function shouldShowBranchAlias(d) {
-  const emp = String(d?.empNickname ?? d?.dlvEmpNickNm ?? d?.CLLDLVEMPNICKNM ?? "").trim();
-  return emp === "##";
-}
-
 export function renderShippingLabelHTML(data) {
   const d = data || {};
 
@@ -127,7 +113,6 @@ export function renderShippingLabelHTML(data) {
 
   // ============================================================
   // [11] 보내는분 성명+전화번호 (7pt) - 기본값: 테스트 / 010-123-4567
-  // 마스킹: 일반=마스킹, 반품=해제
   // ============================================================
   const senderMask = true;  // 항상 마스킹
   const senderName = d.senderName || d.sender || d.sendrNm || "테스트";
@@ -232,7 +217,7 @@ export function renderShippingLabelHTML(data) {
     /* [9] 받는분 주소 */
     .item9 { left: 7mm; top: 30mm; font-size: 9pt; }
     /* [10] 주소약칭 */
-    .item10 { left: 7mm; top: 35mm; font-size: 24pt; }
+    .item10 { left: 7mm; top: 33mm; font-size: 24pt; }
     /* [12] 운임그룹+수량 */
     .item12 { left: 70mm; top: 46mm; font-size: 8pt; }
     /* [13] 운임 */
@@ -240,7 +225,7 @@ export function renderShippingLabelHTML(data) {
     /* [14] 운임구분 */
     .item14 { left: 115mm; top: 46mm; font-size: 8pt; }
     /* [11] 보내는분 성명+전화 */
-    .item11 { left: 7mm; top: 47mm; font-size: 8pt; }
+    .item11 { left: 7mm; top: 48mm; font-size: 8pt; }
     /* [15] 보내는분 주소 */
     .item15 { left: 7mm; top: 45mm; font-size: 8pt; }
     /* [16] 상품명 */
