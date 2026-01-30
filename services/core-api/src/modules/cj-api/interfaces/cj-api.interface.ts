@@ -4,13 +4,13 @@
  */
 
 /**
- * 공통 응답 구조
+ * 공통 응답 구조 (실제 CJ API 응답 형식)
+ * - 성공: RESULT_CD = "S", DATA = {...}
+ * - 실패: RESULT_CD = "E401"|"E500" 등, RESULT_DETAIL = "에러메시지"
  */
 export interface CjApiResponse<T = any> {
-  HEADER: {
-    RESULT_CODE: string;  // '00000' = 정상
-    RESULT_MSG?: string;
-  };
+  RESULT_CD: string;        // 'S' = 성공, 'E401' = 인증실패, 'E500' = 서버에러
+  RESULT_DETAIL?: string;   // 에러 시 메시지
   DATA?: T;
 }
 
