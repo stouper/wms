@@ -98,13 +98,14 @@ export function renderShippingLabelHTML(data) {
   // [5] 분류코드 바코드 + [6] 분류코드 텍스트
   // ============================================================
   const clsfCd = esc(d.destCode || d.clsfCd || d.dlvClsfCd || "");
-  const subClsfCdRaw = esc(d.subDestCode || d.subClsfCd || d.dlvSubClsfCd || "");
-  const { sub1, sub2 } = splitSubClsf(subClsfCdRaw);
+  const clsfCdFirst = clsfCd ? clsfCd.slice(0, 1) : "";
+  const clsfCdRest = clsfCd ? clsfCd.slice(1) : "";
+  const subClsfCd = esc(d.subDestCode || d.subClsfCd || d.dlvSubClsfCd || "");
 
   // ============================================================
   // [7] 받는분 성명 + [8] 받는분 전화번호 (10pt)
   // ============================================================
-  const receiverMask = isReturn;
+  const receiverMask = true;  // 항상 마스킹
   const receiverName = d.receiverName || d.rcvrNm || "";
   const receiverPhone = d.receiverPhone || d.phone || "";
   const receiverMobile = d.receiverMobile || d.mobile || "";
@@ -126,12 +127,13 @@ export function renderShippingLabelHTML(data) {
 
   // ============================================================
   // [11] 보내는분 성명+전화번호 (7pt) - 기본값: 테스트 / 010-123-4567
-  // 💡 마스킹 임시 해제 (디버깅)
+  // 마스킹: 일반=마스킹, 반품=해제
   // ============================================================
+  const senderMask = true;  // 항상 마스킹
   const senderName = d.senderName || d.sender || d.sendrNm || "테스트";
   const senderPhone = d.senderPhone || "010-123-4567";
-  const senderNameOut = esc(senderName);
-  const senderPhoneOut = esc(senderPhone);
+  const senderNameOut = maybeMaskName(senderName, senderMask);
+  const senderPhoneOut = maybeMaskPhone(senderPhone, senderMask);
 
   // ============================================================
   // [12] 운임그룹조정 + 수량 (10pt)
@@ -213,44 +215,44 @@ export function renderShippingLabelHTML(data) {
     /* [4] 재출력여부 */
     .item4 { left: 85mm; top: 3mm; font-size: 8pt; color: red; }
     /* [5] 분류코드 바코드 */
-    .item5 { left: 8mm; top: 11mm; width: 30mm; height: 15mm; }
+    .item5 { left: 5mm; top: 9mm; width: 30mm; height: 15mm; }
     .item5 svg { width: 100%; height: 100%; }
     /* [6] 분류코드 텍스트 */
-    .item6 { left: 38mm; top: 6mm; }
-    .item6 .main { font-size: 36pt; }
-    .item6 .sub1 { font-size: 53pt; }
-    .item6 .sub2 { font-size: 36pt; }
+    .item6 { left: 40mm; top: 2mm; }
+    .item6 .clsf-first { font-size: 34pt; text-decoration: underline; }
+    .item6 .clsf-rest { font-size: 52pt; }
+    .item6 .clsf-sub { font-size: 34pt; }
     /* [19] P2PCD */
-    .item19 { left: 72mm; top: 25mm; font-size: 30pt; }
+    .item19 { left: 100mm; top: 10mm; font-size: 25pt; }
     /* [8] 운송장번호 바코드 */
-    .item8box { left: 75mm; top: 27mm; width: 35mm; height: 5mm; }
+    .item8box { left: 75mm; top: 26mm; width: 50mm; height: 4mm; }
     .item8box svg { width: 100%; height: 100%; }
     /* [7] 받는분 성명+전화 */
-    .item7 { left: 7mm; top: 27mm; font-size: 10pt; }
+    .item7 { left: 7mm; top: 25mm; font-size: 10pt; }
     /* [9] 받는분 주소 */
     .item9 { left: 7mm; top: 30mm; font-size: 9pt; }
     /* [10] 주소약칭 */
     .item10 { left: 7mm; top: 35mm; font-size: 24pt; }
     /* [12] 운임그룹+수량 */
-    .item12 { left: 67mm; top: 37mm; font-size: 10pt; }
+    .item12 { left: 70mm; top: 46mm; font-size: 8pt; }
     /* [13] 운임 */
-    .item13 { left: 80mm; top: 37mm; font-size: 10pt; }
+    .item13 { left: 97mm; top: 46mm; font-size: 8pt; }
     /* [14] 운임구분 */
-    .item14 { left: 93mm; top: 37mm; font-size: 10pt; }
+    .item14 { left: 115mm; top: 46mm; font-size: 8pt; }
     /* [11] 보내는분 성명+전화 */
-    .item11 { left: 7mm; top: 49mm; font-size: 10pt; color: blue; }
+    .item11 { left: 7mm; top: 47mm; font-size: 8pt; }
     /* [15] 보내는분 주소 */
-    .item15 { left: 7mm; top: 52mm; font-size: 8pt; }
+    .item15 { left: 7mm; top: 45mm; font-size: 8pt; }
     /* [16] 상품명 */
-    .item16 { left: 3mm; top: 63mm; font-size: 9pt; }
+    .item16 { left: 4mm; top: 55mm; font-size: 9pt; }
     /* [17] 배송메시지 */
-    .item17 { left: 1mm; top: 69mm; font-size: 8pt; }
+    .item17 { left: 3mm; top: 87mm; font-size: 8pt; }
     /* [18] 배달점소-별칭 */
-    .item18 { left: 1mm; top: 76mm; font-size: 18pt; }
+    .item18 { left: 3mm; top: 91mm; font-size: 18pt; }
     /* 하단 운송장바코드 */
-    .trackingBox { left: 70mm; top: 86mm; }
-    .trackingBox svg { width: 35mm; height: 15mm; }
-    .trackingText { font-size: 9pt; text-align: center; }
+    .trackingBox { left: 85mm; top: 88mm; }
+    .trackingBox svg { width: 35mm; height: 10mm; }
+    .trackingText { font-size: 6pt; text-align: center; display: block; margin-top: -2mm; }
   </style>
 </head>
 <body>
@@ -267,7 +269,7 @@ export function renderShippingLabelHTML(data) {
     <div class="item item5"><svg id="clsfBarcode"></svg></div>
     <!-- [6] 분류코드 텍스트 -->
     <div class="item item6">
-      <span class="main">${clsfCd || "----"}</span>${sub1 ? `-<span class="sub1">${sub1}</span>` : ""}${sub2 ? `<span class="sub2">${sub2}</span>` : ""}
+      <span class="clsf-first">${clsfCdFirst || "-"}</span><span class="clsf-rest">${clsfCdRest || "---"}</span>${subClsfCd ? `-<span class="clsf-sub">${subClsfCd}</span>` : ""}
     </div>
     <!-- [19] P2PCD -->
     ${p2pCd ? `<div class="item item19">${p2pCd}</div>` : ""}
@@ -310,7 +312,7 @@ export function renderShippingLabelHTML(data) {
           JsBarcode("#clsfBarcode", "${clsfCd}", {
             format: "CODE128A",
             width: 2,
-            height: 45,
+            height: 50,
             displayValue: false,
             margin: 0
           });
@@ -321,15 +323,15 @@ export function renderShippingLabelHTML(data) {
         try {
           JsBarcode("#trackingBarcode", "${trackingNo}", {
             format: "CODE128C",
-            width: 2,
+            width: 1.8,
             height: 40,
             displayValue: false,
             margin: 0
           });
           JsBarcode("#trackingBarcode2", "${trackingNo}", {
             format: "CODE128C",
-            width: 1.5,
-            height: 50,
+            width: 2,
+            height: 30,
             displayValue: false,
             margin: 0
           });
