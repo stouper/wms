@@ -263,7 +263,7 @@ export class CjApiService {
     try {
       const fullAddr = `${parcel.addr1} ${parcel.addr2 || ''}`.trim();
       addressData = await this.verifyAddress(fullAddr);
-      this.logger.log(`Address verified: destCode=${addressData.CLSFCD}, branch=${addressData.CLLDLVBRANNM}, p2pCd=${addressData.P2PCD}, empNickname=${addressData.CLLDLVEMPNICKNM}`);
+      this.logger.log(`Address verified: destCode=${addressData.CLSFCD}, clsfAddr=${addressData.CLSFADDR}, branch=${addressData.CLLDLVBRANNM}, p2pCd=${addressData.P2PCD}, empNickname=${addressData.CLLDLVEMPNICKNM}`);
 
       // JobParcel에 주소 정제 데이터 저장
       await this.prisma.jobParcel.update({
